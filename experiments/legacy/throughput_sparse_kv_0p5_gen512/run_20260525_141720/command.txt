@@ -1,0 +1,1 @@
+/home/ysy/anaconda3/envs/llada/bin/python /data0/ysy/sparse/LLaDA/bench_sparse_kv_throughput.py --output_dir /data0/ysy/sparse/LLaDA/throughput_sparse_kv_0p5_gen512/run_20260525_141720 --gen_length 512 --block_length 32 --steps 32 --sparse_ratio 0.5 --dense_fallback_mask_count 4 --warmup 1 --repeats 3 

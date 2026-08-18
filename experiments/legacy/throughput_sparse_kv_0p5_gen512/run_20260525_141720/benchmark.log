@@ -1,0 +1,9 @@
+Writing benchmark artifacts to: /data0/ysy/sparse/LLaDA/throughput_sparse_kv_0p5_gen512/run_20260525_141720
+Running mode=vanilla
+Loading checkpoint shards:   0%|          | 0/8 [00:00<?, ?it/s]Loading checkpoint shards:  12%|█▎        | 1/8 [00:01<00:07,  1.02s/it]Loading checkpoint shards:  25%|██▌       | 2/8 [00:01<00:05,  1.19it/s]Loading checkpoint shards:  38%|███▊      | 3/8 [00:02<00:03,  1.26it/s]Loading checkpoint shards:  50%|█████     | 4/8 [00:03<00:03,  1.31it/s]Loading checkpoint shards:  62%|██████▎   | 5/8 [00:03<00:02,  1.35it/s]Loading checkpoint shards:  75%|███████▌  | 6/8 [00:04<00:01,  1.38it/s]Loading checkpoint shards:  88%|████████▊ | 7/8 [00:05<00:00,  1.40it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:05<00:00,  1.40it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:05<00:00,  1.33it/s]
+mode=vanilla median_time_s=100.5305 requested_tok_s=5.09
+Running mode=sparse_kv
+Loading checkpoint shards:   0%|          | 0/8 [00:00<?, ?it/s]Loading checkpoint shards:  12%|█▎        | 1/8 [00:01<00:07,  1.01s/it]Loading checkpoint shards:  25%|██▌       | 2/8 [00:01<00:04,  1.21it/s]Loading checkpoint shards:  38%|███▊      | 3/8 [00:02<00:03,  1.27it/s]Loading checkpoint shards:  50%|█████     | 4/8 [00:03<00:03,  1.32it/s]Loading checkpoint shards:  62%|██████▎   | 5/8 [00:03<00:02,  1.36it/s]Loading checkpoint shards:  75%|███████▌  | 6/8 [00:04<00:01,  1.39it/s]Loading checkpoint shards:  88%|████████▊ | 7/8 [00:05<00:00,  1.41it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:05<00:00,  1.41it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:05<00:00,  1.35it/s]
+mode=sparse_kv median_time_s=73.6573 requested_tok_s=6.95
+Saved: /data0/ysy/sparse/LLaDA/throughput_sparse_kv_0p5_gen512/run_20260525_141720/throughput_results.json
+Saved: /data0/ysy/sparse/LLaDA/throughput_sparse_kv_0p5_gen512/run_20260525_141720/throughput_report.md

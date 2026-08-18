@@ -1,0 +1,272 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+Run configuration:
+block_length=32
+demo_sparse_dense_fallback_mask_count=4
+demo_sparse_ratio=1
+editing_threshold=0.0
+enable_layer_candidate_ratios=True
+gen_length=128
+layer_candidate_ratio=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+local_demo_sparse_attn=False
+mask_id=156895
+model_path=/data0/ysy/models/LLaDA2.1-mini
+no_plot_attentions=True
+num_to_transfer=1
+prompt=Write a short story about history.
+steps=32
+temperature=0.0
+threshold=0.5
+top_k=None
+top_p=None
+use_model_generate=False
+
+Loading checkpoint shards:   0%|          | 0/8 [00:00<?, ?it/s]Loading checkpoint shards:  12%|█▎        | 1/8 [00:00<00:06,  1.01it/s]Loading checkpoint shards:  25%|██▌       | 2/8 [00:01<00:04,  1.23it/s]Loading checkpoint shards:  38%|███▊      | 3/8 [00:02<00:03,  1.30it/s]Loading checkpoint shards:  50%|█████     | 4/8 [00:03<00:02,  1.36it/s]Loading checkpoint shards:  62%|██████▎   | 5/8 [00:03<00:02,  1.40it/s]Loading checkpoint shards:  75%|███████▌  | 6/8 [00:04<00:01,  1.43it/s]Loading checkpoint shards:  88%|████████▊ | 7/8 [00:05<00:00,  1.45it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:05<00:00,  1.45it/s]Loading checkpoint shards: 100%|██████████| 8/8 [00:05<00:00,  1.38it/s]
+
+Layer-wise query_position recall:
+
+exact_decode_recall:
+mean_exact_decode_recall=0.581117
+layer=00 exact_decode_recall=0.393617 hit=74 total=188
+layer=01 exact_decode_recall=0.473404 hit=89 total=188
+layer=02 exact_decode_recall=0.526596 hit=99 total=188
+layer=03 exact_decode_recall=0.478723 hit=90 total=188
+layer=04 exact_decode_recall=0.452128 hit=85 total=188
+layer=05 exact_decode_recall=0.393617 hit=74 total=188
+layer=06 exact_decode_recall=0.356383 hit=67 total=188
+layer=07 exact_decode_recall=0.372340 hit=70 total=188
+layer=08 exact_decode_recall=0.340426 hit=64 total=188
+layer=09 exact_decode_recall=0.377660 hit=71 total=188
+layer=10 exact_decode_recall=0.361702 hit=68 total=188
+layer=11 exact_decode_recall=0.377660 hit=71 total=188
+layer=12 exact_decode_recall=0.537234 hit=101 total=188
+layer=13 exact_decode_recall=0.675532 hit=127 total=188
+layer=14 exact_decode_recall=0.824468 hit=155 total=188
+layer=15 exact_decode_recall=0.888298 hit=167 total=188
+layer=16 exact_decode_recall=0.936170 hit=176 total=188
+layer=17 exact_decode_recall=0.920213 hit=173 total=188
+layer=18 exact_decode_recall=0.936170 hit=176 total=188
+layer=19 exact_decode_recall=1.000000 hit=188 total=188
+
+ratio=0.100 mean_recall=0.165957
+layer=00 recall=0.138298 hit=26 total=188
+layer=01 recall=0.223404 hit=42 total=188
+layer=02 recall=0.170213 hit=32 total=188
+layer=03 recall=0.132979 hit=25 total=188
+layer=04 recall=0.111702 hit=21 total=188
+layer=05 recall=0.101064 hit=19 total=188
+layer=06 recall=0.058511 hit=11 total=188
+layer=07 recall=0.090426 hit=17 total=188
+layer=08 recall=0.074468 hit=14 total=188
+layer=09 recall=0.090426 hit=17 total=188
+layer=10 recall=0.058511 hit=11 total=188
+layer=11 recall=0.074468 hit=14 total=188
+layer=12 recall=0.111702 hit=21 total=188
+layer=13 recall=0.127660 hit=24 total=188
+layer=14 recall=0.159574 hit=30 total=188
+layer=15 recall=0.170213 hit=32 total=188
+layer=16 recall=0.191489 hit=36 total=188
+layer=17 recall=0.239362 hit=45 total=188
+layer=18 recall=0.265957 hit=50 total=188
+layer=19 recall=0.728723 hit=137 total=188
+
+ratio=0.200 mean_recall=0.258777
+layer=00 recall=0.212766 hit=40 total=188
+layer=01 recall=0.393617 hit=74 total=188
+layer=02 recall=0.313830 hit=59 total=188
+layer=03 recall=0.218085 hit=41 total=188
+layer=04 recall=0.175532 hit=33 total=188
+layer=05 recall=0.207447 hit=39 total=188
+layer=06 recall=0.164894 hit=31 total=188
+layer=07 recall=0.154255 hit=29 total=188
+layer=08 recall=0.186170 hit=35 total=188
+layer=09 recall=0.170213 hit=32 total=188
+layer=10 recall=0.122340 hit=23 total=188
+layer=11 recall=0.138298 hit=26 total=188
+layer=12 recall=0.175532 hit=33 total=188
+layer=13 recall=0.207447 hit=39 total=188
+layer=14 recall=0.234043 hit=44 total=188
+layer=15 recall=0.276596 hit=52 total=188
+layer=16 recall=0.319149 hit=60 total=188
+layer=17 recall=0.319149 hit=60 total=188
+layer=18 recall=0.377660 hit=71 total=188
+layer=19 recall=0.808511 hit=152 total=188
+
+ratio=0.300 mean_recall=0.348670
+layer=00 recall=0.313830 hit=59 total=188
+layer=01 recall=0.521277 hit=98 total=188
+layer=02 recall=0.452128 hit=85 total=188
+layer=03 recall=0.340426 hit=64 total=188
+layer=04 recall=0.281915 hit=53 total=188
+layer=05 recall=0.276596 hit=52 total=188
+layer=06 recall=0.239362 hit=45 total=188
+layer=07 recall=0.250000 hit=47 total=188
+layer=08 recall=0.250000 hit=47 total=188
+layer=09 recall=0.250000 hit=47 total=188
+layer=10 recall=0.207447 hit=39 total=188
+layer=11 recall=0.228723 hit=43 total=188
+layer=12 recall=0.260638 hit=49 total=188
+layer=13 recall=0.271277 hit=51 total=188
+layer=14 recall=0.313830 hit=59 total=188
+layer=15 recall=0.351064 hit=66 total=188
+layer=16 recall=0.398936 hit=75 total=188
+layer=17 recall=0.436170 hit=82 total=188
+layer=18 recall=0.446809 hit=84 total=188
+layer=19 recall=0.882979 hit=166 total=188
+
+ratio=0.400 mean_recall=0.431383
+layer=00 recall=0.388298 hit=73 total=188
+layer=01 recall=0.638298 hit=120 total=188
+layer=02 recall=0.622340 hit=117 total=188
+layer=03 recall=0.425532 hit=80 total=188
+layer=04 recall=0.351064 hit=66 total=188
+layer=05 recall=0.335106 hit=63 total=188
+layer=06 recall=0.297872 hit=56 total=188
+layer=07 recall=0.351064 hit=66 total=188
+layer=08 recall=0.345745 hit=65 total=188
+layer=09 recall=0.361702 hit=68 total=188
+layer=10 recall=0.265957 hit=50 total=188
+layer=11 recall=0.324468 hit=61 total=188
+layer=12 recall=0.319149 hit=60 total=188
+layer=13 recall=0.372340 hit=70 total=188
+layer=14 recall=0.393617 hit=74 total=188
+layer=15 recall=0.425532 hit=80 total=188
+layer=16 recall=0.489362 hit=92 total=188
+layer=17 recall=0.500000 hit=94 total=188
+layer=18 recall=0.526596 hit=99 total=188
+layer=19 recall=0.893617 hit=168 total=188
+
+ratio=0.500 mean_recall=0.517553
+layer=00 recall=0.457447 hit=86 total=188
+layer=01 recall=0.718085 hit=135 total=188
+layer=02 recall=0.712766 hit=134 total=188
+layer=03 recall=0.505319 hit=95 total=188
+layer=04 recall=0.441489 hit=83 total=188
+layer=05 recall=0.446809 hit=84 total=188
+layer=06 recall=0.382979 hit=72 total=188
+layer=07 recall=0.441489 hit=83 total=188
+layer=08 recall=0.452128 hit=85 total=188
+layer=09 recall=0.457447 hit=86 total=188
+layer=10 recall=0.340426 hit=64 total=188
+layer=11 recall=0.404255 hit=76 total=188
+layer=12 recall=0.404255 hit=76 total=188
+layer=13 recall=0.468085 hit=88 total=188
+layer=14 recall=0.500000 hit=94 total=188
+layer=15 recall=0.531915 hit=100 total=188
+layer=16 recall=0.579787 hit=109 total=188
+layer=17 recall=0.579787 hit=109 total=188
+layer=18 recall=0.601064 hit=113 total=188
+layer=19 recall=0.925532 hit=174 total=188
+
+ratio=0.600 mean_recall=0.613032
+layer=00 recall=0.553191 hit=104 total=188
+layer=01 recall=0.771277 hit=145 total=188
+layer=02 recall=0.813830 hit=153 total=188
+layer=03 recall=0.622340 hit=117 total=188
+layer=04 recall=0.537234 hit=101 total=188
+layer=05 recall=0.574468 hit=108 total=188
+layer=06 recall=0.489362 hit=92 total=188
+layer=07 recall=0.537234 hit=101 total=188
+layer=08 recall=0.569149 hit=107 total=188
+layer=09 recall=0.558511 hit=105 total=188
+layer=10 recall=0.441489 hit=83 total=188
+layer=11 recall=0.531915 hit=100 total=188
+layer=12 recall=0.494681 hit=93 total=188
+layer=13 recall=0.558511 hit=105 total=188
+layer=14 recall=0.590426 hit=111 total=188
+layer=15 recall=0.638298 hit=120 total=188
+layer=16 recall=0.664894 hit=125 total=188
+layer=17 recall=0.680851 hit=128 total=188
+layer=18 recall=0.670213 hit=126 total=188
+layer=19 recall=0.962766 hit=181 total=188
+
+ratio=0.700 mean_recall=0.696011
+layer=00 recall=0.670213 hit=126 total=188
+layer=01 recall=0.835106 hit=157 total=188
+layer=02 recall=0.872340 hit=164 total=188
+layer=03 recall=0.723404 hit=136 total=188
+layer=04 recall=0.622340 hit=117 total=188
+layer=05 recall=0.659574 hit=124 total=188
+layer=06 recall=0.611702 hit=115 total=188
+layer=07 recall=0.654255 hit=123 total=188
+layer=08 recall=0.648936 hit=122 total=188
+layer=09 recall=0.627660 hit=118 total=188
+layer=10 recall=0.526596 hit=99 total=188
+layer=11 recall=0.617021 hit=116 total=188
+layer=12 recall=0.569149 hit=107 total=188
+layer=13 recall=0.638298 hit=120 total=188
+layer=14 recall=0.707447 hit=133 total=188
+layer=15 recall=0.702128 hit=132 total=188
+layer=16 recall=0.734043 hit=138 total=188
+layer=17 recall=0.750000 hit=141 total=188
+layer=18 recall=0.776596 hit=146 total=188
+layer=19 recall=0.973404 hit=183 total=188
+
+ratio=0.800 mean_recall=0.790426
+layer=00 recall=0.787234 hit=148 total=188
+layer=01 recall=0.872340 hit=164 total=188
+layer=02 recall=0.936170 hit=176 total=188
+layer=03 recall=0.808511 hit=152 total=188
+layer=04 recall=0.696809 hit=131 total=188
+layer=05 recall=0.781915 hit=147 total=188
+layer=06 recall=0.723404 hit=136 total=188
+layer=07 recall=0.771277 hit=145 total=188
+layer=08 recall=0.750000 hit=141 total=188
+layer=09 recall=0.755319 hit=142 total=188
+layer=10 recall=0.691489 hit=130 total=188
+layer=11 recall=0.723404 hit=136 total=188
+layer=12 recall=0.648936 hit=122 total=188
+layer=13 recall=0.744681 hit=140 total=188
+layer=14 recall=0.803191 hit=151 total=188
+layer=15 recall=0.824468 hit=155 total=188
+layer=16 recall=0.803191 hit=151 total=188
+layer=17 recall=0.824468 hit=155 total=188
+layer=18 recall=0.867021 hit=163 total=188
+layer=19 recall=0.994681 hit=187 total=188
+
+ratio=0.900 mean_recall=0.886170
+layer=00 recall=0.872340 hit=164 total=188
+layer=01 recall=0.930851 hit=175 total=188
+layer=02 recall=0.968085 hit=182 total=188
+layer=03 recall=0.909574 hit=171 total=188
+layer=04 recall=0.829787 hit=156 total=188
+layer=05 recall=0.867021 hit=163 total=188
+layer=06 recall=0.867021 hit=163 total=188
+layer=07 recall=0.872340 hit=164 total=188
+layer=08 recall=0.861702 hit=162 total=188
+layer=09 recall=0.861702 hit=162 total=188
+layer=10 recall=0.851064 hit=160 total=188
+layer=11 recall=0.872340 hit=164 total=188
+layer=12 recall=0.819149 hit=154 total=188
+layer=13 recall=0.861702 hit=162 total=188
+layer=14 recall=0.898936 hit=169 total=188
+layer=15 recall=0.872340 hit=164 total=188
+layer=16 recall=0.904255 hit=170 total=188
+layer=17 recall=0.898936 hit=169 total=188
+layer=18 recall=0.904255 hit=170 total=188
+layer=19 recall=1.000000 hit=188 total=188
+
+ratio=1.000 mean_recall=0.981117
+layer=00 recall=1.000000 hit=188 total=188
+layer=01 recall=0.994681 hit=187 total=188
+layer=02 recall=0.994681 hit=187 total=188
+layer=03 recall=0.994681 hit=187 total=188
+layer=04 recall=0.994681 hit=187 total=188
+layer=05 recall=0.994681 hit=187 total=188
+layer=06 recall=0.994681 hit=187 total=188
+layer=07 recall=0.994681 hit=187 total=188
+layer=08 recall=0.994681 hit=187 total=188
+layer=09 recall=0.994681 hit=187 total=188
+layer=10 recall=0.984043 hit=185 total=188
+layer=11 recall=0.989362 hit=186 total=188
+layer=12 recall=0.962766 hit=181 total=188
+layer=13 recall=0.973404 hit=183 total=188
+layer=14 recall=0.952128 hit=179 total=188
+layer=15 recall=0.936170 hit=176 total=188
+layer=16 recall=0.962766 hit=181 total=188
+layer=17 recall=0.957447 hit=180 total=188
+layer=18 recall=0.952128 hit=179 total=188
+layer=19 recall=1.000000 hit=188 total=188
+No step_attentions found in output.
+The dust of the Sahel swirled in the afternoon sun, coating the ancient walls of Timbuktu. Inside, the air was thick with the scent of old paper, leather, and time. Amina, a young scribe with ink-streaked fingers, hunched over a crumbling manuscript, tracing the faded lines of a 15th-century astronomical text. Her fingers, careful and precise, brushed the edge of a symbol – a crescent moon intertwined with a star.
+
+She wasn't just transcribing; she was *listening*. Her grandfather, a grizzled scholar of the Songhai Empire,
