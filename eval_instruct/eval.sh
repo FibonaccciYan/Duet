@@ -9,11 +9,15 @@ cd "${script_dir}"
 python_bin="${PYTHON:-/home/ysy/anaconda3/envs/llada/bin/python}"
 model="${MODEL:-/data0/ysy/models/LLaDA2.1-mini}"
 port="${MAIN_PROCESS_PORT:-12335}"
-benchmark="${BENCHMARK:-mmlu}"
+benchmark="${BENCHMARK:-gsm8k}"
 sparse_dlm="${SPARSE_DLM:-true}"
 block_length="${BLOCK_LENGTH:-32}"
 steps="${STEPS:-32}"
 sparse_ratio="${SPARSE_DLM_RATIO:-0.5}"
+query_sparse="${QUERY_SPARSE:-true}"
+prefix_sparse="${PREFIX_SPARSE:-true}"
+prefix_budget="${PREFIX_TOKEN_BUDGET:-256}"
+output_path="${OUTPUT_PATH:-default}"
 
 case "${sparse_dlm,,}" in
   1|true|yes|y)
@@ -28,14 +32,9 @@ case "${sparse_dlm,,}" in
     ;;
 esac
 
-if [[ "${sparse_dlm}" == "true" ]]; then
-  default_output="output_reproduce/block_cache_sparse_dlm_block${block_length}_ratio${sparse_ratio}"
-else
-  default_output="output_reproduce/default"
-fi
-output_root="${OUTPUT_ROOT:-${default_output}}"
+output_root="${OUTPUT_ROOT:-output_reproduce/${output_path}}"
 
-model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},sparse_dlm=${sparse_dlm},sparse_dlm_ratio=${sparse_ratio},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-4},sparse_dlm_dense_fallback_mask_count=${SPARSE_DLM_DENSE_FALLBACK_MASK_COUNT:-4},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-0.5},editing_threshold=${EDITING_THRESHOLD:-0.0},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${MASK_ID:-156895},eos_id=${EOS_ID:-156892}"
+model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},sparse_dlm=${sparse_dlm},sparse_dlm_ratio=${sparse_ratio},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-4},sparse_dlm_dense_fallback_mask_count=${SPARSE_DLM_DENSE_FALLBACK_MASK_COUNT:-4},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-256},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-0.5},editing_threshold=${EDITING_THRESHOLD:-0.0},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${MASK_ID:-156895},eos_id=${EOS_ID:-156892}"
 
 minerva_tasks="minerva_math_algebra,minerva_math_counting_and_prob,minerva_math_geometry,minerva_math_intermediate_algebra,minerva_math_num_theory,minerva_math_prealgebra,minerva_math_precalc"
 

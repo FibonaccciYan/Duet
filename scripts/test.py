@@ -20,6 +20,15 @@ DEFAULT_MODEL_PATH = "/data0/ysy/models/LLaDA2.1-mini"
 DEFAULT_PROMPT = "Write a short story about history."
 
 
+def parse_bool(value):
+    value = str(value).lower()
+    if value in {"1", "true", "yes", "y"}:
+        return True
+    if value in {"0", "false", "no", "n"}:
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean value, got {value!r}")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="LLaDA block-cache SparseDLM inference")
     parser.add_argument("--model_path", default=DEFAULT_MODEL_PATH)
@@ -47,6 +56,10 @@ def parse_args():
     parser.add_argument("--sparse_dlm_top_k", type=int, default=64)
     parser.add_argument("--sparse_dlm_selection_interval", type=int, default=4)
     parser.add_argument("--sparse_dlm_dense_fallback_mask_count", type=int, default=4)
+    parser.add_argument("--query_sparse", type=parse_bool, default=True)
+    parser.add_argument("--prefix_sparse", type=parse_bool, default=True)
+    parser.add_argument("--prefix_token_budget", type=int, default=256)
+    parser.add_argument("--prefix_chunk_size", type=int, default=256)
     return parser.parse_args()
 
 
@@ -74,6 +87,10 @@ def load_model_and_tokenizer(args):
             top_k=args.sparse_dlm_top_k,
             selection_interval=args.sparse_dlm_selection_interval,
             dense_fallback_mask_count=args.sparse_dlm_dense_fallback_mask_count,
+            query_sparse=args.query_sparse,
+            prefix_sparse=args.prefix_sparse,
+            prefix_token_budget=args.prefix_token_budget,
+            prefix_chunk_size=args.prefix_chunk_size,
         )
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     return model, tokenizer
@@ -97,6 +114,11 @@ def main():
 
     print(f"Pattern: {args.pattern}")
     print(f"Attention implementation: {args.attn_implementation}")
+    if args.pattern == "block_cache_sparse_dlm":
+        print(
+            f"Query sparse: {args.query_sparse}; prefix sparse: {args.prefix_sparse}; "
+            f"prefix token budget: {args.prefix_token_budget}"
+        )
     synchronize()
     start = time.perf_counter()
     sequences = model.generate(

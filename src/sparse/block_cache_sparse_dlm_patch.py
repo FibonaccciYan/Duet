@@ -21,6 +21,8 @@ def _select_positions(
     mask_id,
     ratio,
     top_k,
+    temperature=0.0,
+    top_p=None,
     cached_positions=None,
     selection_step=0,
     selection_interval=1,
@@ -40,18 +42,21 @@ def _select_positions(
     ):
         old_masks = cached_positions[mask[cached_positions]]
         if old_masks.numel() >= candidate_count:
-            return torch.cat((decoded, old_masks[:candidate_count])).sort().values
+            return torch.cat((decoded, old_masks[:candidate_count]))
 
     mask_positions = torch.where(mask)[0]
     mask_hidden = hidden_states[:, mask_positions, :]
     mask_logits = model.lm_head(mask_hidden).float()
-    vocab_top_k = min(max(int(top_k), 1), mask_logits.shape[-1])
-    topk_logits = torch.topk(mask_logits, vocab_top_k, dim=-1).values
-    probs = torch.softmax(topk_logits, dim=-1)
-    confidence = torch.sum(probs * torch.log(probs.clamp_min(1e-12)), dim=-1)
+    _, confidence = _sample_with_confidence(
+        model,
+        mask_logits,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+    )
     _, top_indices = torch.topk(confidence[0], k=candidate_count)
     selected_masks = mask_positions[top_indices]
-    return torch.cat((decoded, selected_masks)).sort().values
+    return torch.cat((decoded, selected_masks))
 
 
 def _transfer_tokens(
@@ -67,7 +72,7 @@ def _transfer_tokens(
     threshold,
     editing_threshold,
     num_to_transfer,
-    allowed_mask=None,
+    logit_positions=None,
 ):
     x0, x0_p = _sample_with_confidence(
         model,
@@ -76,8 +81,15 @@ def _transfer_tokens(
         top_p=top_p,
         top_k=top_k,
     )
-    mask_candidates = active_mask if allowed_mask is None else active_mask & allowed_mask
-    mask_confidence = torch.where(mask_candidates, x0_p, -torch.inf)
+    if logit_positions is None:
+        prediction_tokens = x0
+        mask_confidence = torch.where(active_mask, x0_p, -torch.inf)
+    else:
+        prediction_tokens = block_tokens.clone()
+        prediction_tokens.index_copy_(1, logit_positions, x0)
+        mask_confidence = torch.full_like(active_mask, -torch.inf, dtype=x0_p.dtype)
+        mask_confidence.index_copy_(1, logit_positions, x0_p)
+    mask_candidates = active_mask
     high_conf_mask = (mask_confidence[0] > threshold) & mask_candidates[0]
     mask_transfer = torch.zeros_like(active_mask)
     if int(high_conf_mask.sum().item()) >= num_to_transfer:
@@ -88,13 +100,16 @@ def _transfer_tokens(
             _, indices = torch.topk(mask_confidence[0], k=min(num_to_transfer, available))
             mask_transfer[0, indices] = True
 
-    editable = (~active_mask) & (~prompt_mask.unsqueeze(0))
-    editing_confidence = torch.where(editable, x0_p, -torch.inf)
-    editing = (editing_confidence[0] > editing_threshold) & editable[0]
-    editing &= x0[0] != old_block_tokens[0]
-    transfer = mask_transfer | editing.unsqueeze(0)
+    if logit_positions is None:
+        editable = (~active_mask) & (~prompt_mask.unsqueeze(0))
+        editing_confidence = torch.where(editable, x0_p, -torch.inf)
+        editing = (editing_confidence[0] > editing_threshold) & editable[0]
+        editing &= x0[0] != old_block_tokens[0]
+        transfer = mask_transfer | editing.unsqueeze(0)
+    else:
+        transfer = mask_transfer
     if transfer.any():
-        block_tokens[transfer] = x0[transfer]
+        block_tokens[transfer] = prediction_tokens[transfer]
     return block_tokens, transfer
 
 
@@ -109,6 +124,189 @@ def _legacy_prefix_cache(cache, prefix_length):
     )
 
 
+class _BlockDualCache:
+    """Keep dense current-block KV and overwrite only sparse query positions."""
+
+    def __init__(self, key_values, prefix_lengths):
+        self.key_cache = [key_states for key_states, _ in key_values]
+        self.value_cache = [value_states for _, value_states in key_values]
+        self.prefix_lengths = prefix_lengths
+        self.positions = None
+
+    def set_positions(self, positions):
+        self.positions = positions
+
+    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+        if self.positions is None:
+            raise RuntimeError("Sparse cache positions must be set before updating KV.")
+        positions = self.positions.to(device=key_states.device, dtype=torch.long)
+        if key_states.shape[-2] != positions.numel():
+            raise ValueError("Sparse KV length does not match selected query positions.")
+        replace_positions = positions + self.prefix_lengths[layer_idx]
+        self.key_cache[layer_idx].index_copy_(2, replace_positions, key_states)
+        self.value_cache[layer_idx].index_copy_(2, replace_positions, value_states)
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+
+def _dual_cache_from_dense(dense_cache, prefix_cache, block_start, block_end):
+    legacy_cache = dense_cache.to_legacy_cache()
+    if len(legacy_cache) != len(prefix_cache):
+        raise ValueError("Dense and prefix caches must contain the same number of layers.")
+    key_values = []
+    prefix_lengths = []
+    for (dense_key, dense_value), (prefix_key, prefix_value) in zip(
+        legacy_cache, prefix_cache
+    ):
+        key_values.append(
+            (
+                torch.cat((prefix_key, dense_key[:, :, block_start:block_end, :]), dim=2),
+                torch.cat((prefix_value, dense_value[:, :, block_start:block_end, :]), dim=2),
+            )
+        )
+        prefix_lengths.append(prefix_key.shape[-2])
+    return _BlockDualCache(key_values, prefix_lengths)
+
+
+def _rotate_half(x):
+    half = x.shape[-1] // 2
+    return torch.cat((-x[..., half:], x[..., :half]), dim=-1)
+
+
+def _apply_rotary(query, cos, sin):
+    cos = cos.unsqueeze(1)
+    sin = sin.unsqueeze(1)
+    rotary_dim = cos.shape[-1]
+    query_rot, query_pass = query[..., :rotary_dim], query[..., rotary_dim:]
+    query_rot = query_rot * cos + _rotate_half(query_rot) * sin
+    return torch.cat((query_rot, query_pass), dim=-1)
+
+
+def _hadamard_transform(x):
+    size = x.shape[-1]
+    if size <= 0 or size & (size - 1):
+        raise ValueError(f"Adamas requires a power-of-two head dimension, got {size}")
+    leading_shape = x.shape[:-1]
+    output = x
+    width = 1
+    while width < size:
+        output = output.reshape(*leading_shape, -1, 2, width)
+        left, right = output.unbind(dim=-2)
+        output = torch.cat((left + right, left - right), dim=-1)
+        width *= 2
+    return output.reshape_as(x) / math.sqrt(size)
+
+
+def _adamas_prefix_indices(query, key, token_budget, chunk_size=256):
+    """Select one shared prefix token set for a layer using Adamas codes."""
+    prefix_length = key.shape[-2]
+    budget = min(int(token_budget), prefix_length)
+    if budget >= prefix_length:
+        return torch.arange(prefix_length, device=key.device)
+    if budget <= 0:
+        return torch.empty(0, dtype=torch.long, device=key.device)
+
+    query_thresholds = query.new_tensor([-1.35, 0.0, 1.35])
+    key_thresholds = key.new_tensor([-2.26, 0.0, 2.26])
+    query_code = torch.bucketize(
+        _hadamard_transform(query), query_thresholds, out_int32=True
+    )
+    key_code = torch.bucketize(
+        _hadamard_transform(key), key_thresholds, out_int32=True
+    )
+    batch_size, query_heads, query_length, head_dim = query_code.shape
+    key_heads = key_code.shape[1]
+    if batch_size != 1 or query_heads % key_heads:
+        raise ValueError("Adamas prefix selection requires batch_size=1 and valid GQA heads")
+    query_groups = query_code.reshape(
+        batch_size,
+        key_heads,
+        query_heads // key_heads,
+        query_length,
+        head_dim,
+    )
+
+    scores = []
+    for start in range(0, prefix_length, chunk_size):
+        chunk = key_code[:, :, start : start + chunk_size]
+        distances = (
+            query_groups[..., None, :] - chunk[:, :, None, None, :, :]
+        ).abs().sum(dim=-1)
+        scores.append(distances.amin(dim=(1, 2, 3)))
+    scores = torch.cat(scores, dim=-1)
+    indices = torch.topk(scores[0], budget, largest=False).indices
+    return indices.sort().values
+
+
+def _capture_block_queries(model, block_start):
+    captured = [None] * len(model.model.layers)
+    handles = []
+
+    for layer_idx, layer in enumerate(model.model.layers):
+        attention = layer.attention
+
+        def capture(_module, _inputs, output, idx=layer_idx, attn=attention):
+            qkv = output[:, block_start:]
+            qkv = qkv.view(
+                qkv.shape[0],
+                qkv.shape[1],
+                attn.num_heads + 2 * attn.num_key_value_heads,
+                attn.head_dim,
+            )
+            query = qkv[:, :, : attn.num_heads].transpose(1, 2)
+            if attn.config.use_qk_norm:
+                query = attn.query_layernorm(query)
+            captured[idx] = query.contiguous()
+
+        handles.append(attention.query_key_value.register_forward_hook(capture))
+    return captured, handles
+
+
+def _compact_prefix_cache(
+    model,
+    cache,
+    prefix_length,
+    captured_queries,
+    block_position_ids,
+    token_budget,
+    chunk_size,
+):
+    prefix_cache = _legacy_prefix_cache(cache, prefix_length)
+    if not prefix_cache:
+        return prefix_cache, ()
+    if prefix_length <= token_budget:
+        indices = torch.arange(prefix_length, device=prefix_cache[0][0].device)
+        return prefix_cache, tuple(indices for _ in prefix_cache)
+
+    cos, sin = model.model.rotary_emb(captured_queries[0], block_position_ids)
+    compact_cache = []
+    prefix_indices = []
+    for query, (key, value) in zip(captured_queries, prefix_cache):
+        if query is None:
+            raise RuntimeError("Failed to capture a layer query during dense refresh")
+        query = _apply_rotary(query, cos, sin)
+        indices = _adamas_prefix_indices(query, key, token_budget, chunk_size)
+        compact_cache.append(
+            (
+                key.index_select(2, indices).contiguous(),
+                value.index_select(2, indices).contiguous(),
+            )
+        )
+        prefix_indices.append(indices)
+    return tuple(compact_cache), tuple(prefix_indices)
+
+
+def _layer_attention_mask(
+    attention_mask,
+    query_positions,
+    key_positions,
+    prefix_positions,
+    original_prefix_length,
+):
+    rows = attention_mask.index_select(2, query_positions)
+    columns = torch.cat((prefix_positions, key_positions + original_prefix_length))
+    return rows.index_select(3, columns)
+
+
 def _cached_forward(
     model,
     input_ids,
@@ -121,25 +319,33 @@ def _cached_forward(
     top_k,
     selection_interval,
     dense_fallback_mask_count,
+    temperature=0.0,
+    top_p=None,
+    query_sparse=True,
+    prefix_indices=None,
+    original_prefix_length=None,
 ):
     base = model.model
     inputs_embeds = base.word_embeddings(input_ids)
     position_embeddings = base.rotary_emb(inputs_embeds, position_ids)
     full_cache = DynamicCache.from_legacy_cache(prefix_cache)
-    sparse_cache = DynamicCache.from_legacy_cache(prefix_cache)
+    sparse_cache = selection_state.get("sparse_cache")
     hidden_states = inputs_embeds
     selected_positions = None
     full_hidden_base = None
     compressed_hidden_states = False
 
-    prefix_length = prefix_cache[0][0].shape[-2] if prefix_cache else 0
+    compact_prefix_length = prefix_cache[0][0].shape[-2] if prefix_cache else 0
+    if original_prefix_length is None:
+        original_prefix_length = compact_prefix_length
+    all_positions = torch.arange(input_ids.shape[1], device=input_ids.device)
     for layer_idx, decoder_layer in enumerate(base.layers):
         if layer_idx < 2 or selected_positions is None:
             layer_hidden = hidden_states
             layer_position_ids = position_ids
             layer_position_embeddings = position_embeddings
-            layer_attention_mask = attention_mask
             layer_cache = full_cache
+            layer_query_positions = all_positions
         else:
             layer_hidden = (
                 hidden_states
@@ -151,12 +357,24 @@ def _cached_forward(
                 position_embeddings[0].index_select(1, selected_positions),
                 position_embeddings[1].index_select(1, selected_positions),
             )
-            selected_mask = attention_mask.index_select(2, selected_positions)
-            selected_columns = selected_mask.index_select(3, selected_positions + prefix_length)
-            layer_attention_mask = torch.cat(
-                (selected_mask[:, :, :, :prefix_length], selected_columns), dim=-1
-            )
+            if sparse_cache is None:
+                raise RuntimeError("Sparse cache is missing after dense refresh.")
+            sparse_cache.set_positions(selected_positions)
             layer_cache = sparse_cache
+            layer_query_positions = selected_positions
+
+        layer_prefix_positions = (
+            prefix_indices[layer_idx]
+            if prefix_indices is not None
+            else torch.arange(original_prefix_length, device=input_ids.device)
+        )
+        layer_attention_mask = _layer_attention_mask(
+            attention_mask,
+            layer_query_positions,
+            all_positions,
+            layer_prefix_positions,
+            original_prefix_length,
+        )
 
         layer_outputs = decoder_layer(
             layer_hidden,
@@ -171,7 +389,7 @@ def _cached_forward(
         hidden_states = layer_outputs[0]
         compressed_hidden_states = selected_positions is not None and layer_idx >= 2
 
-        if layer_idx == 1 and len(base.layers) > 2:
+        if query_sparse and layer_idx == 1 and len(base.layers) > 2:
             selected_positions = _select_positions(
                 model,
                 hidden_states,
@@ -179,6 +397,8 @@ def _cached_forward(
                 mask_id=mask_id,
                 ratio=ratio,
                 top_k=top_k,
+                temperature=temperature,
+                top_p=top_p,
                 cached_positions=selection_state.get("positions"),
                 selection_step=selection_state["step"],
                 selection_interval=selection_interval,
@@ -193,7 +413,11 @@ def _cached_forward(
         hidden_states = full_hidden_base
 
     hidden_states = base.norm(hidden_states)
-    return model.lm_head(hidden_states).float(), selected_positions
+    if selected_positions is None:
+        return model.lm_head(hidden_states).float(), selected_positions, None
+    mask_positions = torch.where(input_ids[0] == mask_id)[0]
+    mask_hidden = hidden_states.index_select(1, mask_positions)
+    return model.lm_head(mask_hidden).float(), selected_positions, mask_positions
 
 
 @torch.no_grad()
@@ -249,6 +473,10 @@ def _block_cache_generate(self, *args, **kwargs):
     selection_interval = max(1, int(getattr(self.config, "llada_sparse_dlm_selection_interval", 4)))
     selection_top_k = int(getattr(self.config, "llada_sparse_dlm_top_k", 64))
     fallback_count = int(getattr(self.config, "llada_sparse_dlm_dense_fallback_mask_count", 4))
+    query_sparse = bool(getattr(self.config, "llada_query_sparse", True))
+    prefix_sparse = bool(getattr(self.config, "llada_prefix_sparse", True))
+    prefix_token_budget = int(getattr(self.config, "llada_prefix_token_budget", 256))
+    prefix_chunk_size = int(getattr(self.config, "llada_prefix_chunk_size", 256))
     dense_forward = self._llada_block_cache_dense_forward
     prefill_blocks = prompt_length // block_length
 
@@ -265,13 +493,21 @@ def _block_cache_generate(self, *args, **kwargs):
         if block_start < prompt_length:
             prompt_mask[: min(prompt_length - block_start, block_length)] = True
 
-        dense_outputs = dense_forward(
-            cur_x,
-            attention_mask=cur_mask,
-            position_ids=cur_positions,
-            use_cache=True,
-            return_dict=True,
-        )
+        captured_queries = handles = None
+        if prefix_sparse and block_start:
+            captured_queries, handles = _capture_block_queries(self, block_start)
+        try:
+            dense_outputs = dense_forward(
+                cur_x,
+                attention_mask=cur_mask,
+                position_ids=cur_positions,
+                use_cache=True,
+                return_dict=True,
+            )
+        finally:
+            if handles is not None:
+                for handle in handles:
+                    handle.remove()
         active_logits = dense_outputs.logits[:, -block_length:, :].float()
         block_tokens = cur_x[:, -block_length:]
         block_tokens, _ = _transfer_tokens(
@@ -291,9 +527,31 @@ def _block_cache_generate(self, *args, **kwargs):
         cur_x[:, -block_length:] = block_tokens
         x[:, :current_window_end] = cur_x
 
-        prefix_cache = _legacy_prefix_cache(dense_outputs.past_key_values, block_start)
+        prefix_indices = None
+        if prefix_sparse and block_start:
+            prefix_cache, prefix_indices = _compact_prefix_cache(
+                self,
+                dense_outputs.past_key_values,
+                block_start,
+                captured_queries,
+                cur_positions[:, block_start:block_end],
+                prefix_token_budget,
+                prefix_chunk_size,
+            )
+        else:
+            prefix_cache = _legacy_prefix_cache(dense_outputs.past_key_values, block_start)
+        sparse_cache = (
+            _dual_cache_from_dense(
+                dense_outputs.past_key_values,
+                prefix_cache,
+                block_start,
+                block_end,
+            )
+            if query_sparse
+            else None
+        )
         del dense_outputs
-        selection_state = {"positions": None, "step": 0}
+        selection_state = {"positions": None, "step": 0, "sparse_cache": sparse_cache}
         post_steps = 0
         max_iterations = max(steps, block_length) + max_post_steps
         for _ in range(1, max_iterations):
@@ -306,7 +564,7 @@ def _block_cache_generate(self, *args, **kwargs):
             block_input = x[:, block_start:block_end]
             step_mask = full_attention_mask[:, :, block_start:block_end, :block_end]
             step_positions = position_ids[:, block_start:block_end]
-            logits, selected_positions = _cached_forward(
+            logits, selected_positions, logit_positions = _cached_forward(
                 self,
                 block_input,
                 step_mask,
@@ -318,13 +576,14 @@ def _block_cache_generate(self, *args, **kwargs):
                 selection_top_k,
                 selection_interval,
                 fallback_count,
+                temperature=temperature,
+                top_p=top_p,
+                query_sparse=query_sparse,
+                prefix_indices=prefix_indices,
+                original_prefix_length=block_start,
             )
             selection_state["step"] += 1
             active_logits = logits
-            selected_mask = None
-            if selected_positions is not None:
-                selected_mask = torch.zeros_like(active_block_mask)
-                selected_mask[:, selected_positions] = True
             block_tokens = x[:, block_start:block_end]
             block_tokens, transfer = _transfer_tokens(
                 self,
@@ -339,7 +598,7 @@ def _block_cache_generate(self, *args, **kwargs):
                 threshold,
                 editing_threshold,
                 num_to_transfer,
-                allowed_mask=selected_mask,
+                logit_positions=logit_positions,
             )
             x[:, block_start:block_end] = block_tokens
             if not active_block_mask.any() and not transfer.any():
@@ -366,13 +625,26 @@ def patch_model(
     top_k=64,
     selection_interval=4,
     dense_fallback_mask_count=4,
+    query_sparse=True,
+    prefix_sparse=True,
+    prefix_token_budget=256,
+    prefix_chunk_size=256,
 ):
-    if top_k <= 0 or selection_interval <= 0:
-        raise ValueError("top_k and selection_interval must be positive")
+    if (
+        top_k <= 0
+        or selection_interval <= 0
+        or prefix_token_budget <= 0
+        or prefix_chunk_size <= 0
+    ):
+        raise ValueError("top_k, intervals, prefix budget, and chunk size must be positive")
     model.config.llada_sparse_dlm_ratio = float(ratio)
     model.config.llada_sparse_dlm_top_k = int(top_k)
     model.config.llada_sparse_dlm_selection_interval = max(1, int(selection_interval))
     model.config.llada_sparse_dlm_dense_fallback_mask_count = int(dense_fallback_mask_count)
+    model.config.llada_query_sparse = bool(query_sparse)
+    model.config.llada_prefix_sparse = bool(prefix_sparse)
+    model.config.llada_prefix_token_budget = int(prefix_token_budget)
+    model.config.llada_prefix_chunk_size = int(prefix_chunk_size)
     if not hasattr(model, "_llada_block_cache_dense_forward"):
         model._llada_block_cache_dense_forward = model.forward
     model.generate = types.MethodType(_block_cache_generate, model)

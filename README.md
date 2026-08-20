@@ -28,6 +28,18 @@ SPARSE_DLM_RATIO=0.5 SPARSE_DLM_SELECTION_INTERVAL=4 \
 bash scripts/test.sh
 ```
 
+The current-block query optimization and Adamas prefix selection are
+independent. Prefix selection uses a per-layer prefix-only budget of 256
+tokens by default:
+
+```bash
+QUERY_SPARSE=false PREFIX_SPARSE=true PREFIX_TOKEN_BUDGET=256 \
+bash scripts/test.sh
+```
+
+Set `PREFIX_SPARSE=false` to retain the full prefix cache. `PREFIX_CHUNK_SIZE`
+controls peak memory used by the Python Adamas selector and defaults to 256.
+
 Use `PATTERN=default` for the native LLaDA baseline.
 
 ## Instruct Evaluation

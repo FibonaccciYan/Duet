@@ -26,6 +26,10 @@ args=(
   --sparse_dlm_top_k "${SPARSE_DLM_TOP_K:-64}"
   --sparse_dlm_selection_interval "${SPARSE_DLM_SELECTION_INTERVAL:-4}"
   --sparse_dlm_dense_fallback_mask_count "${SPARSE_DLM_DENSE_FALLBACK_MASK_COUNT:-4}"
+  --query_sparse "${QUERY_SPARSE:-true}"
+  --prefix_sparse "${PREFIX_SPARSE:-true}"
+  --prefix_token_budget "${PREFIX_TOKEN_BUDGET:-256}"
+  --prefix_chunk_size "${PREFIX_CHUNK_SIZE:-256}"
   --prompt "${PROMPT:-Write a short story about history.}"
 )
 

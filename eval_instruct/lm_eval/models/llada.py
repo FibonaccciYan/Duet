@@ -71,6 +71,10 @@ class LLaDA(LM):
         sparse_dlm_selection_interval: int = 4,
         sparse_dlm_dense_fallback_mask_count: int = 4,
         sparse_dlm_block_length: Optional[int] = None,
+        query_sparse: bool = True,
+        prefix_sparse: bool = True,
+        prefix_token_budget: int = 256,
+        prefix_chunk_size: int = 256,
         show_samples: bool = False,
         **kwargs,
     ) -> None:
@@ -117,14 +121,22 @@ class LLaDA(LM):
                 top_k=int(sparse_dlm_top_k),
                 selection_interval=int(sparse_dlm_selection_interval),
                 dense_fallback_mask_count=int(sparse_dlm_dense_fallback_mask_count),
+                query_sparse=_as_bool(query_sparse),
+                prefix_sparse=_as_bool(prefix_sparse),
+                prefix_token_budget=int(prefix_token_budget),
+                prefix_chunk_size=int(prefix_chunk_size),
             )
             eval_logger.info(
                 "Applied block-cache SparseDLM: ratio=%s, top_k=%s, "
-                "selection_interval=%s, dense_fallback_mask_count=%s",
+                "selection_interval=%s, dense_fallback_mask_count=%s, "
+                "query_sparse=%s, prefix_sparse=%s, prefix_token_budget=%s",
                 sparse_dlm_ratio,
                 sparse_dlm_top_k,
                 sparse_dlm_selection_interval,
                 sparse_dlm_dense_fallback_mask_count,
+                query_sparse,
+                prefix_sparse,
+                prefix_token_budget,
             )
 
         self.batch_size_per_gpu = batch_size

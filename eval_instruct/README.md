@@ -29,6 +29,16 @@ BENCHMARK=humaneval bash eval_instruct/eval.sh
 BENCHMARK=all bash eval_instruct/eval.sh
 ```
 
+Outputs default to `eval_instruct/output_reproduce/default`. Set a directory
+name relative to `output_reproduce` with `OUTPUT_PATH`:
+
+```bash
+OUTPUT_PATH=A BENCHMARK=gsm8k bash eval_instruct/eval.sh
+```
+
+This writes to `eval_instruct/output_reproduce/A`. `OUTPUT_ROOT` remains
+available when a full custom path is needed.
+
 Run the native LLaDA baseline with the same generation settings:
 
 ```bash
@@ -37,7 +47,9 @@ SPARSE_DLM=false bash eval_instruct/eval.sh
 
 Useful overrides include `MODEL`, `PYTHON`, `GEN_LENGTH`, `BLOCK_LENGTH`,
 `STEPS`, `SPARSE_DLM_RATIO`, `SPARSE_DLM_TOP_K`,
-`SPARSE_DLM_SELECTION_INTERVAL`, `NUM_FEWSHOT`, `LIMIT`, and `OUTPUT_ROOT`.
+`SPARSE_DLM_SELECTION_INTERVAL`, `QUERY_SPARSE`, `PREFIX_SPARSE`,
+`PREFIX_TOKEN_BUDGET`, `PREFIX_CHUNK_SIZE`, `NUM_FEWSHOT`, `LIMIT`, and
+`OUTPUT_PATH` or `OUTPUT_ROOT`.
 `LIMIT=1` is useful for a smoke test. Evaluation currently requires
 `--batch_size 1`, matching the block-cache implementation.
 

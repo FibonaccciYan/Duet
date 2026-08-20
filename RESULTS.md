@@ -137,6 +137,24 @@ editing threshold=0.0。下表为候选层对最终修改位置的 recall，不�
 
 该结果仅来自一个 prompt，用于验证选位方向，不作为通用质量结论。
 
+## Prefix/Query Sparse v0.1 消融
+
+共同配置：block-cache、BF16、SDPA、block length 32、steps 32、
+`sparse_dlm_ratio=0.5`、`threshold=0.5`、`editing_threshold=0.0`；
+prefix 稀疏配置使用每层 `token_budget=256`。四组 HumanEval 均对保存的
+生成 JSONL 运行相同的代码抽取和缩进归一化重评，未重新生成模型输出。
+
+| 配置 | query sparse | prefix sparse | 原始 pass@1 | 重评 pass@1 | 通过数 | 原始评测时间 |
+|---|---:|---:|---:|---:|---:|---:|
+| Dense block cache | 否 | 否 | 46.95% | **80.49%** | 132/164 | 00:34:41.78 |
+| Prefix only | 否 | 是 | 43.90% | 79.27% | 130/164 | 00:39:11.77 |
+| Query only | 是 | 否 | 37.20% | 75.00% | 123/164 | 01:02:03.09 |
+| Prefix + Query | 是 | 是 | 31.10% | 68.29% | 112/164 | 01:07:21.73 |
+
+相对 Dense block cache，Prefix only 的重评准确率下降 1.22 pp，Query only
+下降 5.49 pp，组合下降 12.20 pp；对应总评测耗时分别增加 13.0%、78.8% 和
+94.1%。这些时间来自 harness 的原始评测，未包含重评阶段的代码执行时间。
+
 ## 回归测试
 
 `tests/test_block_cache_sparse_dlm.py` 当前包含并通过 2 项 CPU 测试：
