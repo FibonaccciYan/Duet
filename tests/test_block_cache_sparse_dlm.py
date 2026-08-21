@@ -146,7 +146,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         torch.testing.assert_close(key[:, :, [0, 1, 2, 4]], original_key[:, :, [0, 1, 2, 4]])
         torch.testing.assert_close(value[:, :, [0, 1, 2, 4]], original_value[:, :, [0, 1, 2, 4]])
 
-    def test_python_adamas_selector_respects_budget(self):
+    def test_python_adamas_selector_returns_sorted_indices(self):
         values = torch.arange(8, dtype=torch.float32)
         transformed = _hadamard_transform(values)
         expected = values @ (torch.tensor(
@@ -168,9 +168,16 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         query = torch.randn(1, 4, 3, 8)
         key = torch.randn(1, 2, 11, 8)
         indices = _adamas_prefix_indices(query, key, token_budget=4, chunk_size=3)
-        self.assertEqual(indices.shape, (4,))
+        self.assertGreaterEqual(indices.numel(), 4)
         self.assertTrue(torch.all(indices[1:] > indices[:-1]).item())
         self.assertTrue(torch.all((0 <= indices) & (indices < 11)).item())
+
+    def test_adamas_selector_preserves_union_beyond_budget(self):
+        query = torch.tensor([[[[2.0, 0.0], [-2.0, 0.0], [0.0, 2.0]]]])
+        key = torch.tensor([[[[4.0, 0.0], [-4.0, 0.0], [0.0, 4.0]]]])
+        indices = _adamas_prefix_indices(query, key, token_budget=2, chunk_size=1)
+
+        self.assertEqual(indices.tolist(), [0, 1, 2])
 
     def test_dense_cached_forward_matches_full_forward(self):
         model = _tiny_model()

@@ -371,7 +371,7 @@ def _hadamard_transform(x):
 
 
 def _adamas_prefix_indices(query, key, token_budget, chunk_size=256):
-    """Select one shared prefix token set for a layer using Adamas codes."""
+    """Select a shared prefix KV set from the union of query candidates."""
     prefix_length = key.shape[-2]
     budget = min(int(token_budget), prefix_length)
     if budget >= prefix_length:
@@ -399,6 +399,11 @@ def _adamas_prefix_indices(query, key, token_budget, chunk_size=256):
         head_dim,
     )
 
+    # Keep one local candidate budget per query, then share their KV union.
+    # An oversized union is intentionally preserved; token_budget only fills
+    # the set when the union is smaller.
+    local_budget = max(1, math.ceil(budget / (query_heads * query_length)))
+    query_distances = query_indices = None
     scores = []
     for start in range(0, prefix_length, chunk_size):
         chunk = key_code[:, :, start : start + chunk_size]
@@ -406,8 +411,28 @@ def _adamas_prefix_indices(query, key, token_budget, chunk_size=256):
             query_groups[..., None, :] - chunk[:, :, None, None, :, :]
         ).abs().sum(dim=-1)
         scores.append(distances.amin(dim=(1, 2, 3)))
+        chunk_length = chunk.shape[-2]
+        chunk_distances = distances[0].reshape(-1, chunk_length)
+        chunk_indices = torch.arange(
+            start, start + chunk_length, device=key.device
+        ).expand_as(chunk_distances)
+        if query_distances is not None:
+            chunk_distances = torch.cat((query_distances, chunk_distances), dim=1)
+            chunk_indices = torch.cat((query_indices, chunk_indices), dim=1)
+        keep = min(local_budget, chunk_distances.shape[1])
+        query_distances, local_indices = torch.topk(
+            chunk_distances, keep, dim=1, largest=False
+        )
+        query_indices = chunk_indices.gather(1, local_indices)
     scores = torch.cat(scores, dim=-1)
-    indices = torch.topk(scores[0], budget, largest=False).indices
+    indices = torch.unique(query_indices.flatten())
+    if indices.numel() < budget:
+        remaining_scores = scores[0].float()
+        remaining_scores[indices] = torch.inf
+        fill = torch.topk(
+            remaining_scores, budget - indices.numel(), largest=False
+        ).indices
+        indices = torch.cat((indices, fill))
     return indices.sort().values
 
 
