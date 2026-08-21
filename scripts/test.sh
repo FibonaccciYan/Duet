@@ -30,6 +30,8 @@ args=(
   --prefix_sparse "${PREFIX_SPARSE:-true}"
   --prefix_token_budget "${PREFIX_TOKEN_BUDGET:-256}"
   --prefix_chunk_size "${PREFIX_CHUNK_SIZE:-256}"
+  --losa "${LOSA:-false}"
+  --losa_active_topk "${LOSA_ACTIVE_TOPK:-5}"
   --prompt "${PROMPT:-Write a short story about history.}"
 )
 

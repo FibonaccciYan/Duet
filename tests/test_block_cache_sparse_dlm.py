@@ -12,9 +12,11 @@ if str(REPO_ROOT) not in sys.path:
 from src.sparse.block_cache_sparse_dlm_patch import (
     _BlockDualCache,
     _adamas_prefix_indices,
+    _attention_output_lse,
     _cached_forward,
     _hadamard_transform,
     _legacy_prefix_cache,
+    _merge_attention_states,
     _select_positions,
     patch_model,
 )
@@ -63,6 +65,36 @@ def _block_mask(num_blocks, block_length, dtype):
 
 
 class BlockCacheSparsePatchTest(unittest.TestCase):
+    def test_losa_online_merge_matches_concatenated_attention(self):
+        torch.manual_seed(1)
+        query = torch.randn(1, 4, 3, 8)
+        prefix_key = torch.randn(1, 2, 5, 8)
+        prefix_value = torch.randn(1, 2, 5, 8)
+        block_key = torch.randn(1, 2, 4, 8)
+        block_value = torch.randn(1, 2, 4, 8)
+        prefix_mask = torch.zeros(1, 1, 3, 5)
+        block_mask = torch.zeros(1, 1, 3, 4)
+
+        prefix_output, prefix_lse = _attention_output_lse(
+            query, prefix_key, prefix_value, prefix_mask, num_key_value_groups=2
+        )
+        block_output, block_lse = _attention_output_lse(
+            query, block_key, block_value, block_mask, num_key_value_groups=2
+        )
+        merged_output, merged_lse = _merge_attention_states(
+            prefix_output, prefix_lse, block_output, block_lse
+        )
+        dense_output, dense_lse = _attention_output_lse(
+            query,
+            torch.cat((prefix_key, block_key), dim=2),
+            torch.cat((prefix_value, block_value), dim=2),
+            torch.cat((prefix_mask, block_mask), dim=-1),
+            num_key_value_groups=2,
+        )
+
+        torch.testing.assert_close(merged_output, dense_output, rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(merged_lse, dense_lse, rtol=1e-5, atol=1e-5)
+
     def test_query_selection_uses_decode_confidence(self):
         class ConfidenceModel:
             def __init__(self):
@@ -173,6 +205,50 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
+
+    def test_losa_first_cached_forward_matches_dense_forward(self):
+        model = _tiny_model()
+        patch_model(
+            model,
+            ratio=1.0,
+            query_sparse=False,
+            prefix_sparse=False,
+            losa=True,
+            losa_active_topk=1,
+        )
+        tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
+        positions = torch.arange(8).unsqueeze(0)
+        attention_mask = _block_mask(2, 4, next(model.parameters()).dtype)
+
+        with torch.no_grad():
+            dense = model._llada_block_cache_dense_forward(
+                tokens,
+                attention_mask=attention_mask,
+                position_ids=positions,
+                use_cache=True,
+                return_dict=True,
+            )
+            cached_logits, selected, logit_positions = _cached_forward(
+                model,
+                tokens[:, 4:],
+                attention_mask[:, :, 4:, :],
+                positions[:, 4:],
+                _legacy_prefix_cache(dense.past_key_values, 4),
+                {"positions": None, "step": 0, "sparse_cache": None},
+                mask_id=127,
+                ratio=1.0,
+                top_k=8,
+                selection_interval=2,
+                dense_fallback_mask_count=0,
+                query_sparse=False,
+                original_prefix_length=4,
+            )
+
+        self.assertIsNone(selected)
+        self.assertIsNone(logit_positions)
+        torch.testing.assert_close(
+            cached_logits, dense.logits[:, 4:], rtol=5e-3, atol=5e-3
+        )
 
     def test_compact_prefix_matches_dense_masked_prefix(self):
         model = _tiny_model()

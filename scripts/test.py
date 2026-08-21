@@ -60,6 +60,8 @@ def parse_args():
     parser.add_argument("--prefix_sparse", type=parse_bool, default=True)
     parser.add_argument("--prefix_token_budget", type=int, default=256)
     parser.add_argument("--prefix_chunk_size", type=int, default=256)
+    parser.add_argument("--losa", type=parse_bool, default=False)
+    parser.add_argument("--losa_active_topk", type=int, default=5)
     return parser.parse_args()
 
 
@@ -91,6 +93,8 @@ def load_model_and_tokenizer(args):
             prefix_sparse=args.prefix_sparse,
             prefix_token_budget=args.prefix_token_budget,
             prefix_chunk_size=args.prefix_chunk_size,
+            losa=args.losa,
+            losa_active_topk=args.losa_active_topk,
         )
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     return model, tokenizer
@@ -117,7 +121,8 @@ def main():
     if args.pattern == "block_cache_sparse_dlm":
         print(
             f"Query sparse: {args.query_sparse}; prefix sparse: {args.prefix_sparse}; "
-            f"prefix token budget: {args.prefix_token_budget}"
+            f"prefix token budget: {args.prefix_token_budget}; "
+            f"LoSA: {args.losa}; LoSA active top-k: {args.losa_active_topk}"
         )
     synchronize()
     start = time.perf_counter()

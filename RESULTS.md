@@ -157,10 +157,16 @@ prefix 稀疏配置使用每层 `token_budget=256`。四组 HumanEval 均对保�
 
 ## 回归测试
 
-`tests/test_block_cache_sparse_dlm.py` 当前包含并通过 2 项 CPU 测试：
+`tests/test_block_cache_sparse_dlm.py` 当前包含并通过 8 项 CPU 测试：
 
-1. ratio=1.0 的 cached forward logits 与完整 dense forward 对齐。
-2. ratio=0.5、selection interval=3 的多 block sparse generation 能完成且无 mask 残留。
+1. query confidence selection 使用真实 decode confidence。
+2. dual cache 只覆盖选中的 current-block KV。
+3. Python Hadamard/Adamas prefix selector 遵守预算。
+4. ratio=1.0 的 cached forward logits 与完整 dense forward 对齐。
+5. LoSA online-softmax merge 与拼接后的完整 attention 对齐。
+6. LoSA 首次 cached forward 与 dense forward 对齐。
+7. compact prefix cache 与 dense masked prefix 对齐。
+8. ratio=0.5、selection interval=3 的多 block sparse generation 能完成且无 mask 残留。
 
 ## 结果文件
 

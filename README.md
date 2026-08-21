@@ -4,6 +4,8 @@ This repository centers on the block-cache SparseDLM inference path for
 `LLaDA2.1-mini`.
 
 Current evaluation and throughput results are summarized in [`RESULTS.md`](RESULTS.md).
+New `eval_instruct` results default to `../llada_exp/` in the parent `sparse/`
+directory; set `OUTPUT_ROOT` to override it.
 
 ## Layout
 
@@ -39,6 +41,18 @@ bash scripts/test.sh
 
 Set `PREFIX_SPARSE=false` to retain the full prefix cache. `PREFIX_CHUNK_SIZE`
 controls peak memory used by the Python Adamas selector and defaults to 256.
+
+The experimental PyTorch LoSA reference path is disabled by default. It caches
+prefix attention output/LSE between refinement steps and merges it with the
+fresh current-block attention using online-softmax state:
+
+```bash
+LOSA=true LOSA_ACTIVE_TOPK=5 QUERY_SPARSE=false PREFIX_SPARSE=false \
+bash scripts/test.sh
+```
+
+This is a correctness/reference path, not a Triton kernel. Keep query and
+prefix sparse disabled for the first numerical comparison.
 
 Use `PATTERN=default` for the native LLaDA baseline.
 

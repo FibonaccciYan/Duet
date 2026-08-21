@@ -29,15 +29,16 @@ BENCHMARK=humaneval bash eval_instruct/eval.sh
 BENCHMARK=all bash eval_instruct/eval.sh
 ```
 
-Outputs default to `eval_instruct/output_reproduce/default`. Set a directory
-name relative to `output_reproduce` with `OUTPUT_PATH`:
+Outputs default to `../llada_exp/default` (that is,
+`/data0/ysy/sparse/llada_exp/default`). Set a directory name relative to
+`llada_exp` with `OUTPUT_PATH`:
 
 ```bash
 OUTPUT_PATH=A BENCHMARK=gsm8k bash eval_instruct/eval.sh
 ```
 
-This writes to `eval_instruct/output_reproduce/A`. `OUTPUT_ROOT` remains
-available when a full custom path is needed.
+This writes to `../llada_exp/A`. `OUTPUT_ROOT` remains available when a full
+custom path is needed.
 
 Run the native LLaDA baseline with the same generation settings:
 
@@ -48,14 +49,28 @@ SPARSE_DLM=false bash eval_instruct/eval.sh
 Useful overrides include `MODEL`, `PYTHON`, `GEN_LENGTH`, `BLOCK_LENGTH`,
 `STEPS`, `SPARSE_DLM_RATIO`, `SPARSE_DLM_TOP_K`,
 `SPARSE_DLM_SELECTION_INTERVAL`, `QUERY_SPARSE`, `PREFIX_SPARSE`,
-`PREFIX_TOKEN_BUDGET`, `PREFIX_CHUNK_SIZE`, `NUM_FEWSHOT`, `LIMIT`, and
-`OUTPUT_PATH` or `OUTPUT_ROOT`.
+`PREFIX_TOKEN_BUDGET`, `PREFIX_CHUNK_SIZE`, `LOSA`, `LOSA_ACTIVE_TOPK`,
+`NUM_FEWSHOT`, `LIMIT`, and `OUTPUT_PATH` or `OUTPUT_ROOT`.
 `LIMIT=1` is useful for a smoke test. Evaluation currently requires
 `--batch_size 1`, matching the block-cache implementation.
+
+The experimental LoSA reference path is disabled by default. For a first
+correctness comparison, keep both existing sparse selectors disabled:
+
+```bash
+LOSA=true QUERY_SPARSE=false PREFIX_SPARSE=false LIMIT=1 \
+bash eval_instruct/eval.sh
+```
+
+HumanEval runs automatically normalize and re-evaluate the saved samples after
+generation. The summary is saved beside the matching `samples_*.jsonl` as
+`reeval_indent_normalized.json`. Every aggregated `results_*.json` also records
+`generated_tokens`, `generation_time_seconds`, and
+`generation_tokens_per_second` in its `config` section.
 
 The MMLU, GSM8K, Minerva Math, and HumanEval configurations follow Dream's
 evaluation script. They are all generative tasks; likelihood-based tasks are
 not supported by the `llada` adapter.
 
 The first run may download benchmark datasets. Evaluation outputs are written
-under `eval_instruct/output_reproduce/` and ignored by Git.
+under `../llada_exp/` by default.

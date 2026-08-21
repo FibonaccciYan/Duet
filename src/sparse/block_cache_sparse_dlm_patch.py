@@ -14,6 +14,180 @@ def _sample_with_confidence(model, logits, temperature, top_p, top_k):
     )
 
 
+def _repeat_kv(hidden_states, num_key_value_groups):
+    if num_key_value_groups == 1:
+        return hidden_states
+    batch, heads, seq_len, head_dim = hidden_states.shape
+    return (
+        hidden_states[:, :, None, :, :]
+        .expand(batch, heads, num_key_value_groups, seq_len, head_dim)
+        .reshape(batch, heads * num_key_value_groups, seq_len, head_dim)
+    )
+
+
+def _attention_output_lse(query, key, value, attention_mask, num_key_value_groups):
+    """Reference attention returning the normalized output and row-wise LSE."""
+    key = _repeat_kv(key, num_key_value_groups)
+    value = _repeat_kv(value, num_key_value_groups)
+    scores = torch.matmul(query.float(), key.float().transpose(-2, -1))
+    scores = scores * (query.shape[-1] ** -0.5)
+    if attention_mask is not None:
+        scores = scores + attention_mask.float()
+    lse = torch.logsumexp(scores, dim=-1)
+    output = torch.matmul(torch.softmax(scores, dim=-1), value.float())
+    return output, lse
+
+
+def _merge_attention_states(prefix_output, prefix_lse, block_output, block_lse):
+    total_lse = torch.logaddexp(prefix_lse, block_lse)
+    prefix_scale = torch.exp(prefix_lse - total_lse).unsqueeze(-1)
+    block_scale = torch.exp(block_lse - total_lse).unsqueeze(-1)
+    output = prefix_output * prefix_scale + block_output * block_scale
+    return output, total_lse
+
+
+def _new_losa_state(query, block_length):
+    batch, heads, _, head_dim = query.shape
+    return {
+        "previous_query": torch.zeros(
+            batch, heads, block_length, head_dim, dtype=query.dtype, device=query.device
+        ),
+        "prefix_output": torch.zeros(
+            batch, heads, block_length, head_dim, dtype=query.dtype, device=query.device
+        ),
+        "prefix_lse": torch.full(
+            (batch, heads, block_length),
+            -torch.inf,
+            dtype=torch.float32,
+            device=query.device,
+        ),
+        "valid": torch.zeros(batch, block_length, dtype=torch.bool, device=query.device),
+    }
+
+
+def _losa_active_indices(state, query, query_positions, active_topk):
+    positions = query_positions.to(device=query.device, dtype=torch.long)
+    valid = state["valid"].index_select(1, positions)[0]
+    missing = torch.where(~valid)[0]
+    if missing.numel() == positions.numel():
+        return torch.arange(positions.numel(), device=query.device)
+
+    active = missing.tolist()
+    remaining = max(0, min(int(active_topk), positions.numel()) - len(active))
+    if remaining:
+        stable = torch.where(valid)[0]
+        previous = state["previous_query"].index_select(2, positions[stable])
+        delta = (query[:, :, stable, :] - previous).float().pow(2).mean(dim=(1, 3))[0]
+        active.extend(stable[torch.topk(delta, k=remaining).indices].tolist())
+    return torch.tensor(active, dtype=torch.long, device=query.device)
+
+
+def _losa_attention_forward(
+    self,
+    hidden_states,
+    attention_mask=None,
+    position_ids=None,
+    past_key_value=None,
+    output_attentions=False,
+    use_cache=False,
+    position_embeddings=None,
+    **kwargs,
+):
+    model = self._llada_losa_model
+    context = getattr(model, "_llada_losa_context", None)
+    if context is None:
+        return self._llada_losa_dense_forward(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
+
+    input_shape = hidden_states.shape[:-1]
+    batch_size, query_length, _ = hidden_states.shape
+    qkv = self.query_key_value(hidden_states).view(
+        batch_size,
+        query_length,
+        self.num_heads + 2 * self.num_key_value_heads,
+        self.head_dim,
+    )
+    query, key, value = qkv.split(
+        [self.num_heads, self.num_key_value_heads, self.num_key_value_heads], dim=-2
+    )
+    query = query.transpose(1, 2)
+    key = key.transpose(1, 2)
+    value = value.transpose(1, 2)
+    if self.config.use_qk_norm:
+        query = self.query_layernorm(query)
+        key = self.key_layernorm(key)
+    cos, sin = position_embeddings
+    query = _apply_rotary(query, cos, sin)
+    key = _apply_rotary(key, cos, sin)
+
+    cache_kwargs = {"sin": sin, "cos": cos}
+    if past_key_value is not None:
+        key, value = past_key_value.update(key, value, self.layer_idx, cache_kwargs)
+
+    prefix_length = int(context["prefix_cache_length"])
+    prefix_key, block_key = key[:, :, :prefix_length], key[:, :, prefix_length:]
+    prefix_value, block_value = value[:, :, :prefix_length], value[:, :, prefix_length:]
+    prefix_mask = attention_mask[..., :prefix_length]
+    block_mask = attention_mask[..., prefix_length:]
+    block_output, block_lse = _attention_output_lse(
+        query, block_key, block_value, block_mask, self.num_key_value_groups
+    )
+
+    state = context["selection_state"]["losa_states"].get(self.layer_idx)
+    if state is None:
+        state = _new_losa_state(query, context["block_length"])
+    query_positions = context["query_positions"]
+    active_indices = _losa_active_indices(
+        state, query, query_positions, context["active_topk"]
+    )
+    if prefix_length:
+        active_query = query.index_select(2, active_indices)
+        active_prefix_mask = prefix_mask.index_select(2, active_indices)
+        active_prefix_output, active_prefix_lse = _attention_output_lse(
+            active_query,
+            prefix_key,
+            prefix_value,
+            active_prefix_mask,
+            self.num_key_value_groups,
+        )
+    else:
+        active_prefix_output = query.new_zeros(
+            batch_size, self.num_heads, active_indices.numel(), self.head_dim
+        ).float()
+        active_prefix_lse = torch.full(
+            (batch_size, self.num_heads, active_indices.numel()),
+            -torch.inf,
+            dtype=torch.float32,
+            device=query.device,
+        )
+
+    positions = query_positions.to(device=query.device, dtype=torch.long)
+    prefix_output = state["prefix_output"].index_select(2, positions).float()
+    prefix_lse = state["prefix_lse"].index_select(2, positions)
+    if active_indices.numel():
+        active_positions = positions.index_select(0, active_indices)
+        prefix_output.index_copy_(2, active_indices, active_prefix_output)
+        prefix_lse.index_copy_(2, active_indices, active_prefix_lse)
+        context["pending_losa"].append(
+            (self.layer_idx, active_positions, active_prefix_output, active_prefix_lse)
+        )
+    context["pending_losa_queries"].append((self.layer_idx, positions, query))
+    output, _ = _merge_attention_states(
+        prefix_output, prefix_lse, block_output, block_lse
+    )
+    output = output.to(query.dtype).transpose(1, 2).reshape(*input_shape, -1).contiguous()
+    output = self.dense(output)
+    return output, None, past_key_value
+
+
 def _select_positions(
     model,
     hidden_states,
@@ -335,78 +509,112 @@ def _cached_forward(
     full_hidden_base = None
     compressed_hidden_states = False
 
+    losa_context = None
+    if bool(getattr(model.config, "llada_losa", False)):
+        losa_states = selection_state.setdefault("losa_states", {})
+        losa_context = {
+            "selection_state": selection_state,
+            "prefix_cache_length": prefix_cache[0][0].shape[-2] if prefix_cache else 0,
+            "block_length": input_ids.shape[1],
+            "active_topk": int(getattr(model.config, "llada_losa_active_topk", 5)),
+            "pending_losa": [],
+            "pending_losa_queries": [],
+            "query_positions": None,
+        }
+        model._llada_losa_context = losa_context
+
     compact_prefix_length = prefix_cache[0][0].shape[-2] if prefix_cache else 0
     if original_prefix_length is None:
         original_prefix_length = compact_prefix_length
     all_positions = torch.arange(input_ids.shape[1], device=input_ids.device)
-    for layer_idx, decoder_layer in enumerate(base.layers):
-        if layer_idx < 2 or selected_positions is None:
-            layer_hidden = hidden_states
-            layer_position_ids = position_ids
-            layer_position_embeddings = position_embeddings
-            layer_cache = full_cache
-            layer_query_positions = all_positions
-        else:
-            layer_hidden = (
-                hidden_states
-                if compressed_hidden_states
-                else hidden_states.index_select(1, selected_positions)
-            )
-            layer_position_ids = position_ids.index_select(1, selected_positions)
-            layer_position_embeddings = (
-                position_embeddings[0].index_select(1, selected_positions),
-                position_embeddings[1].index_select(1, selected_positions),
-            )
-            if sparse_cache is None:
-                raise RuntimeError("Sparse cache is missing after dense refresh.")
-            sparse_cache.set_positions(selected_positions)
-            layer_cache = sparse_cache
-            layer_query_positions = selected_positions
+    try:
+        for layer_idx, decoder_layer in enumerate(base.layers):
+            if layer_idx < 2 or selected_positions is None:
+                layer_hidden = hidden_states
+                layer_position_ids = position_ids
+                layer_position_embeddings = position_embeddings
+                layer_cache = full_cache
+                layer_query_positions = all_positions
+            else:
+                layer_hidden = (
+                    hidden_states
+                    if compressed_hidden_states
+                    else hidden_states.index_select(1, selected_positions)
+                )
+                layer_position_ids = position_ids.index_select(1, selected_positions)
+                layer_position_embeddings = (
+                    position_embeddings[0].index_select(1, selected_positions),
+                    position_embeddings[1].index_select(1, selected_positions),
+                )
+                if sparse_cache is None:
+                    raise RuntimeError("Sparse cache is missing after dense refresh.")
+                sparse_cache.set_positions(selected_positions)
+                layer_cache = sparse_cache
+                layer_query_positions = selected_positions
 
-        layer_prefix_positions = (
-            prefix_indices[layer_idx]
-            if prefix_indices is not None
-            else torch.arange(original_prefix_length, device=input_ids.device)
-        )
-        layer_attention_mask = _layer_attention_mask(
-            attention_mask,
-            layer_query_positions,
-            all_positions,
-            layer_prefix_positions,
-            original_prefix_length,
-        )
+            if losa_context is not None:
+                losa_context["query_positions"] = layer_query_positions
 
-        layer_outputs = decoder_layer(
-            layer_hidden,
-            attention_mask=layer_attention_mask,
-            position_ids=layer_position_ids,
-            past_key_value=layer_cache,
-            output_attentions=False,
-            output_router_logits=False,
-            use_cache=True,
-            position_embeddings=layer_position_embeddings,
-        )
-        hidden_states = layer_outputs[0]
-        compressed_hidden_states = selected_positions is not None and layer_idx >= 2
-
-        if query_sparse and layer_idx == 1 and len(base.layers) > 2:
-            selected_positions = _select_positions(
-                model,
-                hidden_states,
-                input_ids,
-                mask_id=mask_id,
-                ratio=ratio,
-                top_k=top_k,
-                temperature=temperature,
-                top_p=top_p,
-                cached_positions=selection_state.get("positions"),
-                selection_step=selection_state["step"],
-                selection_interval=selection_interval,
-                dense_fallback_mask_count=dense_fallback_mask_count,
+            layer_prefix_positions = (
+                prefix_indices[layer_idx]
+                if prefix_indices is not None
+                else torch.arange(original_prefix_length, device=input_ids.device)
             )
-            selection_state["positions"] = selected_positions
-            if selected_positions is not None:
-                full_hidden_base = hidden_states.clone()
+            layer_attention_mask = _layer_attention_mask(
+                attention_mask,
+                layer_query_positions,
+                all_positions,
+                layer_prefix_positions,
+                original_prefix_length,
+            )
+
+            layer_outputs = decoder_layer(
+                layer_hidden,
+                attention_mask=layer_attention_mask,
+                position_ids=layer_position_ids,
+                past_key_value=layer_cache,
+                output_attentions=False,
+                output_router_logits=False,
+                use_cache=True,
+                position_embeddings=layer_position_embeddings,
+            )
+            hidden_states = layer_outputs[0]
+            compressed_hidden_states = selected_positions is not None and layer_idx >= 2
+
+            if query_sparse and layer_idx == 1 and len(base.layers) > 2:
+                selected_positions = _select_positions(
+                    model,
+                    hidden_states,
+                    input_ids,
+                    mask_id=mask_id,
+                    ratio=ratio,
+                    top_k=top_k,
+                    temperature=temperature,
+                    top_p=top_p,
+                    cached_positions=selection_state.get("positions"),
+                    selection_step=selection_state["step"],
+                    selection_interval=selection_interval,
+                    dense_fallback_mask_count=dense_fallback_mask_count,
+                )
+                selection_state["positions"] = selected_positions
+                if selected_positions is not None:
+                    full_hidden_base = hidden_states.clone()
+
+        if losa_context is not None:
+            for layer_idx, positions, query in losa_context["pending_losa_queries"]:
+                state = selection_state["losa_states"].get(layer_idx)
+                if state is None:
+                    state = _new_losa_state(query, input_ids.shape[1])
+                    selection_state["losa_states"][layer_idx] = state
+                state["previous_query"].index_copy_(2, positions, query)
+            for layer_idx, positions, prefix_output, prefix_lse in losa_context["pending_losa"]:
+                state = selection_state["losa_states"][layer_idx]
+                state["prefix_output"].index_copy_(2, positions, prefix_output.to(state["prefix_output"].dtype))
+                state["prefix_lse"].index_copy_(2, positions, prefix_lse)
+                state["valid"][0, positions] = True
+    finally:
+        if losa_context is not None:
+            model._llada_losa_context = None
 
     if selected_positions is not None:
         full_hidden_base[:, selected_positions] = hidden_states
@@ -629,14 +837,19 @@ def patch_model(
     prefix_sparse=True,
     prefix_token_budget=256,
     prefix_chunk_size=256,
+    losa=False,
+    losa_active_topk=5,
 ):
     if (
         top_k <= 0
         or selection_interval <= 0
         or prefix_token_budget <= 0
         or prefix_chunk_size <= 0
+        or losa_active_topk <= 0
     ):
-        raise ValueError("top_k, intervals, prefix budget, and chunk size must be positive")
+        raise ValueError(
+            "top_k, intervals, prefix budget, chunk size, and LoSA active top-k must be positive"
+        )
     model.config.llada_sparse_dlm_ratio = float(ratio)
     model.config.llada_sparse_dlm_top_k = int(top_k)
     model.config.llada_sparse_dlm_selection_interval = max(1, int(selection_interval))
@@ -645,6 +858,16 @@ def patch_model(
     model.config.llada_prefix_sparse = bool(prefix_sparse)
     model.config.llada_prefix_token_budget = int(prefix_token_budget)
     model.config.llada_prefix_chunk_size = int(prefix_chunk_size)
+    model.config.llada_losa = bool(losa)
+    model.config.llada_losa_active_topk = int(losa_active_topk)
     if not hasattr(model, "_llada_block_cache_dense_forward"):
         model._llada_block_cache_dense_forward = model.forward
+    if losa:
+        for layer_idx, layer in enumerate(model.model.layers):
+            attention = layer.attention
+            if not hasattr(attention, "_llada_losa_dense_forward"):
+                attention._llada_losa_dense_forward = attention.forward
+                attention._llada_losa_model = model
+                attention.layer_idx = layer_idx
+                attention.forward = types.MethodType(_losa_attention_forward, attention)
     model.generate = types.MethodType(_block_cache_generate, model)

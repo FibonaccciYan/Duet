@@ -75,6 +75,8 @@ class LLaDA(LM):
         prefix_sparse: bool = True,
         prefix_token_budget: int = 256,
         prefix_chunk_size: int = 256,
+        losa: bool = False,
+        losa_active_topk: int = 5,
         show_samples: bool = False,
         **kwargs,
     ) -> None:
@@ -125,11 +127,14 @@ class LLaDA(LM):
                 prefix_sparse=_as_bool(prefix_sparse),
                 prefix_token_budget=int(prefix_token_budget),
                 prefix_chunk_size=int(prefix_chunk_size),
+                losa=_as_bool(losa),
+                losa_active_topk=int(losa_active_topk),
             )
             eval_logger.info(
                 "Applied block-cache SparseDLM: ratio=%s, top_k=%s, "
                 "selection_interval=%s, dense_fallback_mask_count=%s, "
-                "query_sparse=%s, prefix_sparse=%s, prefix_token_budget=%s",
+                "query_sparse=%s, prefix_sparse=%s, prefix_token_budget=%s, "
+                "losa=%s, losa_active_topk=%s",
                 sparse_dlm_ratio,
                 sparse_dlm_top_k,
                 sparse_dlm_selection_interval,
@@ -137,6 +142,8 @@ class LLaDA(LM):
                 query_sparse,
                 prefix_sparse,
                 prefix_token_budget,
+                losa,
+                losa_active_topk,
             )
 
         self.batch_size_per_gpu = batch_size
@@ -155,6 +162,11 @@ class LLaDA(LM):
         self.mask_id = int(mask_id)
         self.eos_id = int(eos_id)
         self.show_samples = _as_bool(show_samples)
+        self._generation_stats = {
+            "generated_tokens": 0,
+            "generation_time_seconds": 0.0,
+            "generation_tokens_per_second": 0.0,
+        }
 
     @property
     def batch_size(self):
@@ -167,6 +179,10 @@ class LLaDA(LM):
     @property
     def tokenizer_name(self) -> str:
         return self.tokenizer.name_or_path.replace("/", "__")
+
+    def get_model_info(self):
+        """Expose generation throughput in the aggregated lm-eval result."""
+        return dict(self._generation_stats)
 
     def apply_chat_template(
         self, chat_history, add_generation_prompt: bool = True
@@ -253,8 +269,13 @@ class LLaDA(LM):
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
         elapsed = time.perf_counter() - start
+        throughput = generated_tokens / elapsed if elapsed else 0.0
+        self._generation_stats = {
+            "generated_tokens": int(generated_tokens),
+            "generation_time_seconds": float(elapsed),
+            "generation_tokens_per_second": float(throughput),
+        }
         if self.rank == 0:
-            throughput = generated_tokens / elapsed if elapsed else 0.0
             print(f"Time taken: {elapsed:.4f} seconds")
             print(f"Generated token num: {generated_tokens}")
             print(f"Generated token num per second: {throughput:.4f}")
