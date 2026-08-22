@@ -39,10 +39,12 @@ def _attention_output_lse(query, key, value, attention_mask, num_key_value_group
 
 
 def _merge_attention_states(prefix_output, prefix_lse, block_output, block_lse):
+    prefix_lse = prefix_lse.float()
+    block_lse = block_lse.float()
     total_lse = torch.logaddexp(prefix_lse, block_lse)
     prefix_scale = torch.exp(prefix_lse - total_lse).unsqueeze(-1)
     block_scale = torch.exp(block_lse - total_lse).unsqueeze(-1)
-    output = prefix_output * prefix_scale + block_output * block_scale
+    output = prefix_output.float() * prefix_scale + block_output.float() * block_scale
     return output, total_lse
 
 
@@ -53,7 +55,7 @@ def _new_losa_state(query, block_length):
             batch, heads, block_length, head_dim, dtype=query.dtype, device=query.device
         ),
         "prefix_output": torch.zeros(
-            batch, heads, block_length, head_dim, dtype=query.dtype, device=query.device
+            batch, heads, block_length, head_dim, dtype=torch.float32, device=query.device
         ),
         "prefix_lse": torch.full(
             (batch, heads, block_length),
@@ -106,6 +108,19 @@ def _losa_attention_forward(
             position_embeddings=position_embeddings,
             **kwargs,
         )
+    # A full active budget is dense attention. Preserve the LoSA-off result
+    # exactly instead of taking the online merge path.
+    if context["active_topk"] >= context["block_length"]:
+        return self._llada_losa_dense_forward(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
 
     input_shape = hidden_states.shape[:-1]
     batch_size, query_length, _ = hidden_states.shape
@@ -128,6 +143,51 @@ def _losa_attention_forward(
     query = _apply_rotary(query, cos, sin)
     key = _apply_rotary(key, cos, sin)
 
+    state = context["selection_state"]["losa_states"].get(self.layer_idx)
+    if state is None:
+        # LoSA initializes every layer from dense attention. Besides matching
+        # the reference semantics, this avoids introducing a numerical delta
+        # before any sparse reuse has occurred.
+        dense_outputs = self._llada_losa_dense_forward(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
+        cache = dense_outputs[2] if dense_outputs[2] is not None else past_key_value
+        if hasattr(cache, "key_cache"):
+            key, value = cache.key_cache[self.layer_idx], cache.value_cache[self.layer_idx]
+        else:
+            key, value = cache[self.layer_idx]
+        prefix_length = int(context["prefix_cache_length"])
+        prefix_key, prefix_value = key[:, :, :prefix_length], value[:, :, :prefix_length]
+        query_positions = context["query_positions"]
+        positions = query_positions.to(device=query.device, dtype=torch.long)
+        if prefix_length:
+            prefix_mask = attention_mask[..., :prefix_length]
+            prefix_output, prefix_lse = _attention_output_lse(
+                query, prefix_key, prefix_value, prefix_mask, self.num_key_value_groups
+            )
+        else:
+            prefix_output = query.new_zeros(
+                batch_size, self.num_heads, query_length, self.head_dim
+            ).float()
+            prefix_lse = torch.full(
+                (batch_size, self.num_heads, query_length),
+                -torch.inf,
+                dtype=torch.float32,
+                device=query.device,
+            )
+        context["pending_losa_queries"].append((self.layer_idx, positions, query))
+        context["pending_losa"].append(
+            (self.layer_idx, positions, prefix_output, prefix_lse)
+        )
+        return dense_outputs
+
     cache_kwargs = {"sin": sin, "cos": cos}
     if past_key_value is not None:
         key, value = past_key_value.update(key, value, self.layer_idx, cache_kwargs)
@@ -141,9 +201,6 @@ def _losa_attention_forward(
         query, block_key, block_value, block_mask, self.num_key_value_groups
     )
 
-    state = context["selection_state"]["losa_states"].get(self.layer_idx)
-    if state is None:
-        state = _new_losa_state(query, context["block_length"])
     query_positions = context["query_positions"]
     active_indices = _losa_active_indices(
         state, query, query_positions, context["active_topk"]
@@ -170,7 +227,7 @@ def _losa_attention_forward(
         )
 
     positions = query_positions.to(device=query.device, dtype=torch.long)
-    prefix_output = state["prefix_output"].index_select(2, positions).float()
+    prefix_output = state["prefix_output"].index_select(2, positions)
     prefix_lse = state["prefix_lse"].index_select(2, positions)
     if active_indices.numel():
         active_positions = positions.index_select(0, active_indices)
@@ -634,7 +691,7 @@ def _cached_forward(
                 state["previous_query"].index_copy_(2, positions, query)
             for layer_idx, positions, prefix_output, prefix_lse in losa_context["pending_losa"]:
                 state = selection_state["losa_states"][layer_idx]
-                state["prefix_output"].index_copy_(2, positions, prefix_output.to(state["prefix_output"].dtype))
+                state["prefix_output"].index_copy_(2, positions, prefix_output)
                 state["prefix_lse"].index_copy_(2, positions, prefix_lse)
                 state["valid"][0, positions] = True
     finally:

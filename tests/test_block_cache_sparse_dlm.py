@@ -17,6 +17,7 @@ from src.sparse.block_cache_sparse_dlm_patch import (
     _hadamard_transform,
     _legacy_prefix_cache,
     _merge_attention_states,
+    _new_losa_state,
     _select_positions,
     patch_model,
 )
@@ -94,6 +95,12 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         torch.testing.assert_close(merged_output, dense_output, rtol=1e-5, atol=1e-5)
         torch.testing.assert_close(merged_lse, dense_lse, rtol=1e-5, atol=1e-5)
+
+    def test_losa_prefix_state_keeps_float32_output(self):
+        state = _new_losa_state(torch.zeros(1, 2, 4, 8, dtype=torch.bfloat16), 4)
+
+        self.assertEqual(state["prefix_output"].dtype, torch.float32)
+        self.assertEqual(state["prefix_lse"].dtype, torch.float32)
 
     def test_query_selection_uses_decode_confidence(self):
         class ConfidenceModel:
@@ -213,7 +220,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    def test_losa_first_cached_forward_matches_dense_forward(self):
+    def test_losa_first_cached_forward_matches_dense_forward_exactly(self):
         model = _tiny_model()
         patch_model(
             model,
@@ -226,6 +233,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
         positions = torch.arange(8).unsqueeze(0)
         attention_mask = _block_mask(2, 4, next(model.parameters()).dtype)
+        selection_state = {"positions": None, "step": 0, "sparse_cache": None}
 
         with torch.no_grad():
             dense = model._llada_block_cache_dense_forward(
@@ -241,7 +249,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
                 _legacy_prefix_cache(dense.past_key_values, 4),
-                {"positions": None, "step": 0, "sparse_cache": None},
+                selection_state,
                 mask_id=127,
                 ratio=1.0,
                 top_k=8,
@@ -253,9 +261,54 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         self.assertIsNone(selected)
         self.assertIsNone(logit_positions)
-        torch.testing.assert_close(
-            cached_logits, dense.logits[:, 4:], rtol=5e-3, atol=5e-3
+        torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=0, atol=0)
+        self.assertEqual(len(selection_state["losa_states"]), len(model.model.layers))
+        self.assertTrue(
+            all(
+                state["prefix_output"].dtype is torch.float32
+                for state in selection_state["losa_states"].values()
+            )
         )
+
+    def test_losa_full_active_budget_matches_losa_off_exactly(self):
+        model = _tiny_model()
+        patch_model(
+            model,
+            ratio=1.0,
+            query_sparse=False,
+            prefix_sparse=False,
+            losa=True,
+            losa_active_topk=4,
+        )
+        tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
+        positions = torch.arange(8).unsqueeze(0)
+        attention_mask = _block_mask(2, 4, next(model.parameters()).dtype)
+
+        with torch.no_grad():
+            dense = model._llada_block_cache_dense_forward(
+                tokens,
+                attention_mask=attention_mask,
+                position_ids=positions,
+                use_cache=True,
+                return_dict=True,
+            )
+            cached_logits, _, _ = _cached_forward(
+                model,
+                tokens[:, 4:],
+                attention_mask[:, :, 4:, :],
+                positions[:, 4:],
+                _legacy_prefix_cache(dense.past_key_values, 4),
+                {"positions": None, "step": 0, "sparse_cache": None},
+                mask_id=127,
+                ratio=1.0,
+                top_k=8,
+                selection_interval=2,
+                dense_fallback_mask_count=0,
+                query_sparse=False,
+                original_prefix_length=4,
+            )
+
+        torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=0, atol=0)
 
     def test_compact_prefix_matches_dense_masked_prefix(self):
         model = _tiny_model()
