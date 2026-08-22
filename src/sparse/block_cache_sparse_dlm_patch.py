@@ -108,20 +108,6 @@ def _losa_attention_forward(
             position_embeddings=position_embeddings,
             **kwargs,
         )
-    # A full active budget is dense attention. Preserve the LoSA-off result
-    # exactly instead of taking the online merge path.
-    if context["active_topk"] >= context["block_length"]:
-        return self._llada_losa_dense_forward(
-            hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            position_embeddings=position_embeddings,
-            **kwargs,
-        )
-
     input_shape = hidden_states.shape[:-1]
     batch_size, query_length, _ = hidden_states.shape
     qkv = self.query_key_value(hidden_states).view(
