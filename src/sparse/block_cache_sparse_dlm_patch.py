@@ -29,12 +29,15 @@ def _attention_output_lse(query, key, value, attention_mask, num_key_value_group
     """Reference attention returning the normalized output and row-wise LSE."""
     key = _repeat_kv(key, num_key_value_groups)
     value = _repeat_kv(value, num_key_value_groups)
-    scores = torch.matmul(query.float(), key.float().transpose(-2, -1))
+    scores = torch.matmul(query, key.transpose(-2, -1))
     scores = scores * (query.shape[-1] ** -0.5)
     if attention_mask is not None:
-        scores = scores + attention_mask.float()
-    lse = torch.logsumexp(scores, dim=-1)
-    output = torch.matmul(torch.softmax(scores, dim=-1), value.float())
+        scores = scores + attention_mask
+    lse = torch.logsumexp(scores.float(), dim=-1)
+    attention_weights = torch.softmax(scores, dim=-1, dtype=torch.float32).to(
+        query.dtype
+    )
+    output = torch.matmul(attention_weights, value)
     return output, lse
 
 
@@ -170,7 +173,7 @@ def _losa_attention_forward(
             )
         context["pending_losa_queries"].append((self.layer_idx, positions, query))
         context["pending_losa"].append(
-            (self.layer_idx, positions, prefix_output, prefix_lse)
+            (self.layer_idx, positions, prefix_output.float(), prefix_lse)
         )
         return dense_outputs
 
@@ -217,6 +220,7 @@ def _losa_attention_forward(
     prefix_lse = state["prefix_lse"].index_select(2, positions)
     if active_indices.numel():
         active_positions = positions.index_select(0, active_indices)
+        active_prefix_output = active_prefix_output.float()
         prefix_output.index_copy_(2, active_indices, active_prefix_output)
         prefix_lse.index_copy_(2, active_indices, active_prefix_lse)
         context["pending_losa"].append(

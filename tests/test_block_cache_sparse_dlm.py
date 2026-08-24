@@ -104,6 +104,17 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(state["prefix_output"].dtype, torch.float32)
         self.assertEqual(state["prefix_lse"].dtype, torch.float32)
 
+    def test_losa_attention_keeps_model_dtype_and_float_lse(self):
+        query = torch.randn(1, 2, 3, 8, dtype=torch.bfloat16)
+        key = torch.randn(1, 1, 4, 8, dtype=torch.bfloat16)
+        value = torch.randn_like(key)
+        mask = torch.zeros(1, 1, 3, 4, dtype=torch.bfloat16)
+
+        output, lse = _attention_output_lse(query, key, value, mask, 2)
+
+        self.assertEqual(output.dtype, query.dtype)
+        self.assertEqual(lse.dtype, torch.float32)
+
     def test_query_selection_uses_decode_confidence(self):
         class ConfidenceModel:
             def __init__(self):
