@@ -15,6 +15,7 @@ from src.sparse.block_cache_sparse_dlm_patch import (
     _adamas_prefix_indices,
     _attention_output_lse,
     _cached_forward,
+    _dual_cache_from_dense,
     _hadamard_transform,
     _legacy_prefix_cache,
     _merge_attention_states,
@@ -220,6 +221,48 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
+
+    def test_query_sparse_returns_only_selected_mask_logits(self):
+        model = _tiny_model()
+        tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
+        positions = torch.arange(8).unsqueeze(0)
+        attention_mask = _block_mask(2, 4, next(model.parameters()).dtype)
+
+        with torch.no_grad():
+            dense = model(
+                tokens,
+                attention_mask=attention_mask,
+                position_ids=positions,
+                use_cache=True,
+                return_dict=True,
+            )
+            prefix_cache = _legacy_prefix_cache(dense.past_key_values, 4)
+            selection_state = {
+                "positions": None,
+                "step": 0,
+                "sparse_cache": _dual_cache_from_dense(
+                    dense.past_key_values, prefix_cache, 4, 8
+                ),
+            }
+            _, selected, logit_positions = _cached_forward(
+                model,
+                tokens[:, 4:],
+                attention_mask[:, :, 4:, :],
+                positions[:, 4:],
+                prefix_cache,
+                selection_state,
+                mask_id=127,
+                ratio=0.5,
+                top_k=8,
+                selection_interval=1,
+                dense_fallback_mask_count=0,
+                query_sparse=True,
+                original_prefix_length=4,
+            )
+
+        self.assertIsNotNone(selected)
+        self.assertIsNotNone(logit_positions)
+        torch.testing.assert_close(logit_positions, selected)
 
     def test_losa_first_cached_forward_matches_dense_forward_exactly(self):
         model = _tiny_model()

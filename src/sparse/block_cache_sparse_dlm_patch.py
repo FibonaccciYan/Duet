@@ -306,7 +306,15 @@ def _transfer_tokens(
         prediction_tokens.index_copy_(1, logit_positions, x0)
         mask_confidence = torch.full_like(active_mask, -torch.inf, dtype=x0_p.dtype)
         mask_confidence.index_copy_(1, logit_positions, x0_p)
-    mask_candidates = active_mask
+    if logit_positions is None:
+        mask_candidates = active_mask
+    else:
+        # Query-sparse logits are only valid at the positions recomputed by
+        # the selected forward path.  Keep unselected masks out of both the
+        # threshold and top-k transfer paths.
+        mask_candidates = torch.zeros_like(active_mask)
+        mask_candidates.index_fill_(1, logit_positions, True)
+        mask_candidates &= active_mask
     high_conf_mask = (mask_confidence[0] > threshold) & mask_candidates[0]
     mask_transfer = torch.zeros_like(active_mask)
     if int(high_conf_mask.sum().item()) >= num_to_transfer:
@@ -691,9 +699,15 @@ def _cached_forward(
     hidden_states = base.norm(hidden_states)
     if selected_positions is None:
         return model.lm_head(hidden_states).float(), selected_positions, None
-    mask_positions = torch.where(input_ids[0] == mask_id)[0]
-    mask_hidden = hidden_states.index_select(1, mask_positions)
-    return model.lm_head(mask_hidden).float(), selected_positions, mask_positions
+    selected_mask_positions = selected_positions[
+        input_ids[0, selected_positions] == mask_id
+    ]
+    mask_hidden = hidden_states.index_select(1, selected_mask_positions)
+    return (
+        model.lm_head(mask_hidden).float(),
+        selected_positions,
+        selected_mask_positions,
+    )
 
 
 @torch.no_grad()
@@ -876,6 +890,14 @@ def _block_cache_generate(self, *args, **kwargs):
                 num_to_transfer,
                 logit_positions=logit_positions,
             )
+            if query_sparse and logit_positions is not None:
+                changed = block_tokens != old_block_tokens
+                allowed = torch.zeros_like(changed)
+                allowed.index_fill_(1, logit_positions, True)
+                if torch.any(changed & ~allowed):
+                    raise RuntimeError(
+                        "Query-sparse transfer changed a position without a KV update"
+                    )
             x[:, block_start:block_end] = block_tokens
             if not active_block_mask.any() and not transfer.any():
                 break
