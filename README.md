@@ -10,6 +10,10 @@ directory; set `OUTPUT_ROOT` to override it.
 ## Layout
 
 - `src/sparse/block_cache_sparse_dlm_patch.py`: production patch.
+- `src/sparse/moe_expert_patch.py`: default runtime MoE expert patch. It packs
+  routed expert weights and dispatches the SiLU MLP through Triton grouped
+  kernels without modifying the model directory. It is a no-op when CUDA or
+  Triton is unavailable.
 - `scripts/test.py`: single-prompt inference entry point, following Dream's test script structure.
 - `scripts/test.sh`: environment-variable wrapper for the main inference path.
 - `eval_instruct/`: Dream-compatible lm-eval harness and LLaDA adapter.
@@ -69,4 +73,5 @@ native-baseline commands.
 
 ```bash
 /home/ysy/anaconda3/envs/llada/bin/python tests/test_block_cache_sparse_dlm.py
+/home/ysy/anaconda3/envs/llada/bin/python -m unittest discover -s tests -v
 ```

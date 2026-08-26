@@ -4,6 +4,8 @@ import types
 import torch
 from transformers.cache_utils import DynamicCache
 
+from .moe_expert_patch import patch_moe_experts
+
 
 def _sample_with_confidence(model, logits, temperature, top_p, top_k):
     return model._sample_with_temperature_topk_topp(
@@ -267,7 +269,7 @@ def _select_positions(
 
     mask_positions = torch.where(mask)[0]
     mask_hidden = hidden_states[:, mask_positions, :]
-    mask_logits = model.lm_head(mask_hidden).float()
+    mask_logits = model.lm_head(mask_hidden)
     _, confidence = _sample_with_confidence(
         model,
         mask_logits,
@@ -366,6 +368,7 @@ class _BlockDualCache:
         self.positions = positions
 
     def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+        # TODO(query-sparse): fuse selected KV writes into the attention path.
         if self.positions is None:
             raise RuntimeError("Sparse cache positions must be set before updating KV.")
         positions = self.positions.to(device=key_states.device, dtype=torch.long)
@@ -555,10 +558,25 @@ def _layer_attention_mask(
     key_positions,
     prefix_positions,
     original_prefix_length,
+    cache=None,
 ):
-    rows = attention_mask.index_select(2, query_positions)
-    columns = torch.cat((prefix_positions, key_positions + original_prefix_length))
-    return rows.index_select(3, columns)
+    # The cache contains only valid prefix and current-block keys. Every
+    # current-block query may attend to every cached key, so the old gather/
+    # cat path rebuilt an all-zero mask on every layer.
+    cache_key = (query_positions.numel(), prefix_positions.numel())
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+    result = attention_mask.new_zeros(
+        (
+            attention_mask.shape[0],
+            attention_mask.shape[1],
+            query_positions.numel(),
+            prefix_positions.numel() + key_positions.numel(),
+        )
+    )
+    if cache is not None:
+        cache[cache_key] = result
+    return result
 
 
 def _cached_forward(
@@ -588,6 +606,7 @@ def _cached_forward(
     selected_positions = None
     full_hidden_base = None
     compressed_hidden_states = False
+    zero_attention_masks = {}
 
     losa_context = None
     if bool(getattr(model.config, "llada_losa", False)):
@@ -646,6 +665,7 @@ def _cached_forward(
                 all_positions,
                 layer_prefix_positions,
                 original_prefix_length,
+                cache=zero_attention_masks,
             )
 
             layer_outputs = decoder_layer(
@@ -708,7 +728,7 @@ def _cached_forward(
     ]
     mask_hidden = hidden_states.index_select(1, selected_mask_positions)
     return (
-        model.lm_head(mask_hidden).float(),
+        model.lm_head(mask_hidden),
         selected_positions,
         selected_mask_positions,
     )
@@ -956,6 +976,7 @@ def patch_model(
     model.config.llada_losa_active_topk = int(losa_active_topk)
     if not hasattr(model, "_llada_block_cache_dense_forward"):
         model._llada_block_cache_dense_forward = model.forward
+    patch_moe_experts(model)
     if losa:
         for layer_idx, layer in enumerate(model.model.layers):
             attention = layer.attention
