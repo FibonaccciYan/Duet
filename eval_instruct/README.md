@@ -1,7 +1,7 @@
-# LLaDA-Instruct Evaluation
+# LLaDA/SDAR Instruct Evaluation
 
 This directory vendors the same lm-evaluation-harness 0.4.8 fork used by
-Dream's `eval_instruct`, with a generation-only adapter for LLaDA2.1.
+Dream's `eval_instruct`, with generation-only adapters for LLaDA2.1 and SDAR.
 
 ## Install
 
@@ -14,10 +14,12 @@ cd eval_instruct
 
 ## Run
 
-The default is the block-cache SparseDLM path on MMLU:
+The default is the LLaDA block-cache sparse path on MMLU. `MODEL_TYPE` is the
+single model-adapter selector and accepts `llada` or `sdar`:
 
 ```bash
 bash eval_instruct/eval.sh
+MODEL_TYPE=sdar bash eval_instruct/eval.sh
 ```
 
 Select another Dream benchmark suite with `BENCHMARK`:
@@ -46,10 +48,25 @@ Run the native LLaDA baseline with the same generation settings:
 SPARSE_DLM=false bash eval_instruct/eval.sh
 ```
 
-Useful overrides include `MODEL`, `PYTHON`, `GEN_LENGTH`, `BLOCK_LENGTH`,
+Use the local SDAR checkpoint with its native block defaults:
+
+```bash
+MODEL_TYPE=sdar MODEL=/data0/ysy/models/SDAR-8B-Chat \
+LIMIT=1 BENCHMARK=gsm8k \
+bash eval_instruct/eval.sh
+```
+
+The wrapper passes `--model sdar`, uses block length/steps `4/4`, selects the
+compatible Python environment, and writes to `../sdar_exp/`. It does not infer
+the adapter from the checkpoint path.
+`SPARSE_DLM=false` or `QUERY_SPARSE=false` selects SDAR's official dense-block
+generation; prefix sparse and LoSA remain LLaDA-only.
+
+Useful overrides include `MODEL_TYPE`, `MODEL`, `PYTHON`, `GEN_LENGTH`, `BLOCK_LENGTH`,
 `STEPS`, `SPARSE_DLM_RATIO`, `SPARSE_DLM_TOP_K`,
 `SPARSE_DLM_SELECTION_INTERVAL`, `QUERY_SPARSE`, `PREFIX_SPARSE`,
 `PREFIX_TOKEN_BUDGET`, `PREFIX_CHUNK_SIZE`, `LOSA`, `LOSA_ACTIVE_TOPK`,
+`MOE_EXPERT_PATCH`,
 `NUM_FEWSHOT`, `LIMIT`, and `OUTPUT_PATH` or `OUTPUT_ROOT`.
 `LIMIT=1` is useful for a smoke test. Evaluation currently requires
 `--batch_size 1`, matching the block-cache implementation.

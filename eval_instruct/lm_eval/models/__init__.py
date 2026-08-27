@@ -1,6 +1,7 @@
 from . import (
     huggingface,
     llada,
+    sdar,
 )
 
 

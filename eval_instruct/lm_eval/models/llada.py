@@ -19,7 +19,7 @@ from lm_eval.models.utils import get_dtype
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-from src.sparse.block_cache_sparse_dlm_patch import patch_model
+from src.sparse import patch_model, resolve_model_family
 
 
 eval_logger = logging.getLogger(__name__)
@@ -40,6 +40,8 @@ def _as_bool(value):
 @register_model("llada")
 class LLaDA(LM):
     """Generation-only lm-eval adapter for LLaDA2.1."""
+
+    MODEL_NAME = "llada"
 
     def __init__(
         self,
@@ -77,6 +79,7 @@ class LLaDA(LM):
         prefix_chunk_size: int = 256,
         losa: bool = False,
         losa_active_topk: int = 5,
+        moe_expert_patch: bool = True,
         show_samples: bool = False,
         **kwargs,
     ) -> None:
@@ -86,7 +89,9 @@ class LLaDA(LM):
 
         batch_size = int(batch_size)
         if batch_size != 1:
-            raise ValueError("LLaDA block-cache evaluation currently requires batch_size=1")
+            raise ValueError(
+                f"{self.MODEL_NAME} block-cache evaluation requires batch_size=1"
+            )
 
         accelerator = Accelerator(
             kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(weeks=52))]
@@ -116,36 +121,36 @@ class LLaDA(LM):
             pretrained, trust_remote_code=trust_remote_code
         )
 
-        if _as_bool(sparse_dlm):
+        resolve_model_family(self.model, self.MODEL_NAME)
+        sparse_enabled = _as_bool(sparse_dlm)
+        if self.MODEL_NAME == "sdar" or sparse_enabled:
             patch_model(
                 self.model,
+                model_name=self.MODEL_NAME,
                 ratio=float(sparse_dlm_ratio),
                 top_k=int(sparse_dlm_top_k),
                 selection_interval=int(sparse_dlm_selection_interval),
                 dense_fallback_mask_count=int(sparse_dlm_dense_fallback_mask_count),
-                query_sparse=_as_bool(query_sparse),
-                prefix_sparse=_as_bool(prefix_sparse),
+                query_sparse=sparse_enabled and _as_bool(query_sparse),
+                prefix_sparse=sparse_enabled and _as_bool(prefix_sparse),
                 prefix_token_budget=int(prefix_token_budget),
                 prefix_chunk_size=int(prefix_chunk_size),
-                losa=_as_bool(losa),
+                losa=sparse_enabled and _as_bool(losa),
                 losa_active_topk=int(losa_active_topk),
+                moe_expert_patch=_as_bool(moe_expert_patch),
             )
             eval_logger.info(
-                "Applied block-cache SparseDLM: ratio=%s, top_k=%s, "
-                "selection_interval=%s, dense_fallback_mask_count=%s, "
-                "query_sparse=%s, prefix_sparse=%s, prefix_token_budget=%s, "
-                "losa=%s, losa_active_topk=%s",
+                "Applied %s patch: query_sparse=%s, prefix_sparse=%s, "
+                "losa=%s, moe_expert_patch=%s, ratio=%s",
+                self.MODEL_NAME,
+                sparse_enabled and _as_bool(query_sparse),
+                sparse_enabled and _as_bool(prefix_sparse),
+                sparse_enabled and _as_bool(losa),
+                _as_bool(moe_expert_patch),
                 sparse_dlm_ratio,
-                sparse_dlm_top_k,
-                sparse_dlm_selection_interval,
-                sparse_dlm_dense_fallback_mask_count,
-                query_sparse,
-                prefix_sparse,
-                prefix_token_budget,
-                losa,
-                losa_active_topk,
             )
 
+        self.model_type = self.MODEL_NAME
         self.batch_size_per_gpu = batch_size
         self.max_prompt_len = int(max_prompt_len)
         self.gen_length = int(max_new_tokens or gen_length)
@@ -160,7 +165,7 @@ class LLaDA(LM):
         self.minimal_topk = int(minimal_topk)
         self.num_to_transfer = int(num_to_transfer)
         self.mask_id = int(mask_id)
-        self.eos_id = int(eos_id)
+        self.eos_id = None if eos_id is None else int(eos_id)
         self.show_samples = _as_bool(show_samples)
         self._generation_stats = {
             "generated_tokens": 0,
@@ -211,23 +216,27 @@ class LLaDA(LM):
         ).input_ids[:, -max_prompt_len:]
         input_ids = input_ids.to(self.device)
 
-        output_ids = self.model.generate(
-            inputs=input_ids,
-            eos_early_stop=True,
-            gen_length=gen_length,
-            block_length=self.block_length,
-            steps=self.steps,
-            temperature=float(temperature),
-            top_p=_optional_number(gen_kwargs.get("top_p", self.top_p), float),
-            top_k=_optional_number(gen_kwargs.get("top_k", self.top_k), int),
-            threshold=self.threshold,
-            editing_threshold=self.editing_threshold,
-            max_post_steps=self.max_post_steps,
-            minimal_topk=self.minimal_topk,
-            num_to_transfer=self.num_to_transfer,
-            mask_id=self.mask_id,
-            eos_id=self.eos_id,
-        )
+        generation_kwargs = {
+            "inputs": input_ids,
+            "eos_early_stop": True,
+            "gen_length": gen_length,
+            "block_length": self.block_length,
+            "steps": self.steps,
+            "temperature": float(temperature),
+            "top_p": _optional_number(gen_kwargs.get("top_p", self.top_p), float),
+            "top_k": _optional_number(gen_kwargs.get("top_k", self.top_k), int),
+            "threshold": self.threshold,
+            "mask_id": self.mask_id,
+            "eos_id": self.eos_id,
+        }
+        if self.model_type != "sdar":
+            generation_kwargs.update(
+                editing_threshold=self.editing_threshold,
+                max_post_steps=self.max_post_steps,
+                minimal_topk=self.minimal_topk,
+                num_to_transfer=self.num_to_transfer,
+            )
+        output_ids = self.model.generate(**generation_kwargs)
         if hasattr(output_ids, "sequences"):
             output_ids = output_ids.sequences
 
@@ -239,7 +248,11 @@ class LLaDA(LM):
             until = [until]
         for stop_sequence in until:
             response = response.split(stop_sequence, 1)[0]
-        token_count = int((output_ids != self.eos_id).sum().item())
+        token_count = (
+            int(output_ids.numel())
+            if self.eos_id is None
+            else int((output_ids != self.eos_id).sum().item())
+        )
         return response, token_count
 
     def generate_until(
@@ -282,7 +295,7 @@ class LLaDA(LM):
         return responses
 
     def loglikelihood(self, requests):
-        raise NotImplementedError("The LLaDA adapter supports generative tasks only")
+        raise NotImplementedError("Diffusion model adapters support generative tasks only")
 
     def loglikelihood_rolling(self, requests):
-        raise NotImplementedError("The LLaDA adapter supports generative tasks only")
+        raise NotImplementedError("Diffusion model adapters support generative tasks only")

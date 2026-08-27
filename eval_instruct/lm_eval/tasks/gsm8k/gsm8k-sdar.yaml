@@ -1,0 +1,25 @@
+tag:
+  - math_word_problems
+task: gsm8k_sdar
+dataset_path: gsm8k
+dataset_name: main
+output_type: generate_until
+training_split: train
+test_split: test
+doc_to_text: "{{question}}\nPlease reason step by step, and put your final answer within \\boxed{}."
+doc_to_target: "{{answer.split('#### ')[-1].replace(',', '').strip()}}"
+process_results: !function sdar_utils.process_results
+generation_kwargs:
+  until:
+    - "</s>"
+    - "<|im_end|>"
+  do_sample: false
+  temperature: 0.0
+repeats: 1
+num_fewshot: 0
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

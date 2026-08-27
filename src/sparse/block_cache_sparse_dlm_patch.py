@@ -4,16 +4,13 @@ import types
 import torch
 from transformers.cache_utils import DynamicCache
 
-from .moe_expert_patch import patch_moe_experts
-
-
-def _sample_with_confidence(model, logits, temperature, top_p, top_k):
-    return model._sample_with_temperature_topk_topp(
-        logits,
-        temperature=temperature,
-        top_k=top_k,
-        top_p=top_p,
-    )
+from .core import (
+    _BlockDualCache,
+    _dual_cache_from_dense,
+    _legacy_prefix_cache,
+    _sample_with_confidence,
+    _select_positions,
+)
 
 
 def _repeat_kv(hidden_states, num_key_value_groups):
@@ -237,51 +234,6 @@ def _losa_attention_forward(
     return output, None, past_key_value
 
 
-def _select_positions(
-    model,
-    hidden_states,
-    input_ids,
-    mask_id,
-    ratio,
-    top_k,
-    temperature=0.0,
-    top_p=None,
-    cached_positions=None,
-    selection_step=0,
-    selection_interval=1,
-    dense_fallback_mask_count=0,
-):
-    mask = input_ids[0] == mask_id
-    mask_count = int(mask.sum().item())
-    if ratio >= 1.0 or mask_count <= dense_fallback_mask_count:
-        return None
-
-    candidate_count = min(max(1, math.ceil(mask_count * ratio)), mask_count)
-    decoded = torch.where(~mask)[0]
-    if (
-        cached_positions is not None
-        and selection_interval > 1
-        and selection_step % selection_interval != 0
-    ):
-        old_masks = cached_positions[mask[cached_positions]]
-        if old_masks.numel() >= candidate_count:
-            return torch.cat((decoded, old_masks[:candidate_count]))
-
-    mask_positions = torch.where(mask)[0]
-    mask_hidden = hidden_states[:, mask_positions, :]
-    mask_logits = model.lm_head(mask_hidden)
-    _, confidence = _sample_with_confidence(
-        model,
-        mask_logits,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-    )
-    _, top_indices = torch.topk(confidence[0], k=candidate_count)
-    selected_masks = mask_positions[top_indices]
-    return torch.cat((decoded, selected_masks))
-
-
 def _transfer_tokens(
     model,
     block_tokens,
@@ -315,14 +267,14 @@ def _transfer_tokens(
     if logit_positions is None:
         mask_candidates = active_mask
     else:
-        # Query-sparse logits are only valid at the positions recomputed by
-        # the selected forward path.  Keep unselected masks out of both the
-        # threshold and top-k transfer paths.
+        # Compact logits are indexed by ``logit_positions``.  The Dream-style
+        # query path supplies every mask position here: unselected masks use
+        # their layer-2 hidden state as an approximate prediction.
         mask_candidates = torch.zeros_like(active_mask)
         mask_candidates.index_fill_(1, logit_positions, True)
         mask_candidates &= active_mask
-    high_conf_mask = (mask_confidence[0] > threshold) & mask_candidates[0]
     mask_transfer = torch.zeros_like(active_mask)
+    high_conf_mask = (mask_confidence[0] > threshold) & mask_candidates[0]
     if int(high_conf_mask.sum().item()) >= num_to_transfer:
         mask_transfer[0] = high_conf_mask
     else:
@@ -342,61 +294,6 @@ def _transfer_tokens(
     if transfer.any():
         block_tokens[transfer] = prediction_tokens[transfer]
     return block_tokens, transfer
-
-
-def _legacy_prefix_cache(cache, prefix_length):
-    legacy = cache.to_legacy_cache()
-    return tuple(
-        (
-            key[:, :, :prefix_length, :].contiguous(),
-            value[:, :, :prefix_length, :].contiguous(),
-        )
-        for key, value in legacy
-    )
-
-
-class _BlockDualCache:
-    """Keep dense current-block KV and overwrite only sparse query positions."""
-
-    def __init__(self, key_values, prefix_lengths):
-        self.key_cache = [key_states for key_states, _ in key_values]
-        self.value_cache = [value_states for _, value_states in key_values]
-        self.prefix_lengths = prefix_lengths
-        self.positions = None
-
-    def set_positions(self, positions):
-        self.positions = positions
-
-    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
-        # TODO(query-sparse): fuse selected KV writes into the attention path.
-        if self.positions is None:
-            raise RuntimeError("Sparse cache positions must be set before updating KV.")
-        positions = self.positions.to(device=key_states.device, dtype=torch.long)
-        if key_states.shape[-2] != positions.numel():
-            raise ValueError("Sparse KV length does not match selected query positions.")
-        replace_positions = positions + self.prefix_lengths[layer_idx]
-        self.key_cache[layer_idx].index_copy_(2, replace_positions, key_states)
-        self.value_cache[layer_idx].index_copy_(2, replace_positions, value_states)
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
-
-
-def _dual_cache_from_dense(dense_cache, prefix_cache, block_start, block_end):
-    legacy_cache = dense_cache.to_legacy_cache()
-    if len(legacy_cache) != len(prefix_cache):
-        raise ValueError("Dense and prefix caches must contain the same number of layers.")
-    key_values = []
-    prefix_lengths = []
-    for (dense_key, dense_value), (prefix_key, prefix_value) in zip(
-        legacy_cache, prefix_cache
-    ):
-        key_values.append(
-            (
-                torch.cat((prefix_key, dense_key[:, :, block_start:block_end, :]), dim=2),
-                torch.cat((prefix_value, dense_value[:, :, block_start:block_end, :]), dim=2),
-            )
-        )
-        prefix_lengths.append(prefix_key.shape[-2])
-    return _BlockDualCache(key_values, prefix_lengths)
 
 
 def _rotate_half(x):
@@ -723,14 +620,16 @@ def _cached_forward(
     hidden_states = base.norm(hidden_states)
     if selected_positions is None:
         return model.lm_head(hidden_states).float(), selected_positions, None
-    selected_mask_positions = selected_positions[
-        input_ids[0, selected_positions] == mask_id
-    ]
-    mask_hidden = hidden_states.index_select(1, selected_mask_positions)
+    # Match Dream's transfer behavior: late layers run only selected queries,
+    # but their outputs are scattered into the layer-2 full hidden state above.
+    # Unselected masks therefore retain an approximate shallow hidden state and
+    # still receive logits, so one refinement step can transfer any mask.
+    mask_positions = torch.where(input_ids[0] == mask_id)[0]
+    mask_hidden = hidden_states.index_select(1, mask_positions)
     return (
         model.lm_head(mask_hidden),
         selected_positions,
-        selected_mask_positions,
+        mask_positions,
     )
 
 
@@ -915,12 +814,15 @@ def _block_cache_generate(self, *args, **kwargs):
                 logit_positions=logit_positions,
             )
             if query_sparse and logit_positions is not None:
+                # ponytail: Dream-style all-mask transfer may leave an
+                # unselected position's late-layer KV stale until it is
+                # selected again; refresh every current KV for exact caching.
                 changed = block_tokens != old_block_tokens
                 allowed = torch.zeros_like(changed)
                 allowed.index_fill_(1, logit_positions, True)
                 if torch.any(changed & ~allowed):
                     raise RuntimeError(
-                        "Query-sparse transfer changed a position without a KV update"
+                        "Query-sparse transfer changed a position without a corresponding logit"
                     )
             x[:, block_start:block_end] = block_tokens
             if not active_block_mask.any() and not transfer.any():
@@ -941,7 +843,7 @@ def _block_cache_generate(self, *args, **kwargs):
     return generated
 
 
-def patch_model(
+def patch_llada_model(
     model,
     ratio=0.5,
     top_k=64,
@@ -976,7 +878,6 @@ def patch_model(
     model.config.llada_losa_active_topk = int(losa_active_topk)
     if not hasattr(model, "_llada_block_cache_dense_forward"):
         model._llada_block_cache_dense_forward = model.forward
-    patch_moe_experts(model)
     if losa:
         for layer_idx, layer in enumerate(model.model.layers):
             attention = layer.attention
@@ -986,3 +887,8 @@ def patch_model(
                 attention.layer_idx = layer_idx
                 attention.forward = types.MethodType(_losa_attention_forward, attention)
     model.generate = types.MethodType(_block_cache_generate, model)
+    return model
+
+
+# Backward-compatible model-local entry point; new callers use sparse.core.
+patch_model = patch_llada_model
