@@ -61,6 +61,8 @@ class LLaDA(LM):
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
         threshold: float = 0.5,
+        remasking_strategy: str = "low_confidence_dynamic",
+        eb_threshold: float = 0.35,
         editing_threshold: float = 0.0,
         max_post_steps: int = 16,
         minimal_topk: int = 1,
@@ -72,6 +74,7 @@ class LLaDA(LM):
         sparse_dlm_top_k: int = 64,
         sparse_dlm_selection_interval: int = 4,
         sparse_dlm_dense_fallback_mask_count: int = 4,
+        sparse_dlm_refresh_step: int = 2,
         sparse_dlm_block_length: Optional[int] = None,
         query_sparse: bool = True,
         prefix_sparse: bool = True,
@@ -131,6 +134,7 @@ class LLaDA(LM):
                 top_k=int(sparse_dlm_top_k),
                 selection_interval=int(sparse_dlm_selection_interval),
                 dense_fallback_mask_count=int(sparse_dlm_dense_fallback_mask_count),
+                refresh_step=int(sparse_dlm_refresh_step),
                 query_sparse=sparse_enabled and _as_bool(query_sparse),
                 prefix_sparse=sparse_enabled and _as_bool(prefix_sparse),
                 prefix_token_budget=int(prefix_token_budget),
@@ -160,6 +164,8 @@ class LLaDA(LM):
         self.top_p = _optional_number(top_p, float)
         self.top_k = _optional_number(top_k, int)
         self.threshold = float(threshold)
+        self.remasking_strategy = str(remasking_strategy)
+        self.eb_threshold = float(eb_threshold)
         self.editing_threshold = float(editing_threshold)
         self.max_post_steps = int(max_post_steps)
         self.minimal_topk = int(minimal_topk)
@@ -228,6 +234,8 @@ class LLaDA(LM):
             "threshold": self.threshold,
             "mask_id": self.mask_id,
             "eos_id": self.eos_id,
+            "remasking_strategy": self.remasking_strategy,
+            "eb_threshold": self.eb_threshold,
         }
         if self.model_type != "sdar":
             generation_kwargs.update(

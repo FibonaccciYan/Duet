@@ -5,6 +5,7 @@ import math
 import torch
 
 from .moe_expert_patch import patch_moe_experts
+from .sdar_generate import entropy_from_logits, select_transfer
 
 
 MODEL_TYPES = {
@@ -35,13 +36,20 @@ def _select_positions(
     selection_step=0,
     selection_interval=1,
     dense_fallback_mask_count=0,
+    minimum_mask_candidates=1,
+    strategy="low_confidence_static",
+    threshold=1.0,
+    entropy_budget=None,
 ):
     mask = input_ids[0] == mask_id
     mask_count = int(mask.sum().item())
     if ratio >= 1.0 or mask_count <= dense_fallback_mask_count:
         return None
 
-    candidate_count = min(max(1, math.ceil(mask_count * ratio)), mask_count)
+    candidate_count = min(
+        max(int(minimum_mask_candidates), math.ceil(mask_count * ratio)),
+        mask_count,
+    )
     decoded = torch.where(~mask)[0]
     if (
         cached_positions is not None
@@ -50,9 +58,12 @@ def _select_positions(
     ):
         old_masks = cached_positions[mask[cached_positions]]
         if old_masks.numel() >= candidate_count:
-            return torch.cat((decoded, old_masks[:candidate_count]))
+            return torch.cat((decoded, old_masks))
 
     mask_positions = torch.where(mask)[0]
+    if strategy == "sequential":
+        return torch.cat((decoded, mask_positions[:candidate_count]))
+
     mask_logits = model.lm_head(hidden_states[:, mask_positions, :])
     _, confidence = _sample_with_confidence(
         model,
@@ -61,8 +72,21 @@ def _select_positions(
         top_p=top_p,
         top_k=top_k,
     )
-    top_indices = torch.topk(confidence[0], k=candidate_count).indices
-    return torch.cat((decoded, mask_positions[top_indices]))
+    entropy = (
+        entropy_from_logits(mask_logits, temperature, top_k, top_p)
+        if strategy == "entropy_bounded"
+        else None
+    )
+    selected = select_transfer(
+        torch.ones_like(confidence, dtype=torch.bool),
+        confidence,
+        candidate_count,
+        strategy,
+        threshold,
+        entropy=entropy,
+        entropy_budget=entropy_budget,
+    )
+    return torch.cat((decoded, mask_positions[torch.where(selected[0])[0]]))
 
 
 def _legacy_prefix_cache(cache, prefix_length):
@@ -142,6 +166,7 @@ def patch_model(
     top_k=64,
     selection_interval=None,
     dense_fallback_mask_count=None,
+    refresh_step=2,
     query_sparse=True,
     prefix_sparse=False,
     prefix_token_budget=256,
@@ -183,6 +208,7 @@ def patch_model(
             dense_fallback_mask_count=(
                 0 if dense_fallback_mask_count is None else dense_fallback_mask_count
             ),
+            refresh_step=refresh_step,
             query_sparse=query_sparse,
         )
 

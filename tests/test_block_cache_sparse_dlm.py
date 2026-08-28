@@ -142,6 +142,49 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(positions.tolist(), [1, 3])
         self.assertEqual(model.seen, {"temperature": 0.7, "top_k": 8, "top_p": 0.9})
 
+    def test_query_selection_respects_transfer_strategy(self):
+        class ConfidenceModel:
+            lm_head = torch.nn.Identity()
+
+            @staticmethod
+            def _sample_with_temperature_topk_topp(logits, **kwargs):
+                confidence = torch.tensor([[0.8, 0.9, 0.1, 0.85]])
+                return torch.argmax(logits, dim=-1), confidence
+
+        dynamic = _select_positions(
+            ConfidenceModel(),
+            torch.eye(4).view(1, 4, 4),
+            torch.full((1, 4), 127),
+            mask_id=127,
+            ratio=0.5,
+            top_k=0,
+            strategy="low_confidence_dynamic",
+            threshold=0.7,
+        )
+        sequential = _select_positions(
+            ConfidenceModel(),
+            torch.eye(4).view(1, 4, 4),
+            torch.full((1, 4), 127),
+            mask_id=127,
+            ratio=0.5,
+            top_k=0,
+            strategy="sequential",
+        )
+        entropy_bounded = _select_positions(
+            ConfidenceModel(),
+            torch.tensor([[[10.0, -10.0], [0.0, 0.0], [8.0, -8.0], [0.0, 0.0]]]),
+            torch.full((1, 4), 127),
+            mask_id=127,
+            ratio=0.5,
+            top_k=0,
+            strategy="entropy_bounded",
+            entropy_budget=0.0,
+        )
+
+        self.assertEqual(dynamic.tolist(), [0, 1, 3])
+        self.assertEqual(sequential.tolist(), [0, 1])
+        self.assertEqual(entropy_bounded.tolist(), [0, 2])
+
     def test_dual_cache_overwrites_only_selected_current_kv(self):
         prefix = torch.randn(1, 2, 2, 3)
         current = torch.randn(1, 2, 4, 3)
@@ -436,34 +479,43 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    def test_sparse_multiblock_generation_finishes(self):
-        model = _tiny_model()
-        patch_model(
-            model,
-            ratio=0.5,
-            top_k=8,
-            selection_interval=3,
-            dense_fallback_mask_count=0,
-            query_sparse=True,
-            prefix_sparse=True,
-            prefix_token_budget=2,
-            prefix_chunk_size=2,
-        )
-        output = model.generate(
-            inputs=torch.tensor([[1, 2, 3, 4]]),
-            gen_length=8,
-            block_length=4,
-            steps=4,
-            threshold=2.0,
-            editing_threshold=0.0,
-            max_post_steps=2,
-            eos_early_stop=False,
-            mask_id=127,
-            eos_id=126,
-            num_to_transfer=1,
-        )
-        self.assertEqual(output.shape, (1, 8))
-        self.assertFalse(torch.any(output == 127).item())
+    def test_sparse_multiblock_generation_finishes_for_all_strategies(self):
+        for strategy in (
+            "low_confidence_dynamic",
+            "low_confidence_static",
+            "sequential",
+            "entropy_bounded",
+        ):
+            with self.subTest(strategy=strategy):
+                model = _tiny_model()
+                patch_model(
+                    model,
+                    ratio=0.5,
+                    top_k=8,
+                    selection_interval=3,
+                    dense_fallback_mask_count=0,
+                    query_sparse=True,
+                    prefix_sparse=True,
+                    prefix_token_budget=2,
+                    prefix_chunk_size=2,
+                )
+                output = model.generate(
+                    inputs=torch.tensor([[1, 2, 3, 4]]),
+                    gen_length=8,
+                    block_length=4,
+                    steps=4,
+                    threshold=2.0,
+                    editing_threshold=0.0,
+                    max_post_steps=2,
+                    eos_early_stop=False,
+                    mask_id=127,
+                    eos_id=126,
+                    num_to_transfer=1,
+                    remasking_strategy=strategy,
+                    eb_threshold=0.35,
+                )
+                self.assertEqual(output.shape, (1, 8))
+                self.assertFalse(torch.any(output == 127).item())
 
 
 if __name__ == "__main__":

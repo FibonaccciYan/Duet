@@ -9,7 +9,6 @@ untouched.
 import types
 
 import torch
-from torch.nn import functional as F
 from transformers.cache_utils import DynamicCache
 
 from .core import (
@@ -17,84 +16,18 @@ from .core import (
     _legacy_prefix_cache,
     _select_positions,
 )
+from .sdar_generate import (
+    block_diffusion_generate,
+    get_num_transfer_tokens as _transfer_counts,
+    sample_with_temperature_topk_topp as _sample_with_confidence,
+    select_transfer as _select_transfer,
+)
 
 
-def _top_k_logits(logits, top_k):
-    if not top_k:
-        return logits
-    cutoff = torch.topk(logits, min(int(top_k), logits.shape[-1]), dim=-1).values[
-        ..., -1, None
-    ]
-    return logits.masked_fill(logits < cutoff, -torch.inf)
-
-
-def _top_p_logits(logits, top_p):
-    if top_p is None or float(top_p) >= 1.0:
-        return logits
-    sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
-    remove = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1) > float(top_p)
-    remove[..., 1:] = remove[..., :-1].clone()
-    remove[..., 0] = False
-    remove = torch.zeros_like(remove).scatter(-1, sorted_indices, remove)
-    return logits.masked_fill(remove, -torch.inf)
-
-
-def _sample_with_confidence(logits, temperature=0.0, top_k=0, top_p=1.0):
-    if temperature is None or float(temperature) <= 0:
-        tokens = logits.argmax(dim=-1)
-        confidence = F.softmax(logits, dim=-1).gather(
-            -1, tokens.unsqueeze(-1)
-        ).squeeze(-1)
-        return tokens, confidence
-
-    scaled = logits / float(temperature)
-    confidence_probabilities = F.softmax(scaled, dim=-1)
-    filtered = _top_k_logits(scaled, top_k)
-    filtered = _top_p_logits(filtered, top_p)
-    probabilities = F.softmax(filtered, dim=-1)
-    shape = probabilities.shape[:-1]
-    sampled = torch.multinomial(
-        probabilities.reshape(-1, probabilities.shape[-1]), 1
-    ).reshape(shape)
-    confidence = confidence_probabilities.gather(
-        -1, sampled.unsqueeze(-1)
-    ).squeeze(-1)
-    return sampled, confidence
-
-
-def _transfer_counts(block_length, steps):
-    if block_length <= 0 or steps <= 0 or steps > block_length:
-        raise ValueError("SDAR requires 1 <= denoising_steps <= block_length")
-    base, remainder = divmod(block_length, steps)
-    counts = torch.full((steps,), base, dtype=torch.long)
-    counts[:remainder] += 1
-    return counts
-
-
-def _select_transfer(mask, confidence, minimum, strategy, threshold):
-    transfer = torch.zeros_like(mask)
-    for batch_idx in range(mask.shape[0]):
-        positions = torch.where(
-            mask[batch_idx] & torch.isfinite(confidence[batch_idx])
-        )[0]
-        count = min(int(minimum), positions.numel())
-        if not count:
-            continue
-        if strategy == "sequential":
-            selected = positions[:count]
-        else:
-            scores = confidence[batch_idx, positions]
-            if strategy == "low_confidence_dynamic":
-                high = positions[scores > threshold]
-                selected = high if high.numel() >= count else positions[
-                    torch.topk(scores, count).indices
-                ]
-            elif strategy == "low_confidence_static":
-                selected = positions[torch.topk(scores, count).indices]
-            else:
-                raise ValueError(f"Unsupported SDAR remasking strategy: {strategy}")
-        transfer[batch_idx, selected] = True
-    return transfer
+# 1-based decoder layer after which Query Sparse chooses mask candidates.
+# Layer 4 is too early for SDAR-b32: its candidate ranking diverges sharply
+# from the final-layer transfer positions.
+QUERY_SELECTION_LAYER = 6
 
 
 def _stop_ids(model, eos_id):
@@ -117,6 +50,11 @@ def _sparse_cached_forward(
     temperature,
     top_k,
     top_p,
+    minimum_mask_candidates=1,
+    strategy="low_confidence_dynamic",
+    threshold=0.85,
+    entropy_budget=None,
+    refresh_late_kv=False,
 ):
     base = model.model
     hidden_states = base.embed_tokens(input_ids)
@@ -127,9 +65,14 @@ def _sparse_cached_forward(
     full_hidden_base = None
     compressed = False
     prefix_length = prefix_cache[0][0].shape[-2] if prefix_cache else 0
+    selection_layer = min(QUERY_SELECTION_LAYER, len(base.layers) - 1)
 
     for layer_idx, decoder_layer in enumerate(base.layers):
-        if layer_idx < 2 or selected_positions is None:
+        if (
+            layer_idx < selection_layer
+            or selected_positions is None
+            or refresh_late_kv
+        ):
             layer_hidden = hidden_states
             layer_positions = position_ids
             layer_position_embeddings = position_embeddings
@@ -165,9 +108,13 @@ def _sparse_cached_forward(
             store_kv=True,
             position_embeddings=layer_position_embeddings,
         )[0]
-        compressed = selected_positions is not None and layer_idx >= 2
+        compressed = (
+            selected_positions is not None
+            and layer_idx >= selection_layer
+            and not refresh_late_kv
+        )
 
-        if layer_idx == 1 and len(base.layers) > 2:
+        if layer_idx + 1 == selection_layer:
             selected_positions = _select_positions(
                 model,
                 base.norm(hidden_states),
@@ -183,20 +130,34 @@ def _sparse_cached_forward(
                 dense_fallback_mask_count=(
                     model.config.sdar_sparse_dlm_dense_fallback_mask_count
                 ),
+                minimum_mask_candidates=minimum_mask_candidates,
+                strategy=strategy,
+                threshold=threshold,
+                entropy_budget=entropy_budget,
             )
             selection_state["positions"] = selected_positions
             if selected_positions is not None:
                 full_hidden_base = hidden_states.clone()
 
+    if refresh_late_kv:
+        selection_state["sparse_cache"] = _dual_cache_from_dense(
+            full_cache,
+            prefix_cache,
+            prefix_length,
+            prefix_length + input_ids.shape[1],
+        )
     if selected_positions is not None:
-        full_hidden_base[:, selected_positions] = hidden_states
+        selected_hidden = (
+            hidden_states.index_select(1, selected_positions)
+            if refresh_late_kv
+            else hidden_states
+        )
+        full_hidden_base[:, selected_positions] = selected_hidden
         hidden_states = full_hidden_base
     hidden_states = base.norm(hidden_states)
     if selected_positions is None:
         return model.lm_head(hidden_states), None
-    mask_positions = selected_positions[
-        input_ids[0].index_select(0, selected_positions) == mask_id
-    ]
+    mask_positions = torch.where(input_ids[0] == mask_id)[0]
     return model.lm_head(hidden_states.index_select(1, mask_positions)), mask_positions
 
 
@@ -218,6 +179,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
     threshold = float(
         kwargs.pop("confidence_threshold", kwargs.pop("threshold", 0.85))
     )
+    eb_threshold = kwargs.pop("eb_threshold", None)
     mask_id = int(kwargs.pop("mask_id", 151669))
     eos_id = kwargs.pop("eos_id", None)
     eos_early_stop = bool(kwargs.pop("eos_early_stop", True))
@@ -228,135 +190,91 @@ def _block_diffusion_generate(self, *args, **kwargs):
         raise ValueError("gen_length must be non-negative")
     if gen_length == 0:
         return inputs[:, :0]
+    if strategy == "entropy_bounded" and eb_threshold is None:
+        raise ValueError("eb_threshold is required for entropy_bounded transfer")
 
-    transfer_counts = _transfer_counts(block_length, steps)
     input_ids = inputs.to(self.device)
     prompt_length = input_ids.shape[1]
-    num_blocks = (prompt_length + gen_length + block_length - 1) // block_length
-    total_length = num_blocks * block_length
-    block_mask = torch.tril(
-        torch.ones(num_blocks, num_blocks, dtype=torch.bool, device=self.device)
-    )
-    attention_mask = (
-        block_mask.repeat_interleave(block_length, 0)
-        .repeat_interleave(block_length, 1)
-        .unsqueeze(0)
-    )
-    position_ids = torch.arange(total_length, device=self.device).unsqueeze(0)
-    tokens = torch.full(
-        (1, total_length), mask_id, dtype=torch.long, device=self.device
-    )
-    tokens[:, :prompt_length] = input_ids
-    cache = DynamicCache()
-
-    prefill_blocks = prompt_length // block_length
-    prefill_length = prefill_blocks * block_length
-    if prefill_length:
-        self(
-            tokens[:, :prefill_length],
-            attention_mask=attention_mask[:, :prefill_length, :prefill_length],
-            position_ids=position_ids[:, :prefill_length],
-            past_key_values=cache,
-            use_cache=True,
-            store_kv=True,
-        )
-
     stop_ids = _stop_ids(self, eos_id)
     query_sparse = bool(getattr(self.config, "sdar_query_sparse", False))
-    for block_idx in range(prefill_blocks, num_blocks):
-        start = block_idx * block_length
-        end = start + block_length
-        block_tokens = tokens[:, start:end].clone()
-        block_attention = attention_mask[:, start:end, :end]
-        block_positions = position_ids[:, start:end]
-        selection_state = None
+    selection_top_k = int(getattr(self.config, "sdar_sparse_dlm_top_k", 64))
+    refresh_step = int(getattr(self.config, "sdar_sparse_dlm_refresh_step", 2))
+    selection_state = {}
 
-        for step, minimum in enumerate(transfer_counts):
-            mask = block_tokens == mask_id
-            if not mask.any():
-                break
-            logit_positions = None
-            if query_sparse and step == 0:
-                dense_cache = DynamicCache.from_legacy_cache(
-                    cache.to_legacy_cache()
-                )
-                dense_outputs = self(
-                    block_tokens,
-                    attention_mask=block_attention,
-                    position_ids=block_positions,
-                    past_key_values=dense_cache,
-                    use_cache=True,
-                    store_kv=True,
-                )
-                logits = dense_outputs.logits
-                prefix_cache = _legacy_prefix_cache(dense_cache, start)
-                selection_state = {
-                    "positions": None,
-                    "step": 0,
-                    "sparse_cache": _dual_cache_from_dense(
-                        dense_cache, prefix_cache, start, end
-                    ),
-                    "prefix_cache": prefix_cache,
-                }
-            elif query_sparse:
-                logits, logit_positions = _sparse_cached_forward(
-                    self,
-                    block_tokens,
-                    block_positions,
-                    selection_state["prefix_cache"],
-                    selection_state,
-                    mask_id,
-                    temperature,
-                    top_k,
-                    top_p,
-                )
-                selection_state["step"] += 1
-            else:
-                logits = self(
-                    block_tokens,
-                    attention_mask=block_attention,
-                    position_ids=block_positions,
-                    past_key_values=cache,
-                    use_cache=True,
-                    store_kv=False,
-                ).logits
-            prediction, confidence = _sample_with_confidence(
-                logits,
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
+    def sparse_denoise(
+        model,
+        block_tokens,
+        attention_mask,
+        position_ids,
+        past_key_values,
+        block_start,
+        block_end,
+        step,
+        minimum,
+    ):
+        if step == 0:
+            dense_cache = DynamicCache.from_legacy_cache(
+                past_key_values.to_legacy_cache()
             )
-            if logit_positions is not None:
-                full_prediction = block_tokens.clone()
-                full_prediction.index_copy_(1, logit_positions, prediction)
-                full_confidence = torch.full_like(
-                    block_tokens, -torch.inf, dtype=confidence.dtype
-                )
-                full_confidence.index_copy_(1, logit_positions, confidence)
-                prediction, confidence = full_prediction, full_confidence
-            transfer = _select_transfer(
-                mask, confidence, minimum, strategy, threshold
+            outputs = model(
+                block_tokens,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=dense_cache,
+                use_cache=True,
+                store_kv=True,
             )
-            block_tokens[transfer] = prediction[transfer]
+            prefix_cache = _legacy_prefix_cache(dense_cache, block_start)
+            selection_state.clear()
+            selection_state.update(
+                positions=None,
+                step=step,
+                sparse_cache=_dual_cache_from_dense(
+                    dense_cache, prefix_cache, block_start, block_end
+                ),
+                prefix_cache=prefix_cache,
+            )
+            return outputs.logits, None
 
-        if torch.any(block_tokens == mask_id):
-            raise RuntimeError(
-                f"SDAR block {block_idx} still contains masks after {steps} steps"
-            )
-        self(
+        logits, logit_positions = _sparse_cached_forward(
+            model,
             block_tokens,
-            attention_mask=block_attention,
-            position_ids=block_positions,
-            past_key_values=cache,
-            use_cache=True,
-            store_kv=True,
+            position_ids,
+            selection_state["prefix_cache"],
+            selection_state,
+            mask_id,
+            temperature,
+            selection_top_k,
+            top_p,
+            minimum_mask_candidates=minimum,
+            strategy=strategy,
+            threshold=threshold,
+            entropy_budget=eb_threshold,
+            # Large blocks are most sensitive immediately after the first few
+            # transfers. Refresh every late-layer KV once, then stay sparse.
+            refresh_late_kv=(
+                block_length >= 16 and selection_state["step"] == refresh_step
+            ),
         )
-        tokens[:, start:end] = block_tokens
-        if eos_early_stop and stop_ids:
-            generated = tokens[0, prompt_length:end]
-            if any(torch.any(generated == token_id) for token_id in stop_ids):
-                break
+        selection_state["step"] = step
+        return logits, logit_positions
 
+    tokens = block_diffusion_generate(
+        self,
+        prompt={"input_ids": input_ids},
+        mask_id=mask_id,
+        gen_length=gen_length,
+        block_length=block_length,
+        denoising_steps=steps,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        remasking_strategy=strategy,
+        confidence_threshold=threshold,
+        eb_threshold=eb_threshold,
+        stopping_criteria_idx=(stop_ids if eos_early_stop else None),
+        denoise_fn=(sparse_denoise if query_sparse else None),
+    )
     generated = tokens[:, prompt_length : prompt_length + gen_length]
     if stop_ids:
         stop_positions = torch.cat(
@@ -373,18 +291,22 @@ def patch_sdar_model(
     top_k=64,
     selection_interval=1,
     dense_fallback_mask_count=0,
+    refresh_step=2,
     query_sparse=True,
 ):
     if getattr(model.config, "model_type", None) != "sdar":
         raise TypeError("SDAR patch requires a model with config.model_type == 'sdar'")
-    if top_k <= 0 or selection_interval <= 0:
-        raise ValueError("top_k and selection_interval must be positive")
+    if top_k <= 0 or selection_interval <= 0 or refresh_step < -1:
+        raise ValueError(
+            "top_k and selection_interval must be positive; refresh_step must be >= -1"
+        )
     model.config.sdar_sparse_dlm_ratio = min(max(float(ratio), 0.0), 1.0)
     model.config.sdar_sparse_dlm_top_k = int(top_k)
     model.config.sdar_sparse_dlm_selection_interval = int(selection_interval)
     model.config.sdar_sparse_dlm_dense_fallback_mask_count = int(
         dense_fallback_mask_count
     )
+    model.config.sdar_sparse_dlm_refresh_step = int(refresh_step)
     model.config.sdar_query_sparse = bool(query_sparse)
     if not hasattr(model, "_sample_with_temperature_topk_topp"):
         model._sample_with_temperature_topk_topp = types.MethodType(

@@ -52,6 +52,17 @@ def parse_args():
     parser.add_argument("--top_p", type=float, default=None)
     parser.add_argument("--top_k", type=int, default=None)
     parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument(
+        "--remasking_strategy",
+        choices=(
+            "low_confidence_dynamic",
+            "low_confidence_static",
+            "sequential",
+            "entropy_bounded",
+        ),
+        default="low_confidence_dynamic",
+    )
+    parser.add_argument("--eb_threshold", type=float, default=0.35)
     parser.add_argument("--editing_threshold", type=float, default=0.0)
     parser.add_argument("--num_to_transfer", type=int, default=1)
     parser.add_argument("--mask_id", type=int, default=None)
@@ -60,6 +71,7 @@ def parse_args():
     parser.add_argument("--sparse_dlm_top_k", type=int, default=64)
     parser.add_argument("--sparse_dlm_selection_interval", type=int, default=None)
     parser.add_argument("--sparse_dlm_dense_fallback_mask_count", type=int, default=None)
+    parser.add_argument("--sparse_dlm_refresh_step", type=int, default=2)
     parser.add_argument("--query_sparse", type=parse_bool, default=True)
     parser.add_argument("--prefix_sparse", type=parse_bool, default=None)
     parser.add_argument("--prefix_token_budget", type=int, default=256)
@@ -110,6 +122,7 @@ def load_model_and_tokenizer(args):
             top_k=args.sparse_dlm_top_k,
             selection_interval=args.sparse_dlm_selection_interval,
             dense_fallback_mask_count=args.sparse_dlm_dense_fallback_mask_count,
+            refresh_step=args.sparse_dlm_refresh_step,
             query_sparse=args.query_sparse,
             prefix_sparse=args.prefix_sparse,
             prefix_token_budget=args.prefix_token_budget,
@@ -170,6 +183,8 @@ def main():
         "top_k": args.top_k,
         "mask_id": args.mask_id,
         "eos_id": args.eos_id,
+        "remasking_strategy": args.remasking_strategy,
+        "eb_threshold": args.eb_threshold,
     }
     if args.model == "llada":
         generation_kwargs.update(

@@ -10,6 +10,8 @@ from .core import (
     _legacy_prefix_cache,
     _sample_with_confidence,
     _select_positions,
+    entropy_from_logits,
+    select_transfer,
 )
 
 
@@ -247,6 +249,8 @@ def _transfer_tokens(
     threshold,
     editing_threshold,
     num_to_transfer,
+    strategy,
+    entropy_budget,
     logit_positions=None,
 ):
     x0, x0_p = _sample_with_confidence(
@@ -256,6 +260,11 @@ def _transfer_tokens(
         top_p=top_p,
         top_k=top_k,
     )
+    entropy = (
+        entropy_from_logits(active_logits, temperature, top_k, top_p)
+        if strategy == "entropy_bounded"
+        else None
+    )
     if logit_positions is None:
         prediction_tokens = x0
         mask_confidence = torch.where(active_mask, x0_p, -torch.inf)
@@ -264,6 +273,12 @@ def _transfer_tokens(
         prediction_tokens.index_copy_(1, logit_positions, x0)
         mask_confidence = torch.full_like(active_mask, -torch.inf, dtype=x0_p.dtype)
         mask_confidence.index_copy_(1, logit_positions, x0_p)
+        if entropy is not None:
+            full_entropy = torch.full_like(
+                active_mask, torch.inf, dtype=entropy.dtype
+            )
+            full_entropy.index_copy_(1, logit_positions, entropy)
+            entropy = full_entropy
     if logit_positions is None:
         mask_candidates = active_mask
     else:
@@ -273,15 +288,15 @@ def _transfer_tokens(
         mask_candidates = torch.zeros_like(active_mask)
         mask_candidates.index_fill_(1, logit_positions, True)
         mask_candidates &= active_mask
-    mask_transfer = torch.zeros_like(active_mask)
-    high_conf_mask = (mask_confidence[0] > threshold) & mask_candidates[0]
-    if int(high_conf_mask.sum().item()) >= num_to_transfer:
-        mask_transfer[0] = high_conf_mask
-    else:
-        available = int(mask_candidates.sum().item())
-        if available:
-            _, indices = torch.topk(mask_confidence[0], k=min(num_to_transfer, available))
-            mask_transfer[0, indices] = True
+    mask_transfer = select_transfer(
+        active_mask & mask_candidates,
+        mask_confidence,
+        num_to_transfer,
+        strategy,
+        threshold,
+        entropy=entropy,
+        entropy_budget=entropy_budget,
+    )
 
     if logit_positions is None:
         editable = (~active_mask) & (~prompt_mask.unsqueeze(0))
@@ -491,6 +506,9 @@ def _cached_forward(
     temperature=0.0,
     top_p=None,
     query_sparse=True,
+    strategy="low_confidence_dynamic",
+    threshold=0.95,
+    entropy_budget=None,
     prefix_indices=None,
     original_prefix_length=None,
 ):
@@ -592,6 +610,9 @@ def _cached_forward(
                     selection_step=selection_state["step"],
                     selection_interval=selection_interval,
                     dense_fallback_mask_count=dense_fallback_mask_count,
+                    strategy=strategy,
+                    threshold=threshold,
+                    entropy_budget=entropy_budget,
                 )
                 selection_state["positions"] = selected_positions
                 if selected_positions is not None:
@@ -655,6 +676,10 @@ def _block_cache_generate(self, *args, **kwargs):
     eos_id = int(kwargs.pop("eos_id", 156892))
     mask_id = int(kwargs.pop("mask_id", 156895))
     num_to_transfer = int(kwargs.pop("num_to_transfer", 1))
+    strategy = kwargs.pop("remasking_strategy", "low_confidence_dynamic")
+    entropy_budget = kwargs.pop("eb_threshold", None)
+    if strategy == "entropy_bounded" and entropy_budget is None:
+        raise ValueError("eb_threshold is required for entropy_bounded transfer")
     if kwargs:
         raise TypeError(f"Unsupported block-cache generation arguments: {sorted(kwargs)}")
     if block_length <= 0 or gen_length < 0 or num_to_transfer <= 0:
@@ -736,6 +761,8 @@ def _block_cache_generate(self, *args, **kwargs):
             threshold,
             editing_threshold,
             num_to_transfer,
+            strategy,
+            entropy_budget,
         )
         cur_x[:, -block_length:] = block_tokens
         x[:, :current_window_end] = cur_x
@@ -792,6 +819,9 @@ def _block_cache_generate(self, *args, **kwargs):
                 temperature=temperature,
                 top_p=top_p,
                 query_sparse=query_sparse,
+                strategy=strategy,
+                threshold=threshold,
+                entropy_budget=entropy_budget,
                 prefix_indices=prefix_indices,
                 original_prefix_length=block_start,
             )
@@ -811,6 +841,8 @@ def _block_cache_generate(self, *args, **kwargs):
                 threshold,
                 editing_threshold,
                 num_to_transfer,
+                strategy,
+                entropy_budget,
                 logit_positions=logit_positions,
             )
             if query_sparse and logit_positions is not None:
