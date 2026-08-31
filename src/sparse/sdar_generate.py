@@ -137,12 +137,12 @@ def block_diffusion_generate(
         prompt,
         mask_id,
         gen_length=128,
-        block_length=8,
-        denoising_steps=8,
+        block_length=32,
+        denoising_steps=32,
         temperature=1.0,
         top_k=0,
         top_p=1.0,
-        remasking_strategy='low_confidence_dynamic',
+        remasking_strategy='sequential',
         confidence_threshold=0.85,
         eb_threshold=None,
         stopping_criteria_idx=None,
@@ -300,9 +300,9 @@ def parse_args():
                         help="Maximum prompt length in tokens")
     parser.add_argument("--gen_length", type=int, default=20480,
                         help="Maximum generation length in tokens")
-    parser.add_argument("--block_length", type=int, default=4,
+    parser.add_argument("--block_length", type=int, default=32,
                         help="Length of token block to replace each denoising step")
-    parser.add_argument("--denoising_steps", type=int, default=4,
+    parser.add_argument("--denoising_steps", type=int, default=32,
                         help="Number of denoising steps (iterations)")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="Sampling temperature")
@@ -310,7 +310,7 @@ def parse_args():
                         help="Top-K sampling (0 to disable)")
     parser.add_argument("--top_p", type=float, default=1.0,
                         help="Top-P sampling probability threshold")
-    parser.add_argument("--remasking_strategy", type=str, default="low_confidence_dynamic",
+    parser.add_argument("--remasking_strategy", type=str, default="sequential",
                         choices=["low_confidence_dynamic",
                                  "low_confidence_static",
                                  "sequential",

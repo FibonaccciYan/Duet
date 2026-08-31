@@ -9,9 +9,6 @@ from .core import (
     _dual_cache_from_dense,
     _legacy_prefix_cache,
     _sample_with_confidence,
-    _select_positions,
-    entropy_from_logits,
-    select_transfer,
 )
 
 
@@ -33,7 +30,10 @@ def _attention_output_lse(query, key, value, attention_mask, num_key_value_group
     scores = torch.matmul(query, key.transpose(-2, -1))
     scores = scores * (query.shape[-1] ** -0.5)
     if attention_mask is not None:
-        scores = scores + attention_mask
+        if attention_mask.dtype == torch.bool:
+            scores = scores.masked_fill(~attention_mask, -torch.inf)
+        else:
+            scores = scores + attention_mask
     lse = torch.logsumexp(scores.float(), dim=-1)
     attention_weights = torch.softmax(scores, dim=-1, dtype=torch.float32).to(
         query.dtype
@@ -236,6 +236,57 @@ def _losa_attention_forward(
     return output, None, past_key_value
 
 
+def _select_positions(
+    model,
+    hidden_states,
+    input_ids,
+    mask_id,
+    ratio,
+    top_k,
+    temperature=0.0,
+    top_p=None,
+    cached_positions=None,
+    selection_step=0,
+    selection_interval=1,
+    dense_fallback_mask_count=0,
+    threshold=0.95,
+):
+    """Apply LLaDA's final confidence selector to shallow Query logits."""
+    mask = input_ids[0] == mask_id
+    mask_count = int(mask.sum().item())
+    if ratio >= 1.0 or mask_count <= dense_fallback_mask_count:
+        return None
+
+    candidate_count = min(max(1, math.ceil(mask_count * ratio)), mask_count)
+    decoded = torch.where(~mask)[0]
+    if (
+        cached_positions is not None
+        and selection_interval > 1
+        and selection_step % selection_interval != 0
+    ):
+        old_masks = cached_positions[mask[cached_positions]]
+        if old_masks.numel() >= candidate_count:
+            return torch.cat((decoded, old_masks))
+
+    mask_positions = torch.where(mask)[0]
+    mask_logits = model.lm_head(model.model.norm(hidden_states[:, mask_positions]))
+    _, confidence = _sample_with_confidence(
+        model,
+        mask_logits,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+    )
+    high_confidence = confidence[0] > threshold
+    if int(high_confidence.sum().item()) >= candidate_count:
+        selected_masks = mask_positions[high_confidence]
+    else:
+        selected_masks = mask_positions[
+            torch.topk(confidence[0], k=candidate_count).indices
+        ]
+    return torch.cat((decoded, selected_masks))
+
+
 def _transfer_tokens(
     model,
     block_tokens,
@@ -249,8 +300,6 @@ def _transfer_tokens(
     threshold,
     editing_threshold,
     num_to_transfer,
-    strategy,
-    entropy_budget,
     logit_positions=None,
 ):
     x0, x0_p = _sample_with_confidence(
@@ -260,11 +309,6 @@ def _transfer_tokens(
         top_p=top_p,
         top_k=top_k,
     )
-    entropy = (
-        entropy_from_logits(active_logits, temperature, top_k, top_p)
-        if strategy == "entropy_bounded"
-        else None
-    )
     if logit_positions is None:
         prediction_tokens = x0
         mask_confidence = torch.where(active_mask, x0_p, -torch.inf)
@@ -273,12 +317,6 @@ def _transfer_tokens(
         prediction_tokens.index_copy_(1, logit_positions, x0)
         mask_confidence = torch.full_like(active_mask, -torch.inf, dtype=x0_p.dtype)
         mask_confidence.index_copy_(1, logit_positions, x0_p)
-        if entropy is not None:
-            full_entropy = torch.full_like(
-                active_mask, torch.inf, dtype=entropy.dtype
-            )
-            full_entropy.index_copy_(1, logit_positions, entropy)
-            entropy = full_entropy
     if logit_positions is None:
         mask_candidates = active_mask
     else:
@@ -288,15 +326,17 @@ def _transfer_tokens(
         mask_candidates = torch.zeros_like(active_mask)
         mask_candidates.index_fill_(1, logit_positions, True)
         mask_candidates &= active_mask
-    mask_transfer = select_transfer(
-        active_mask & mask_candidates,
-        mask_confidence,
-        num_to_transfer,
-        strategy,
-        threshold,
-        entropy=entropy,
-        entropy_budget=entropy_budget,
-    )
+    high_confidence = (mask_confidence[0] > threshold) & mask_candidates[0]
+    mask_transfer = torch.zeros_like(active_mask)
+    if int(high_confidence.sum().item()) >= num_to_transfer:
+        mask_transfer[0] = high_confidence
+    else:
+        available = int(mask_candidates.sum().item())
+        if available:
+            indices = torch.topk(
+                mask_confidence[0], k=min(num_to_transfer, available)
+            ).indices
+            mask_transfer[0, indices] = True
 
     if logit_positions is None:
         editable = (~active_mask) & (~prompt_mask.unsqueeze(0))
@@ -506,9 +546,8 @@ def _cached_forward(
     temperature=0.0,
     top_p=None,
     query_sparse=True,
-    strategy="low_confidence_dynamic",
+    selection_layer=1,
     threshold=0.95,
-    entropy_budget=None,
     prefix_indices=None,
     original_prefix_length=None,
 ):
@@ -543,7 +582,7 @@ def _cached_forward(
     all_positions = torch.arange(input_ids.shape[1], device=input_ids.device)
     try:
         for layer_idx, decoder_layer in enumerate(base.layers):
-            if layer_idx < 2 or selected_positions is None:
+            if selected_positions is None:
                 layer_hidden = hidden_states
                 layer_position_ids = position_ids
                 layer_position_embeddings = position_embeddings
@@ -594,9 +633,13 @@ def _cached_forward(
                 position_embeddings=layer_position_embeddings,
             )
             hidden_states = layer_outputs[0]
-            compressed_hidden_states = selected_positions is not None and layer_idx >= 2
+            compressed_hidden_states = selected_positions is not None
 
-            if query_sparse and layer_idx == 1 and len(base.layers) > 2:
+            if (
+                query_sparse
+                and layer_idx == selection_layer
+                and selection_layer < len(base.layers) - 1
+            ):
                 selected_positions = _select_positions(
                     model,
                     hidden_states,
@@ -610,9 +653,7 @@ def _cached_forward(
                     selection_step=selection_state["step"],
                     selection_interval=selection_interval,
                     dense_fallback_mask_count=dense_fallback_mask_count,
-                    strategy=strategy,
                     threshold=threshold,
-                    entropy_budget=entropy_budget,
                 )
                 selection_state["positions"] = selected_positions
                 if selected_positions is not None:
@@ -676,10 +717,6 @@ def _block_cache_generate(self, *args, **kwargs):
     eos_id = int(kwargs.pop("eos_id", 156892))
     mask_id = int(kwargs.pop("mask_id", 156895))
     num_to_transfer = int(kwargs.pop("num_to_transfer", 1))
-    strategy = kwargs.pop("remasking_strategy", "low_confidence_dynamic")
-    entropy_budget = kwargs.pop("eb_threshold", None)
-    if strategy == "entropy_bounded" and entropy_budget is None:
-        raise ValueError("eb_threshold is required for entropy_bounded transfer")
     if kwargs:
         raise TypeError(f"Unsupported block-cache generation arguments: {sorted(kwargs)}")
     if block_length <= 0 or gen_length < 0 or num_to_transfer <= 0:
@@ -710,6 +747,7 @@ def _block_cache_generate(self, *args, **kwargs):
     ratio = min(max(float(getattr(self.config, "llada_sparse_dlm_ratio", 0.5)), 0.0), 1.0)
     selection_interval = max(1, int(getattr(self.config, "llada_sparse_dlm_selection_interval", 4)))
     selection_top_k = int(getattr(self.config, "llada_sparse_dlm_top_k", 64))
+    selection_layer = int(getattr(self.config, "llada_query_selection_layer", 5))
     fallback_count = int(getattr(self.config, "llada_sparse_dlm_dense_fallback_mask_count", 4))
     query_sparse = bool(getattr(self.config, "llada_query_sparse", True))
     prefix_sparse = bool(getattr(self.config, "llada_prefix_sparse", True))
@@ -761,8 +799,6 @@ def _block_cache_generate(self, *args, **kwargs):
             threshold,
             editing_threshold,
             num_to_transfer,
-            strategy,
-            entropy_budget,
         )
         cur_x[:, -block_length:] = block_tokens
         x[:, :current_window_end] = cur_x
@@ -819,9 +855,8 @@ def _block_cache_generate(self, *args, **kwargs):
                 temperature=temperature,
                 top_p=top_p,
                 query_sparse=query_sparse,
-                strategy=strategy,
+                selection_layer=selection_layer,
                 threshold=threshold,
-                entropy_budget=entropy_budget,
                 prefix_indices=prefix_indices,
                 original_prefix_length=block_start,
             )
@@ -841,8 +876,6 @@ def _block_cache_generate(self, *args, **kwargs):
                 threshold,
                 editing_threshold,
                 num_to_transfer,
-                strategy,
-                entropy_budget,
                 logit_positions=logit_positions,
             )
             if query_sparse and logit_positions is not None:
@@ -881,6 +914,7 @@ def patch_llada_model(
     top_k=64,
     selection_interval=4,
     dense_fallback_mask_count=4,
+    selection_layer=1,
     query_sparse=True,
     prefix_sparse=True,
     prefix_token_budget=256,
@@ -894,14 +928,22 @@ def patch_llada_model(
         or prefix_token_budget <= 0
         or prefix_chunk_size <= 0
         or losa_active_topk <= 0
+        or (
+            query_sparse
+            and (
+                selection_layer < 0
+                or selection_layer >= len(model.model.layers) - 1
+            )
+        )
     ):
         raise ValueError(
-            "top_k, intervals, prefix budget, chunk size, and LoSA active top-k must be positive"
+            "positive sparse parameters and 0 <= selection_layer < num_hidden_layers - 1 are required"
         )
     model.config.llada_sparse_dlm_ratio = float(ratio)
     model.config.llada_sparse_dlm_top_k = int(top_k)
     model.config.llada_sparse_dlm_selection_interval = max(1, int(selection_interval))
     model.config.llada_sparse_dlm_dense_fallback_mask_count = int(dense_fallback_mask_count)
+    model.config.llada_query_selection_layer = int(selection_layer)
     model.config.llada_query_sparse = bool(query_sparse)
     model.config.llada_prefix_sparse = bool(prefix_sparse)
     model.config.llada_prefix_token_budget = int(prefix_token_budget)

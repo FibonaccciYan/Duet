@@ -4,7 +4,17 @@ import math
 
 import torch
 
-from .moe_expert_patch import patch_moe_experts
+try:
+    import triton
+    import triton.language as tl
+
+    _TRITON_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised only in minimal installs
+    triton = None
+    tl = None
+    _TRITON_AVAILABLE = False
+
+from .llada_moe_expert_patch import patch_moe_experts
 from .sdar_generate import entropy_from_logits, select_transfer
 
 
@@ -12,6 +22,140 @@ MODEL_TYPES = {
     "llada": {"llada2_moe"},
     "sdar": {"sdar"},
 }
+
+
+if _TRITON_AVAILABLE:
+
+    @triton.jit
+    def _fused_kv_index_copy_kernel(
+        key_cache,
+        value_cache,
+        key_states,
+        value_states,
+        positions,
+        prefix_length,
+        heads,
+        selected,
+        head_dim,
+        cache_stride_0,
+        cache_stride_1,
+        cache_stride_2,
+        cache_stride_3,
+        value_cache_stride_0,
+        value_cache_stride_1,
+        value_cache_stride_2,
+        value_cache_stride_3,
+        state_stride_0,
+        state_stride_1,
+        state_stride_2,
+        state_stride_3,
+        value_state_stride_0,
+        value_state_stride_1,
+        value_state_stride_2,
+        value_state_stride_3,
+        total,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        valid = offsets < total
+        dim = offsets % head_dim
+        rows = offsets // head_dim
+        selected_idx = rows % selected
+        rows = rows // selected
+        head = rows % heads
+        batch = rows // heads
+        cache_position = tl.load(positions + selected_idx, mask=valid) + prefix_length
+        key_cache_offsets = (
+            batch * cache_stride_0
+            + head * cache_stride_1
+            + cache_position * cache_stride_2
+            + dim * cache_stride_3
+        )
+        value_cache_offsets = (
+            batch * value_cache_stride_0
+            + head * value_cache_stride_1
+            + cache_position * value_cache_stride_2
+            + dim * value_cache_stride_3
+        )
+        key_state_offsets = (
+            batch * state_stride_0
+            + head * state_stride_1
+            + selected_idx * state_stride_2
+            + dim * state_stride_3
+        )
+        value_state_offsets = (
+            batch * value_state_stride_0
+            + head * value_state_stride_1
+            + selected_idx * value_state_stride_2
+            + dim * value_state_stride_3
+        )
+        tl.store(
+            key_cache + key_cache_offsets,
+            tl.load(key_states + key_state_offsets, mask=valid),
+            mask=valid,
+        )
+        tl.store(
+            value_cache + value_cache_offsets,
+            tl.load(value_states + value_state_offsets, mask=valid),
+            mask=valid,
+        )
+
+
+def _fused_kv_index_copy_(
+    key_cache,
+    value_cache,
+    positions,
+    key_states,
+    value_states,
+    prefix_length,
+):
+    if key_states.shape[-2] == 0:
+        return
+    use_triton = (
+        _TRITON_AVAILABLE
+        and key_states.ndim == 4
+        and key_states.is_cuda
+        and value_states.is_cuda
+        and key_cache.is_cuda
+        and value_cache.is_cuda
+        and positions.is_cuda
+        and key_states.device
+        == value_states.device
+        == key_cache.device
+        == value_cache.device
+        == positions.device
+        and key_states.shape == value_states.shape
+        and key_cache.shape == value_cache.shape
+        and key_states.shape[:2] == key_cache.shape[:2]
+        and key_states.shape[3] == key_cache.shape[3]
+        and key_states.dtype == key_cache.dtype
+        and value_states.dtype == value_cache.dtype
+    )
+    if not use_triton:
+        replace_positions = positions + prefix_length
+        key_cache.index_copy_(2, replace_positions, key_states)
+        value_cache.index_copy_(2, replace_positions, value_states)
+        return
+
+    batch, heads, selected, head_dim = key_states.shape
+    total = key_states.numel()
+    _fused_kv_index_copy_kernel[(triton.cdiv(total, 256),)](
+        key_cache,
+        value_cache,
+        key_states,
+        value_states,
+        positions,
+        prefix_length,
+        heads,
+        selected,
+        head_dim,
+        *key_cache.stride(),
+        *value_cache.stride(),
+        *key_states.stride(),
+        *value_states.stride(),
+        total,
+        BLOCK_SIZE=256,
+    )
 
 
 def _sample_with_confidence(model, logits, temperature, top_p, top_k):
@@ -51,6 +195,7 @@ def _select_positions(
         mask_count,
     )
     decoded = torch.where(~mask)[0]
+    print(f"Debug: selection_step={selection_step}, selection_interval={selection_interval}, candidate_count={candidate_count}, mask_count={mask_count}")
     if (
         cached_positions is not None
         and selection_interval > 1
@@ -58,8 +203,12 @@ def _select_positions(
     ):
         old_masks = cached_positions[mask[cached_positions]]
         if old_masks.numel() >= candidate_count:
+            print(f"\tUsing cached selection: {old_masks[:candidate_count]}")
             return torch.cat((decoded, old_masks))
+        # return torch.cat((decoded, old_masks))
 
+
+    print(f"\tUpdate selection")
     mask_positions = torch.where(mask)[0]
     if strategy == "sequential":
         return torch.cat((decoded, mask_positions[:candidate_count]))
@@ -109,18 +258,25 @@ class _BlockDualCache:
         self.positions = None
 
     def set_positions(self, positions):
-        self.positions = positions
+        self.positions = positions.to(
+            device=self.key_cache[0].device,
+            dtype=torch.long,
+        ).contiguous()
 
     def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
-        # TODO(query-sparse): fuse selected KV writes into the attention path.
         if self.positions is None:
             raise RuntimeError("Sparse cache positions must be set before updating KV")
-        positions = self.positions.to(device=key_states.device, dtype=torch.long)
+        positions = self.positions
         if key_states.shape[-2] != positions.numel():
             raise ValueError("Sparse KV length does not match selected positions")
-        replace_positions = positions + self.prefix_lengths[layer_idx]
-        self.key_cache[layer_idx].index_copy_(2, replace_positions, key_states)
-        self.value_cache[layer_idx].index_copy_(2, replace_positions, value_states)
+        _fused_kv_index_copy_(
+            self.key_cache[layer_idx],
+            self.value_cache[layer_idx],
+            positions,
+            key_states,
+            value_states,
+            self.prefix_lengths[layer_idx],
+        )
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
 
@@ -166,17 +322,21 @@ def patch_model(
     top_k=64,
     selection_interval=None,
     dense_fallback_mask_count=None,
-    refresh_step=2,
+    refresh_step=-1,
+    selection_layer=5,
+    deep_only_transfer=False,
     query_sparse=True,
     prefix_sparse=False,
     prefix_token_budget=256,
     prefix_chunk_size=256,
     losa=False,
     losa_active_topk=5,
-    moe_expert_patch=True,
+    moe_expert_patch=None,
 ):
     """Enable requested sparse features through the matching model patch."""
     family = resolve_model_family(model, model_name)
+    if moe_expert_patch is None:
+        moe_expert_patch = family == "llada"
     if family == "llada":
         from .block_cache_sparse_dlm_patch import patch_llada_model
 
@@ -188,6 +348,7 @@ def patch_model(
             dense_fallback_mask_count=(
                 4 if dense_fallback_mask_count is None else dense_fallback_mask_count
             ),
+            selection_layer=selection_layer,
             query_sparse=query_sparse,
             prefix_sparse=prefix_sparse,
             prefix_token_budget=prefix_token_budget,
@@ -196,8 +357,6 @@ def patch_model(
             losa_active_topk=losa_active_topk,
         )
     else:
-        if prefix_sparse or losa:
-            raise ValueError("SDAR currently supports query_sparse only")
         from .sdar_block_diffusion_patch import patch_sdar_model
 
         patch_sdar_model(
@@ -209,7 +368,14 @@ def patch_model(
                 0 if dense_fallback_mask_count is None else dense_fallback_mask_count
             ),
             refresh_step=refresh_step,
+            selection_layer=selection_layer,
+            deep_only_transfer=deep_only_transfer,
             query_sparse=query_sparse,
+            prefix_sparse=prefix_sparse,
+            prefix_token_budget=prefix_token_budget,
+            prefix_chunk_size=prefix_chunk_size,
+            losa=losa,
+            losa_active_topk=losa_active_topk,
         )
 
     if moe_expert_patch:

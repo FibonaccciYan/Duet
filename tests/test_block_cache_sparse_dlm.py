@@ -1,6 +1,7 @@
 import unittest
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch as mock_patch
 
 import torch
@@ -21,8 +22,10 @@ from src.sparse.block_cache_sparse_dlm_patch import (
     _merge_attention_states,
     _new_losa_state,
     _select_positions,
+    _transfer_tokens,
     patch_model,
 )
+from src.sparse.core import _TRITON_AVAILABLE, _fused_kv_index_copy_
 
 
 MODEL_PATH = "/data0/ysy/models/LLaDA2.1-mini"
@@ -119,6 +122,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         class ConfidenceModel:
             def __init__(self):
                 self.lm_head = torch.nn.Identity()
+                self.model = SimpleNamespace(norm=torch.nn.Identity())
                 self.seen = None
 
             def _sample_with_temperature_topk_topp(self, logits, **kwargs):
@@ -142,48 +146,54 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(positions.tolist(), [1, 3])
         self.assertEqual(model.seen, {"temperature": 0.7, "top_k": 8, "top_p": 0.9})
 
-    def test_query_selection_respects_transfer_strategy(self):
+    def test_query_selection_matches_llada_confidence_threshold_rule(self):
         class ConfidenceModel:
             lm_head = torch.nn.Identity()
+            model = SimpleNamespace(norm=torch.nn.Identity())
 
             @staticmethod
             def _sample_with_temperature_topk_topp(logits, **kwargs):
                 confidence = torch.tensor([[0.8, 0.9, 0.1, 0.85]])
                 return torch.argmax(logits, dim=-1), confidence
 
-        dynamic = _select_positions(
+        selected = _select_positions(
             ConfidenceModel(),
             torch.eye(4).view(1, 4, 4),
             torch.full((1, 4), 127),
             mask_id=127,
             ratio=0.5,
             top_k=0,
-            strategy="low_confidence_dynamic",
             threshold=0.7,
         )
-        sequential = _select_positions(
+
+        self.assertEqual(selected.tolist(), [0, 1, 3])
+
+    def test_transfer_uses_llada_confidence_threshold_rule(self):
+        class ConfidenceModel:
+            @staticmethod
+            def _sample_with_temperature_topk_topp(logits, **kwargs):
+                return (
+                    torch.tensor([[10, 11, 12, 13]]),
+                    torch.tensor([[0.8, 0.9, 0.1, 0.85]]),
+                )
+
+        tokens, transferred = _transfer_tokens(
             ConfidenceModel(),
-            torch.eye(4).view(1, 4, 4),
             torch.full((1, 4), 127),
-            mask_id=127,
-            ratio=0.5,
-            top_k=0,
-            strategy="sequential",
-        )
-        entropy_bounded = _select_positions(
-            ConfidenceModel(),
-            torch.tensor([[[10.0, -10.0], [0.0, 0.0], [8.0, -8.0], [0.0, 0.0]]]),
             torch.full((1, 4), 127),
-            mask_id=127,
-            ratio=0.5,
-            top_k=0,
-            strategy="entropy_bounded",
-            entropy_budget=0.0,
+            torch.zeros(4, dtype=torch.bool),
+            torch.ones(1, 4, dtype=torch.bool),
+            torch.zeros(1, 4, 2),
+            temperature=0.0,
+            top_p=None,
+            top_k=None,
+            threshold=0.7,
+            editing_threshold=0.9,
+            num_to_transfer=2,
         )
 
-        self.assertEqual(dynamic.tolist(), [0, 1, 3])
-        self.assertEqual(sequential.tolist(), [0, 1])
-        self.assertEqual(entropy_bounded.tolist(), [0, 2])
+        self.assertEqual(transferred.tolist(), [[True, True, False, True]])
+        self.assertEqual(tokens.tolist(), [[10, 11, 127, 13]])
 
     def test_dual_cache_overwrites_only_selected_current_kv(self):
         prefix = torch.randn(1, 2, 2, 3)
@@ -208,6 +218,33 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         torch.testing.assert_close(value[:, :, [3, 5]], replacement_value)
         torch.testing.assert_close(key[:, :, [0, 1, 2, 4]], original_key[:, :, [0, 1, 2, 4]])
         torch.testing.assert_close(value[:, :, [0, 1, 2, 4]], original_value[:, :, [0, 1, 2, 4]])
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and _TRITON_AVAILABLE,
+        "requires CUDA and Triton",
+    )
+    def test_fused_kv_index_copy_matches_torch(self):
+        positions = torch.tensor([1, 3], device="cuda")
+        key_states = torch.randn(1, 2, 2, 3, device="cuda")
+        value_states = torch.randn(1, 2, 3, 2, device="cuda").transpose(-1, -2)
+        actual_key = torch.randn(1, 2, 8, 3, device="cuda")
+        actual_value = torch.randn_like(actual_key)
+        expected_key = actual_key.clone()
+        expected_value = actual_value.clone()
+
+        expected_key.index_copy_(2, positions + 2, key_states)
+        expected_value.index_copy_(2, positions + 2, value_states)
+        _fused_kv_index_copy_(
+            actual_key,
+            actual_value,
+            positions,
+            key_states,
+            value_states,
+            prefix_length=2,
+        )
+
+        torch.testing.assert_close(actual_key, expected_key)
+        torch.testing.assert_close(actual_value, expected_value)
 
     def test_python_adamas_selector_returns_sorted_indices(self):
         values = torch.arange(8, dtype=torch.float32)
@@ -318,6 +355,65 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNotNone(logit_positions)
         self.assertLess(selected.numel(), 4)
         torch.testing.assert_close(logit_positions, torch.arange(4))
+
+    def test_query_selection_runs_after_configured_layer(self):
+        model = _tiny_model()
+        tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
+        positions = torch.arange(8).unsqueeze(0)
+        attention_mask = _block_mask(2, 4, next(model.parameters()).dtype)
+        completed_layers = []
+        observed_layers = []
+        handles = [
+            layer.register_forward_hook(
+                lambda _module, _inputs, _output, idx=idx: completed_layers.append(idx)
+            )
+            for idx, layer in enumerate(model.model.layers)
+        ]
+
+        try:
+            with torch.no_grad():
+                dense = model(
+                    tokens,
+                    attention_mask=attention_mask,
+                    position_ids=positions,
+                    use_cache=True,
+                    return_dict=True,
+                )
+                completed_layers.clear()
+                with mock_patch(
+                    "src.sparse.block_cache_sparse_dlm_patch._select_positions",
+                    side_effect=lambda *args, **kwargs: observed_layers.append(
+                        completed_layers.copy()
+                    ),
+                ):
+                    _cached_forward(
+                        model,
+                        tokens[:, 4:],
+                        attention_mask[:, :, 4:, :],
+                        positions[:, 4:],
+                        _legacy_prefix_cache(dense.past_key_values, 4),
+                        {"positions": None, "step": 0},
+                        mask_id=127,
+                        ratio=0.5,
+                        top_k=8,
+                        selection_interval=1,
+                        dense_fallback_mask_count=0,
+                        query_sparse=True,
+                        selection_layer=3,
+                        original_prefix_length=4,
+                    )
+        finally:
+            for handle in handles:
+                handle.remove()
+
+        self.assertEqual(observed_layers, [[0, 1, 2, 3]])
+
+    def test_patch_stores_llada_selection_layer(self):
+        model = _tiny_model()
+
+        patch_model(model, selection_layer=3)
+
+        self.assertEqual(model.config.llada_query_selection_layer, 3)
 
     def test_losa_first_cached_forward_matches_dense_forward_exactly(self):
         model = _tiny_model()
@@ -479,43 +575,45 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    def test_sparse_multiblock_generation_finishes_for_all_strategies(self):
-        for strategy in (
-            "low_confidence_dynamic",
-            "low_confidence_static",
-            "sequential",
-            "entropy_bounded",
-        ):
-            with self.subTest(strategy=strategy):
-                model = _tiny_model()
-                patch_model(
-                    model,
-                    ratio=0.5,
-                    top_k=8,
-                    selection_interval=3,
-                    dense_fallback_mask_count=0,
-                    query_sparse=True,
-                    prefix_sparse=True,
-                    prefix_token_budget=2,
-                    prefix_chunk_size=2,
-                )
-                output = model.generate(
-                    inputs=torch.tensor([[1, 2, 3, 4]]),
-                    gen_length=8,
-                    block_length=4,
-                    steps=4,
-                    threshold=2.0,
-                    editing_threshold=0.0,
-                    max_post_steps=2,
-                    eos_early_stop=False,
-                    mask_id=127,
-                    eos_id=126,
-                    num_to_transfer=1,
-                    remasking_strategy=strategy,
-                    eb_threshold=0.35,
-                )
-                self.assertEqual(output.shape, (1, 8))
-                self.assertFalse(torch.any(output == 127).item())
+    def test_sparse_multiblock_generation_uses_llada_selector(self):
+        model = _tiny_model()
+        patch_model(
+            model,
+            ratio=0.5,
+            top_k=8,
+            selection_interval=3,
+            dense_fallback_mask_count=0,
+            query_sparse=True,
+            prefix_sparse=True,
+            prefix_token_budget=2,
+            prefix_chunk_size=2,
+        )
+        output = model.generate(
+            inputs=torch.tensor([[1, 2, 3, 4]]),
+            gen_length=8,
+            block_length=4,
+            steps=4,
+            threshold=2.0,
+            editing_threshold=0.0,
+            max_post_steps=2,
+            eos_early_stop=False,
+            mask_id=127,
+            eos_id=126,
+            num_to_transfer=1,
+        )
+
+        self.assertEqual(output.shape, (1, 8))
+        self.assertFalse(torch.any(output == 127).item())
+
+    def test_llada_generate_rejects_sdar_strategy_arguments(self):
+        model = _tiny_model()
+        patch_model(model, selection_layer=3)
+
+        with self.assertRaisesRegex(TypeError, "remasking_strategy"):
+            model.generate(
+                inputs=torch.tensor([[1, 2, 3, 4]]),
+                remasking_strategy="sequential",
+            )
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ class SparseCoreTest(unittest.TestCase):
                 query_sparse=True,
                 prefix_sparse=True,
                 losa=True,
+                selection_layer=3,
                 moe_expert_patch=True,
             )
 
@@ -28,6 +29,7 @@ class SparseCoreTest(unittest.TestCase):
         self.assertTrue(kwargs["query_sparse"])
         self.assertTrue(kwargs["prefix_sparse"])
         self.assertTrue(kwargs["losa"])
+        self.assertEqual(kwargs["selection_layer"], 3)
         patch_moe.assert_called_once_with(model)
         self.assertEqual(model._sparse_patch_family, "llada")
 
@@ -35,8 +37,32 @@ class SparseCoreTest(unittest.TestCase):
         model = types.SimpleNamespace(config=types.SimpleNamespace(model_type="sdar"))
         with self.assertRaisesRegex(ValueError, "checkpoint model_type"):
             resolve_model_family(model, "llada")
-        with self.assertRaisesRegex(ValueError, "query_sparse only"):
-            patch_model(model, model_name="sdar", prefix_sparse=True)
+
+    def test_core_routes_prefix_sparse_and_losa_to_sdar(self):
+        model = types.SimpleNamespace(config=types.SimpleNamespace(model_type="sdar"))
+        with patch(
+            "src.sparse.sdar_block_diffusion_patch.patch_sdar_model"
+        ) as patch_sdar, patch("src.sparse.core.patch_moe_experts") as patch_moe:
+            patch_model(
+                model,
+                model_name="sdar",
+                query_sparse=False,
+                prefix_sparse=True,
+                prefix_token_budget=128,
+                losa=True,
+                losa_active_topk=7,
+            )
+
+        kwargs = patch_sdar.call_args.kwargs
+        self.assertFalse(kwargs["query_sparse"])
+        self.assertTrue(kwargs["prefix_sparse"])
+        self.assertEqual(kwargs["prefix_token_budget"], 128)
+        self.assertTrue(kwargs["losa"])
+        self.assertEqual(kwargs["losa_active_topk"], 7)
+        self.assertEqual(kwargs["selection_layer"], 5)
+        self.assertEqual(kwargs["refresh_step"], -1)
+        patch_moe.assert_not_called()
+        self.assertEqual(model._sparse_patch_family, "sdar")
 
 
 if __name__ == "__main__":
