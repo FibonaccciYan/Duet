@@ -269,7 +269,7 @@ def _select_positions(
             return torch.cat((decoded, old_masks))
 
     mask_positions = torch.where(mask)[0]
-    mask_logits = model.lm_head(model.model.norm(hidden_states[:, mask_positions]))
+    mask_logits = model.lm_head(hidden_states[:, mask_positions])
     _, confidence = _sample_with_confidence(
         model,
         mask_logits,
@@ -320,9 +320,8 @@ def _transfer_tokens(
     if logit_positions is None:
         mask_candidates = active_mask
     else:
-        # Compact logits are indexed by ``logit_positions``.  The Dream-style
-        # query path supplies every mask position here: unselected masks use
-        # their layer-2 hidden state as an approximate prediction.
+        # Query-sparse logits exist only for selected masks recomputed through
+        # the remaining layers, so only those positions may transfer.
         mask_candidates = torch.zeros_like(active_mask)
         mask_candidates.index_fill_(1, logit_positions, True)
         mask_candidates &= active_mask
@@ -682,16 +681,14 @@ def _cached_forward(
     hidden_states = base.norm(hidden_states)
     if selected_positions is None:
         return model.lm_head(hidden_states).float(), selected_positions, None
-    # Match Dream's transfer behavior: late layers run only selected queries,
-    # but their outputs are scattered into the layer-2 full hidden state above.
-    # Unselected masks therefore retain an approximate shallow hidden state and
-    # still receive logits, so one refinement step can transfer any mask.
-    mask_positions = torch.where(input_ids[0] == mask_id)[0]
-    mask_hidden = hidden_states.index_select(1, mask_positions)
+    selected_mask_positions = selected_positions[
+        input_ids[0, selected_positions] == mask_id
+    ]
+    mask_hidden = hidden_states.index_select(1, selected_mask_positions)
     return (
         model.lm_head(mask_hidden),
         selected_positions,
-        mask_positions,
+        selected_mask_positions,
     )
 
 
@@ -879,9 +876,6 @@ def _block_cache_generate(self, *args, **kwargs):
                 logit_positions=logit_positions,
             )
             if query_sparse and logit_positions is not None:
-                # ponytail: Dream-style all-mask transfer may leave an
-                # unselected position's late-layer KV stale until it is
-                # selected again; refresh every current KV for exact caching.
                 changed = block_tokens != old_block_tokens
                 allowed = torch.zeros_like(changed)
                 allowed.index_fill_(1, logit_positions, True)

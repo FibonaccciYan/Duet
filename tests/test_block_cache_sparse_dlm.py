@@ -313,7 +313,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    def test_query_sparse_returns_logits_for_all_mask_positions(self):
+    def test_query_sparse_returns_logits_only_for_selected_masks(self):
         model = _tiny_model()
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
         positions = torch.arange(8).unsqueeze(0)
@@ -354,7 +354,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertIsNotNone(logit_positions)
         self.assertLess(selected.numel(), 4)
-        torch.testing.assert_close(logit_positions, torch.arange(4))
+        torch.testing.assert_close(logit_positions, selected)
 
     def test_query_selection_runs_after_configured_layer(self):
         model = _tiny_model()
