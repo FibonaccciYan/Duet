@@ -99,8 +99,8 @@ def parse_args():
         "--prompt", default="Write a Python function that sorts a list of integers."
     )
     parser.add_argument("--gen_length", type=int, default=16)
-    parser.add_argument("--block_length", type=int, default=4)
-    parser.add_argument("--steps", type=int, default=4)
+    parser.add_argument("--block_length", type=int, default=32)
+    parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--mask_id", type=int, default=151669)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top_k", type=int, default=0)
@@ -114,7 +114,7 @@ def parse_args():
             "sequential",
             "entropy_bounded",
         ),
-        default="low_confidence_dynamic",
+        default="sequential",
     )
     parser.add_argument("--eb_threshold", type=float, default=0.35)
     parser.add_argument(
@@ -130,7 +130,7 @@ def parse_args():
     parser.add_argument("--attn_implementation", default="sdpa")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output_dir", default="layer_overlap_results/sdar")
+    parser.add_argument("--output_dir", default="experiments/layer_overlap_results/sdar")
     parser.add_argument("--plot_overlap_stats", action="store_true")
     return parser.parse_args()
 

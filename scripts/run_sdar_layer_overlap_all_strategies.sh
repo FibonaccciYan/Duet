@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-output_root="${OUTPUT_DIR:-layer_overlap_results/sdar_block32}"
+output_root="${OUTPUT_DIR:-experiments/layer_overlap_results/sdar_block32}"
 python_bin="${PYTHON_BIN:-/home/ysy/anaconda3/envs/dream/bin/python}"
 
 for strategy in \
