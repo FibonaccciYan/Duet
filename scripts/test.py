@@ -18,7 +18,7 @@ from src.sparse import patch_model, resolve_model_family
 
 DEFAULT_MODEL_PATHS = {
     "llada": "/data0/ysy/models/LLaDA2.1-mini",
-    "sdar": "/data0/ysy/models/SDAR-8B-Chat",
+    "sdar": "/data0/ysy/models/SDAR-8B-Chat-b32",
 }
 DEFAULT_PROMPT = "Write a short story about history."
 
@@ -60,9 +60,15 @@ def parse_args():
             "sequential",
             "entropy_bounded",
         ),
-        default="low_confidence_dynamic",
+        default="sequential",
+        help="SDAR transfer/query strategy; ignored by LLaDA",
     )
-    parser.add_argument("--eb_threshold", type=float, default=0.35)
+    parser.add_argument(
+        "--eb_threshold",
+        type=float,
+        default=0.35,
+        help="SDAR entropy budget; ignored by LLaDA",
+    )
     parser.add_argument("--editing_threshold", type=float, default=0.0)
     parser.add_argument("--num_to_transfer", type=int, default=1)
     parser.add_argument("--mask_id", type=int, default=None)
@@ -71,14 +77,24 @@ def parse_args():
     parser.add_argument("--sparse_dlm_top_k", type=int, default=64)
     parser.add_argument("--sparse_dlm_selection_interval", type=int, default=None)
     parser.add_argument("--sparse_dlm_dense_fallback_mask_count", type=int, default=None)
-    parser.add_argument("--sparse_dlm_refresh_step", type=int, default=2)
+    parser.add_argument("--sparse_dlm_refresh_step", type=int, default=None)
+    parser.add_argument(
+        "--sparse_dlm_selection_layer",
+        type=int,
+        default=5,
+        help="zero-based decoder layer after which Query positions are selected",
+    )
+    parser.add_argument("--sparse_dlm_deep_only_transfer", type=parse_bool, default=False)
     parser.add_argument("--query_sparse", type=parse_bool, default=True)
     parser.add_argument("--prefix_sparse", type=parse_bool, default=None)
     parser.add_argument("--prefix_token_budget", type=int, default=256)
     parser.add_argument("--prefix_chunk_size", type=int, default=256)
     parser.add_argument("--losa", type=parse_bool, default=False)
     parser.add_argument("--losa_active_topk", type=int, default=5)
-    parser.add_argument("--moe_expert_patch", type=parse_bool, default=True)
+    parser.add_argument("--moe_expert_patch", type=parse_bool, default=None)
+    parser.add_argument("--profile_output", default=None)
+    parser.add_argument("--profile_trace", type=parse_bool, default=False)
+    parser.add_argument("--warmup_runs", type=int, default=0)
     return parser.parse_args()
 
 
@@ -106,6 +122,14 @@ def load_model_and_tokenizer(args):
     ).eval()
     resolve_model_family(model, args.model)
     is_sdar = args.model == "sdar"
+    args.sparse_dlm_refresh_step = (
+        args.sparse_dlm_refresh_step
+        if args.sparse_dlm_refresh_step is not None
+        else (-1 if is_sdar else 2)
+    )
+    args.moe_expert_patch = (
+        args.moe_expert_patch if args.moe_expert_patch is not None else not is_sdar
+    )
     args.sparse_dlm_selection_interval = (
         args.sparse_dlm_selection_interval or (1 if is_sdar else 4)
     )
@@ -123,6 +147,8 @@ def load_model_and_tokenizer(args):
             selection_interval=args.sparse_dlm_selection_interval,
             dense_fallback_mask_count=args.sparse_dlm_dense_fallback_mask_count,
             refresh_step=args.sparse_dlm_refresh_step,
+            selection_layer=args.sparse_dlm_selection_layer,
+            deep_only_transfer=args.sparse_dlm_deep_only_transfer,
             query_sparse=args.query_sparse,
             prefix_sparse=args.prefix_sparse,
             prefix_token_budget=args.prefix_token_budget,
@@ -133,8 +159,8 @@ def load_model_and_tokenizer(args):
         )
         args.pattern = "patch"
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    args.block_length = args.block_length or (4 if is_sdar else 32)
-    args.steps = args.steps or (4 if is_sdar else 32)
+    args.block_length = args.block_length or 32
+    args.steps = args.steps or 32
     args.threshold = args.threshold if args.threshold is not None else (0.85 if is_sdar else 0.5)
     args.mask_id = args.mask_id if args.mask_id is not None else (
         tokenizer.mask_token_id if is_sdar else 156895
@@ -152,6 +178,8 @@ def synchronize():
 
 def main():
     args = parse_args()
+    if args.warmup_runs < 0:
+        raise ValueError("--warmup_runs must be non-negative")
     set_seed(args.seed)
     model, tokenizer = load_model_and_tokenizer(args)
     input_ids = tokenizer.apply_chat_template(
@@ -169,8 +197,6 @@ def main():
             f"prefix token budget: {args.prefix_token_budget}; "
             f"LoSA: {args.losa}; MoE expert patch: {args.moe_expert_patch}"
         )
-    synchronize()
-    start = time.perf_counter()
     generation_kwargs = {
         "inputs": input_ids,
         "eos_early_stop": True,
@@ -183,15 +209,38 @@ def main():
         "top_k": args.top_k,
         "mask_id": args.mask_id,
         "eos_id": args.eos_id,
-        "remasking_strategy": args.remasking_strategy,
-        "eb_threshold": args.eb_threshold,
     }
-    if args.model == "llada":
+    if args.model == "sdar":
+        generation_kwargs.update(
+            remasking_strategy=args.remasking_strategy,
+            eb_threshold=args.eb_threshold,
+        )
+    else:
         generation_kwargs.update(
             editing_threshold=args.editing_threshold,
             num_to_transfer=args.num_to_transfer,
         )
-    sequences = model.generate(**generation_kwargs)
+
+    for _ in range(args.warmup_runs):
+        model.generate(**generation_kwargs)
+    synchronize()
+
+    profiler = None
+    if args.profile_output:
+        activities = [torch.profiler.ProfilerActivity.CPU]
+        if torch.cuda.is_available():
+            activities.append(torch.profiler.ProfilerActivity.CUDA)
+        profiler = torch.profiler.profile(
+            activities=activities,
+            record_shapes=True,
+        )
+
+    start = time.perf_counter()
+    if profiler is None:
+        sequences = model.generate(**generation_kwargs)
+    else:
+        with profiler:
+            sequences = model.generate(**generation_kwargs)
     synchronize()
     elapsed = time.perf_counter() - start
     generated_tokens = int(sequences.shape[-1])
@@ -200,6 +249,24 @@ def main():
     print(f"Time taken: {elapsed:.4f} seconds")
     print(f"Generated token num: {generated_tokens}")
     print(f"Generated token num per second: {generated_tokens / elapsed:.4f}")
+    if profiler is not None:
+        output_path = Path(args.profile_output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        averages = profiler.key_averages()
+        shaped_averages = profiler.key_averages(group_by_input_shape=True)
+        report = "CUDA time (aggregate)\n" + averages.table(
+            sort_by="self_cuda_time_total", row_limit=100
+        )
+        report += "\n\nCPU time (aggregate)\n" + averages.table(
+            sort_by="self_cpu_time_total", row_limit=100
+        )
+        report += "\n\nCUDA time by input shape\n" + shaped_averages.table(
+            sort_by="self_cuda_time_total", row_limit=100
+        )
+        output_path.write_text(report)
+        if args.profile_trace:
+            profiler.export_chrome_trace(str(output_path.with_suffix(".json")))
+        print(f"Profiler report: {output_path}")
 
 
 if __name__ == "__main__":

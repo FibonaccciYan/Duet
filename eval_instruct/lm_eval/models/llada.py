@@ -61,8 +61,6 @@ class LLaDA(LM):
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
         threshold: float = 0.5,
-        remasking_strategy: str = "low_confidence_dynamic",
-        eb_threshold: float = 0.35,
         editing_threshold: float = 0.0,
         max_post_steps: int = 16,
         minimal_topk: int = 1,
@@ -75,9 +73,11 @@ class LLaDA(LM):
         sparse_dlm_selection_interval: int = 4,
         sparse_dlm_dense_fallback_mask_count: int = 4,
         sparse_dlm_refresh_step: int = 2,
+        sparse_dlm_selection_layer: int = 5,
+        sparse_dlm_deep_only_transfer: bool = False,
         sparse_dlm_block_length: Optional[int] = None,
         query_sparse: bool = True,
-        prefix_sparse: bool = True,
+        prefix_sparse: Optional[bool] = None,
         prefix_token_budget: int = 256,
         prefix_chunk_size: int = 256,
         losa: bool = False,
@@ -126,6 +126,11 @@ class LLaDA(LM):
 
         resolve_model_family(self.model, self.MODEL_NAME)
         sparse_enabled = _as_bool(sparse_dlm)
+        prefix_sparse_enabled = sparse_enabled and (
+            self.MODEL_NAME == "llada"
+            if prefix_sparse is None
+            else _as_bool(prefix_sparse)
+        )
         if self.MODEL_NAME == "sdar" or sparse_enabled:
             patch_model(
                 self.model,
@@ -135,8 +140,10 @@ class LLaDA(LM):
                 selection_interval=int(sparse_dlm_selection_interval),
                 dense_fallback_mask_count=int(sparse_dlm_dense_fallback_mask_count),
                 refresh_step=int(sparse_dlm_refresh_step),
+                selection_layer=int(sparse_dlm_selection_layer),
+                deep_only_transfer=_as_bool(sparse_dlm_deep_only_transfer),
                 query_sparse=sparse_enabled and _as_bool(query_sparse),
-                prefix_sparse=sparse_enabled and _as_bool(prefix_sparse),
+                prefix_sparse=prefix_sparse_enabled,
                 prefix_token_budget=int(prefix_token_budget),
                 prefix_chunk_size=int(prefix_chunk_size),
                 losa=sparse_enabled and _as_bool(losa),
@@ -145,13 +152,16 @@ class LLaDA(LM):
             )
             eval_logger.info(
                 "Applied %s patch: query_sparse=%s, prefix_sparse=%s, "
-                "losa=%s, moe_expert_patch=%s, ratio=%s",
+                "losa=%s, moe_expert_patch=%s, ratio=%s, selection_layer=%s, "
+                "deep_only_transfer=%s",
                 self.MODEL_NAME,
                 sparse_enabled and _as_bool(query_sparse),
-                sparse_enabled and _as_bool(prefix_sparse),
+                prefix_sparse_enabled,
                 sparse_enabled and _as_bool(losa),
                 _as_bool(moe_expert_patch),
                 sparse_dlm_ratio,
+                sparse_dlm_selection_layer,
+                _as_bool(sparse_dlm_deep_only_transfer),
             )
 
         self.model_type = self.MODEL_NAME
@@ -164,8 +174,6 @@ class LLaDA(LM):
         self.top_p = _optional_number(top_p, float)
         self.top_k = _optional_number(top_k, int)
         self.threshold = float(threshold)
-        self.remasking_strategy = str(remasking_strategy)
-        self.eb_threshold = float(eb_threshold)
         self.editing_threshold = float(editing_threshold)
         self.max_post_steps = int(max_post_steps)
         self.minimal_topk = int(minimal_topk)
@@ -205,6 +213,14 @@ class LLaDA(LM):
             continue_final_message=not add_generation_prompt,
         )
 
+    def _extra_generation_kwargs(self) -> dict:
+        return {
+            "editing_threshold": self.editing_threshold,
+            "max_post_steps": self.max_post_steps,
+            "minimal_topk": self.minimal_topk,
+            "num_to_transfer": self.num_to_transfer,
+        }
+
     def _generate_one(self, context: str, gen_kwargs: dict) -> tuple[str, int]:
         gen_length = int(gen_kwargs.get("max_gen_toks", self.gen_length))
         temperature = gen_kwargs.get("temperature", self.temperature)
@@ -234,16 +250,8 @@ class LLaDA(LM):
             "threshold": self.threshold,
             "mask_id": self.mask_id,
             "eos_id": self.eos_id,
-            "remasking_strategy": self.remasking_strategy,
-            "eb_threshold": self.eb_threshold,
         }
-        if self.model_type != "sdar":
-            generation_kwargs.update(
-                editing_threshold=self.editing_threshold,
-                max_post_steps=self.max_post_steps,
-                minimal_topk=self.minimal_topk,
-                num_to_transfer=self.num_to_transfer,
-            )
+        generation_kwargs.update(self._extra_generation_kwargs())
         output_ids = self.model.generate(**generation_kwargs)
         if hasattr(output_ids, "sequences"):
             output_ids = output_ids.sequences

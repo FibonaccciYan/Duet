@@ -6,9 +6,25 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 eval_script="${script_dir}/eval.sh"
 benchmark="${BENCHMARK:-gsm8k}"
-output_root="${OUTPUT_ROOT:-${repo_root}/../llada_exp/${benchmark}_matrix}"
+model_type="${MODEL_TYPE:-llada}"
+output_root="${OUTPUT_ROOT:-${repo_root}/../${model_type}_exp/${benchmark}_matrix/sequential}"
 base_port="${BASE_PROCESS_PORT:-12350}"
-python_bin="${PYTHON:-/home/ysy/anaconda3/envs/llada/bin/python}"
+case "${model_type}" in
+  llada)
+    python_bin="${PYTHON:-/home/ysy/anaconda3/envs/llada/bin/python}"
+    block_length="${BLOCK_LENGTH:-32}"
+    steps="${STEPS:-32}"
+    ;;
+  sdar)
+    python_bin="${PYTHON:-/home/ysy/anaconda3/envs/dream/bin/python}"
+    block_length="${BLOCK_LENGTH:-32}"
+    steps="${STEPS:-32}"
+    ;;
+  *)
+    echo "Unsupported MODEL_TYPE: ${model_type} (expected llada or sdar)" >&2
+    exit 2
+    ;;
+esac
 
 mkdir -p "${output_root}/logs"
 
@@ -42,6 +58,11 @@ run_lane() {
 
     combo_root="${output_root}/${losa_name}/${combo}"
     log_path="${output_root}/logs/${losa_name}_${combo}.log"
+    if [[ "${SKIP_COMPLETED:-true}" == "true" ]] &&
+      [[ -n "$(find "${combo_root}" -type f -name 'results_*.json' -print -quit 2>/dev/null)" ]]; then
+      echo "[GPU ${gpu}] skip completed ${benchmark} ${losa_name}/${combo}"
+      continue
+    fi
     echo "[GPU ${gpu}] ${benchmark} ${losa_name}/${combo} -> ${combo_root}"
     if [[ "${DRY_RUN:-false}" == "true" ]]; then
       continue
@@ -49,8 +70,11 @@ run_lane() {
 
     if ! CUDA_VISIBLE_DEVICES="${gpu}" \
       MAIN_PROCESS_PORT="${port}" \
+      MODEL_TYPE="${model_type}" \
       PYTHON="${python_bin}" \
       BENCHMARK="${benchmark}" \
+      BLOCK_LENGTH="${block_length}" \
+      STEPS="${steps}" \
       SPARSE_DLM=true \
       QUERY_SPARSE="${query_sparse}" \
       PREFIX_SPARSE="${prefix_sparse}" \
@@ -64,15 +88,26 @@ run_lane() {
   done
 }
 
-run_lane 3 losa_off false 5 "${base_port}" &
-pid_3=$!
-run_lane 4 losa_topk5 true 5 "$((base_port + 1))" &
-pid_4=$!
-run_lane 5 losa_topk32 true 32 "$((base_port + 2))" &
-pid_5=$!
+if [[ "${model_type}" == "sdar" ]]; then
+  run_lane 3 losa_off false 5 "${base_port}" &
+  pid_3=$!
+  run_lane 4 losa_topk5 true 5 "$((base_port + 1))" &
+  pid_4=$!
+  run_lane 5 losa_topk32 true 32 "$((base_port + 2))" &
+  pid_5=$!
+  pids=("${pid_3}" "${pid_4}" "${pid_5}")
+else
+  run_lane 3 losa_off false 5 "${base_port}" &
+  pid_3=$!
+  run_lane 4 losa_topk5 true 5 "$((base_port + 1))" &
+  pid_4=$!
+  run_lane 5 losa_topk32 true 32 "$((base_port + 2))" &
+  pid_5=$!
+  pids=("${pid_3}" "${pid_4}" "${pid_5}")
+fi
 
 status=0
-for pid in "${pid_3}" "${pid_4}" "${pid_5}"; do
+for pid in "${pids[@]}"; do
   if ! wait "${pid}"; then
     status=1
   fi

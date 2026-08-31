@@ -13,16 +13,19 @@ class SDAR(LLaDA):
     def __init__(
         self,
         pretrained: str,
-        block_length: int = 4,
-        steps: int = 4,
+        block_length: int = 32,
+        steps: int = 32,
         threshold: float = 0.85,
-        remasking_strategy: str = "low_confidence_dynamic",
+        remasking_strategy: str = "sequential",
         eb_threshold: float = 0.35,
         mask_id: int = 151669,
         eos_id: Optional[int] = None,
         prefix_sparse: bool = False,
         sparse_dlm_selection_interval: int = 1,
         sparse_dlm_dense_fallback_mask_count: int = 0,
+        sparse_dlm_refresh_step: int = -1,
+        sparse_dlm_selection_layer: int = 5,
+        moe_expert_patch: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -30,8 +33,6 @@ class SDAR(LLaDA):
             block_length=block_length,
             steps=steps,
             threshold=threshold,
-            remasking_strategy=remasking_strategy,
-            eb_threshold=eb_threshold,
             mask_id=mask_id,
             eos_id=eos_id,
             prefix_sparse=prefix_sparse,
@@ -39,5 +40,16 @@ class SDAR(LLaDA):
             sparse_dlm_dense_fallback_mask_count=(
                 sparse_dlm_dense_fallback_mask_count
             ),
+            sparse_dlm_refresh_step=sparse_dlm_refresh_step,
+            sparse_dlm_selection_layer=sparse_dlm_selection_layer,
+            moe_expert_patch=moe_expert_patch,
             **kwargs,
         )
+        self.remasking_strategy = str(remasking_strategy)
+        self.eb_threshold = float(eb_threshold)
+
+    def _extra_generation_kwargs(self) -> dict:
+        return {
+            "remasking_strategy": self.remasking_strategy,
+            "eb_threshold": self.eb_threshold,
+        }
