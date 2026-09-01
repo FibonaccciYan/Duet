@@ -20,6 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 from src.sparse import patch_model, resolve_model_family
+from src.sparse.llada_moe_expert_patch import patch_moe_experts
 
 
 eval_logger = logging.getLogger(__name__)
@@ -162,6 +163,11 @@ class LLaDA(LM):
                 sparse_dlm_ratio,
                 sparse_dlm_selection_layer,
                 _as_bool(sparse_dlm_deep_only_transfer),
+            )
+        elif self.MODEL_NAME == "llada" and _as_bool(moe_expert_patch):
+            patched_count = patch_moe_experts(self.model)
+            eval_logger.info(
+                "Applied LLaDA MoE expert patch to %s blocks", patched_count
             )
 
         self.model_type = self.MODEL_NAME

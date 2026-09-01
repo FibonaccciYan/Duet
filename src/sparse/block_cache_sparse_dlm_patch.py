@@ -269,7 +269,7 @@ def _select_positions(
             return torch.cat((decoded, old_masks))
 
     mask_positions = torch.where(mask)[0]
-    mask_logits = model.lm_head(hidden_states[:, mask_positions])
+    mask_logits = model.lm_head(hidden_states[:, mask_positions]).float()
     _, confidence = _sample_with_confidence(
         model,
         mask_logits,
@@ -686,7 +686,7 @@ def _cached_forward(
     ]
     mask_hidden = hidden_states.index_select(1, selected_mask_positions)
     return (
-        model.lm_head(mask_hidden),
+        model.lm_head(mask_hidden).float(),
         selected_positions,
         selected_mask_positions,
     )

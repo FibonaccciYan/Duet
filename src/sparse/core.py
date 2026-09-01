@@ -325,18 +325,16 @@ def patch_model(
     refresh_step=-1,
     selection_layer=5,
     deep_only_transfer=False,
-    query_sparse=True,
+    query_sparse=False,
     prefix_sparse=False,
     prefix_token_budget=256,
     prefix_chunk_size=256,
     losa=False,
     losa_active_topk=5,
-    moe_expert_patch=None,
+    moe_expert_patch=True,
 ):
     """Enable requested sparse features through the matching model patch."""
     family = resolve_model_family(model, model_name)
-    if moe_expert_patch is None:
-        moe_expert_patch = family == "llada"
     if family == "llada":
         from .block_cache_sparse_dlm_patch import patch_llada_model
 
@@ -356,6 +354,9 @@ def patch_model(
             losa=losa,
             losa_active_topk=losa_active_topk,
         )
+        
+        if moe_expert_patch:
+            patch_moe_experts(model)
     else:
         from .sdar_block_diffusion_patch import patch_sdar_model
 
@@ -378,7 +379,5 @@ def patch_model(
             losa_active_topk=losa_active_topk,
         )
 
-    if moe_expert_patch:
-        patch_moe_experts(model)
     model._sparse_patch_family = family
     return model

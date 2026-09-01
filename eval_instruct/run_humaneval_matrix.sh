@@ -7,7 +7,7 @@ model_type="${MODEL_TYPE:-llada}"
 if [[ "${model_type}" == "sdar" ]]; then
   default_output_root="${script_dir}/../../sdar_exp/humaneval_matrix/sequential"
 else
-  default_output_root="${script_dir}/../../llada_exp/humaneval_matrix"
+  default_output_root="${script_dir}/../../llada_exp/humaneval_matrix_v1.2"
 fi
 exec env \
   BENCHMARK=humaneval \

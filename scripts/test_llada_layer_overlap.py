@@ -45,8 +45,8 @@ def prediction_scores(model, logits, args):
 
 def layer_logits(model, outputs, layer, num_layers):
     hidden_states = outputs.hidden_states[layer]
-    if layer < num_layers:
-        hidden_states = model.model.norm(hidden_states)
+    # if layer < num_layers:
+    #     hidden_states = model.model.norm(hidden_states)
     return model.lm_head(hidden_states).float()
 
 
