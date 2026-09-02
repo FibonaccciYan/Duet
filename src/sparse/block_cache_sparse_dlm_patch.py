@@ -91,7 +91,9 @@ def _new_losa_state(query, block_length):
     }
 
 
-def _losa_active_indices(state, query, query_positions, active_topk):
+def _losa_active_indices(
+    state, query, query_positions, active_topk, return_metadata=False
+):
     positions = query_positions.to(device=query.device, dtype=torch.long)
     if state.get("fully_valid", False) and state.get("use_triton_delta", True):
         delta = losa_query_delta(query, state["previous_query"], positions)
@@ -102,16 +104,34 @@ def _losa_active_indices(state, query, query_positions, active_topk):
     valid = state["valid"].index_select(1, positions)[0]
     missing = torch.where(~valid)[0]
     if missing.numel() == positions.numel():
-        return torch.arange(positions.numel(), device=query.device)
+        active = torch.arange(positions.numel(), device=query.device)
+        if return_metadata:
+            delta = torch.full(
+                (positions.numel(),), torch.nan, device=query.device
+            )
+            return active, valid, delta
+        return active
 
     active = missing.tolist()
     remaining = max(0, min(int(active_topk), positions.numel()) - len(active))
-    if remaining:
+    stable = None
+    stable_delta = None
+    if remaining or return_metadata:
         stable = torch.where(valid)[0]
         previous = state["previous_query"].index_select(2, positions[stable])
-        delta = (query[:, :, stable, :] - previous).float().pow(2).mean(dim=(1, 3))[0]
-        active.extend(stable[torch.topk(delta, k=remaining).indices].tolist())
-    return torch.tensor(active, dtype=torch.long, device=query.device)
+        stable_delta = (
+            (query[:, :, stable, :] - previous).float().pow(2).mean(dim=(1, 3))[0]
+        )
+        if remaining:
+            active.extend(
+                stable[torch.topk(stable_delta, k=remaining).indices].tolist()
+            )
+    active = torch.tensor(active, dtype=torch.long, device=query.device)
+    if return_metadata:
+        delta = torch.full((positions.numel(),), torch.nan, device=query.device)
+        delta.index_copy_(0, stable, stable_delta)
+        return active, valid, delta
+    return active
 
 
 def _losa_attention_forward(
@@ -183,6 +203,17 @@ def _losa_attention_forward(
         prefix_key, prefix_value = key[:, :, :prefix_length], value[:, :, :prefix_length]
         query_positions = context["query_positions"]
         positions = query_positions.to(device=query.device, dtype=torch.long)
+        collector = getattr(model, "_llada_query_losa_collector", None)
+        if collector is not None:
+            collector.record_losa(
+                self.layer_idx,
+                positions,
+                torch.zeros_like(positions, dtype=torch.bool),
+                torch.full(
+                    (positions.numel(),), torch.nan, device=query.device
+                ),
+                torch.arange(positions.numel(), device=query.device),
+            )
         if prefix_length:
             prefix_mask = attention_mask[..., :prefix_length]
             prefix_output, prefix_lse = _attention_output_lse(
@@ -218,9 +249,25 @@ def _losa_attention_forward(
     )
 
     query_positions = context["query_positions"]
-    active_indices = _losa_active_indices(
-        state, query, query_positions, context["active_topk"]
+    collector = getattr(model, "_llada_query_losa_collector", None)
+    active_result = _losa_active_indices(
+        state,
+        query,
+        query_positions,
+        context["active_topk"],
+        return_metadata=collector is not None,
     )
+    if collector is None:
+        active_indices = active_result
+    else:
+        active_indices, valid, delta = active_result
+        collector.record_losa(
+            self.layer_idx,
+            query_positions,
+            valid,
+            delta,
+            active_indices,
+        )
     if prefix_length:
         active_query = query.index_select(2, active_indices)
         active_prefix_mask = prefix_mask.index_select(2, active_indices)
@@ -280,7 +327,10 @@ def _select_positions(
     """Apply LLaDA's final confidence selector to shallow Query logits."""
     mask = input_ids[0] == mask_id
     mask_count = int(mask.sum().item())
+    collector = getattr(model, "_llada_query_losa_collector", None)
     if ratio >= 1.0 or mask_count <= dense_fallback_mask_count:
+        if collector is not None:
+            collector.record_query(None, None, "dense")
         return None
 
     candidate_count = min(max(1, math.ceil(mask_count * ratio)), mask_count)
@@ -292,7 +342,10 @@ def _select_positions(
     ):
         old_masks = cached_positions[mask[cached_positions]]
         if old_masks.numel() >= candidate_count:
-            return torch.cat((decoded, old_masks))
+            selected = torch.cat((decoded, old_masks))
+            if collector is not None:
+                collector.record_query(None, selected, "reuse")
+            return selected
 
     mask_positions = torch.where(mask)[0]
     mask_logits = model.lm_head(hidden_states[:, mask_positions]).float()
@@ -310,7 +363,12 @@ def _select_positions(
         selected_masks = mask_positions[
             torch.topk(confidence[0], k=candidate_count).indices
         ]
-    return torch.cat((decoded, selected_masks))
+    selected = torch.cat((decoded, selected_masks))
+    if collector is not None:
+        collector.record_query(
+            (mask_positions, confidence[0]), selected, "fresh"
+        )
+    return selected
 
 
 def _transfer_tokens(
@@ -879,6 +937,14 @@ def _block_cache_generate(self, *args, **kwargs):
             block_input = x[:, block_start:block_end]
             step_mask = full_attention_mask[:, :, block_start:block_end, :block_end]
             step_positions = position_ids[:, block_start:block_end]
+            collector = getattr(self, "_llada_query_losa_collector", None)
+            if collector is not None:
+                collector.begin_step(
+                    block_idx,
+                    selection_state["step"],
+                    old_block_tokens[0],
+                    mask_id,
+                )
             logits, selected_positions, logit_positions = _cached_forward(
                 self,
                 block_input,
@@ -925,6 +991,8 @@ def _block_cache_generate(self, *args, **kwargs):
                     raise RuntimeError(
                         "Query-sparse transfer changed a position without a corresponding logit"
                     )
+            if collector is not None:
+                collector.end_step(transfer[0])
             x[:, block_start:block_end] = block_tokens
             if not active_block_mask.any() and not transfer.any():
                 break
