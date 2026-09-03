@@ -195,7 +195,6 @@ def _select_positions(
         mask_count,
     )
     decoded = torch.where(~mask)[0]
-    print(f"Debug: selection_step={selection_step}, selection_interval={selection_interval}, candidate_count={candidate_count}, mask_count={mask_count}")
     if (
         cached_positions is not None
         and selection_interval > 1
@@ -203,12 +202,7 @@ def _select_positions(
     ):
         old_masks = cached_positions[mask[cached_positions]]
         if old_masks.numel() >= candidate_count:
-            print(f"\tUsing cached selection: {old_masks[:candidate_count]}")
             return torch.cat((decoded, old_masks))
-        # return torch.cat((decoded, old_masks))
-
-
-    print(f"\tUpdate selection")
     mask_positions = torch.where(mask)[0]
     if strategy == "sequential":
         return torch.cat((decoded, mask_positions[:candidate_count]))

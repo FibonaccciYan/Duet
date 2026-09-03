@@ -74,19 +74,20 @@ bash scripts/test.sh
 ```
 
 Set `PREFIX_SPARSE=false` to retain the full prefix cache. `PREFIX_CHUNK_SIZE`
-controls peak memory used by the Python Adamas selector and defaults to 256.
+controls peak memory used by the Adamas selector and defaults to 256.
 
-The experimental PyTorch LoSA reference path is disabled by default. It caches
-prefix attention output/LSE between refinement steps and merges it with the
-fresh current-block attention using online-softmax state:
+The experimental LoSA reference path is disabled by default. It caches prefix
+attention output/LSE between refinement steps and merges it with the fresh
+current-block attention using online-softmax state:
 
 ```bash
 LOSA=true LOSA_ACTIVE_TOPK=5 QUERY_SPARSE=false PREFIX_SPARSE=false \
 bash scripts/test.sh
 ```
 
-This is a correctness/reference path, not a Triton kernel. Keep query and
-prefix sparse disabled for the first numerical comparison.
+This remains a correctness/reference path even though its stable CUDA hotspots
+now use Triton with PyTorch fallbacks. Keep query and prefix sparse disabled for
+the first numerical comparison.
 
 Use `PATTERN=default` for the native LLaDA baseline. `PATTERN=patch` is the
 default and routes every feature through `src.sparse.patch_model`.
@@ -120,9 +121,8 @@ step and always keeps the complete current block. LoSA reuses prefix attention
 output/LSE while recomputing current-block attention every step. Setting
 `PREFIX_TOKEN_BUDGET` at least as large as the prefix, or
 `LOSA_ACTIVE_TOPK >= BLOCK_LENGTH`, falls back to the corresponding dense path.
-Both features can be combined with each other and with query sparse, although
-the current Python reference kernels are intended for quality validation before
-long-context performance tuning.
+Both features can be combined with each other and with query sparse. They are
+still intended for quality validation before long-context performance tuning.
 
 The SDAR adapter applies query selection after `layers[5]` (the former
 1-based layer 6) and keeps all decoded
@@ -143,6 +143,94 @@ support is:
 | LLaDA | yes | yes | yes | yes |
 | SDAR | yes | yes | yes | no-op on its dense experts |
 
+## Eval defaults and Triton sparse kernels
+
+`eval_instruct/eval.sh` is the source of truth for evaluation defaults. In
+particular, its current sparse settings intentionally differ between the two
+model families:
+
+| Setting | LLaDA eval | SDAR eval |
+| --- | ---: | ---: |
+| dtype | BF16 | FP16 |
+| Query ratio | 0.7 | 0.5 |
+| zero-based selection layer | 1 | 5 |
+| selection interval | 4 | 1 |
+| dense fallback mask count | 4 | 0 |
+| prefix sparse | enabled | disabled |
+| refresh step | not used | -1 (disabled) |
+| threshold | 0.5 | 1.0 |
+
+CUDA execution uses the shared Triton sparse kernels when Triton is available:
+
+- Adamas fuses quantized Query/Key distance materialization and reduction for
+  both model families. The final PyTorch top-k/union rule is unchanged. SDAR's
+  three-feature Query+Prefix+LoSA combination retains the PyTorch distance
+  materialization because its Query trajectory is sensitive to equal-distance
+  top-k tie ordering; standalone Prefix Sparse still uses Triton.
+- LoSA fuses the per-position Query-delta reduction for both model families,
+  except for the same SDAR three-feature safety fallback described below.
+- LoSA attention output/LSE uses a GQA-aware online-softmax kernel for SDAR's
+  FP16 eval path when the prefix is longer than 256 tokens. Compact
+  Prefix-Sparse caches, SDAR's Query+Prefix+LoSA combination, and LLaDA BF16
+  deliberately retain the PyTorch path. The SDAR combination falls back for
+  all three new reductions: Triton has no useful compact-prefix win, and small
+  reduction-order deltas can change its greedy diffusion trajectory.
+- Query Sparse already uses the fused Triton K/V cache writer in
+  `src/sparse/core.py`; profiling did not justify another Query kernel.
+
+Set `SPARSE_DLM_TRITON=false` to force all new sparse reference paths back to
+PyTorch for A/B checks. The narrower diagnostic switches
+`SPARSE_DLM_TRITON_ADAMAS`, `SPARSE_DLM_TRITON_LOSA_DELTA`, and
+`SPARSE_DLM_TRITON_LOSA_ATTENTION` can disable one kernel family at a time.
+The shape-level benchmark used during development is reproducible with:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 /home/ysy/anaconda3/envs/llada/bin/python \
+  scripts/bench_sparse_ops.py --model sdar --prefix-length 4096
+```
+
+The end-to-end long-context benchmark is `scripts/bench_long_context.py`.
+`context_tokens` is the complete prompt-plus-generation window; the standard
+run uses 64 requested output tokens, block/steps 32/32, eval dtype/settings,
+and one fresh process per data point. On GPU 2, the measured PyTorch -> Triton
+times were:
+
+| `eval.sh` configuration | 8K | 16K | 32K |
+| --- | ---: | ---: | ---: |
+| LLaDA: Query+Prefix | 8.943s -> 8.642s (1.03x) | 15.122s -> 14.283s (1.06x) | 29.321s -> 27.494s (1.07x) |
+| SDAR: Query only | 4.975s -> 5.317s (0.94x) | 10.859s -> 10.782s (1.01x) | 34.387s -> 34.958s (0.98x) |
+
+The SDAR eval defaults do not enable Prefix Sparse or LoSA, so none of the new
+Triton kernels runs in that row; the small positive/negative differences are
+single-run timing noise, not an optimization. Feature-isolated results are:
+
+| Path | Model | 8K | 16K | 32K |
+| --- | --- | ---: | ---: | ---: |
+| Prefix Sparse | LLaDA | 8.325s -> 7.992s (1.04x) | 14.574s -> 13.718s (1.06x) | 28.631s -> 26.853s (1.07x) |
+| Prefix Sparse | SDAR | 8.118s -> 6.648s (1.22x) | 16.205s -> 12.761s (1.27x) | 41.779s -> 35.809s (1.17x) |
+| LoSA | LLaDA | 9.114s -> 9.021s (1.01x) | 15.070s -> 14.848s (1.01x) | 30.541s -> 30.091s (1.01x) |
+| LoSA | SDAR | 6.248s -> 6.150s (1.02x) | 11.952s -> 11.963s (1.00x) | 38.027s -> 37.694s (1.01x) |
+| Query+Prefix+LoSA | LLaDA | 9.670s -> 9.165s (1.06x) | 15.983s -> 14.960s (1.07x) | 14.870s -> 14.197s (1.05x) |
+
+Every A/B pair in both tables produced identical generated-token checksums.
+LoSA-only gains are small because dense prompt prefill dominates end-to-end
+time; the LoSA operator microbenchmarks above isolate the larger kernel-level
+gain. SDAR originally OOMed during dense prefill at 16K. Its prefill now uses
+the same block-causal mask in aligned 4K-token KV-cache chunks above 8K; peak
+allocated memory was 43.2/45.1/76.7 GiB at 8K/16K/32K. The normal <=8K path
+remains a single prefill call and preserves its previous output checksum.
+
+For example, run an isolated 32K SDAR Prefix-Sparse A/B with:
+
+```bash
+CUDA_VISIBLE_DEVICES=2 SPARSE_DLM_TRITON=false \
+  /home/ysy/anaconda3/envs/dream/bin/python scripts/bench_long_context.py \
+  --model sdar --mode prefix --contexts 32768 --gen-length 64
+CUDA_VISIBLE_DEVICES=2 SPARSE_DLM_TRITON=true \
+  /home/ysy/anaconda3/envs/dream/bin/python scripts/bench_long_context.py \
+  --model sdar --mode prefix --contexts 32768 --gen-length 64
+```
+
 ## SDAR 状态与后续接手说明（2026-08-29）
 
 本节是 SDAR 工作的单一交接记录。历史结果位于
@@ -158,7 +246,8 @@ support is:
 - SDAR 的 LoSA 在 refinement step 间缓存 prefix attention output/LSE，仅对
   `LOSA_ACTIVE_TOPK` 个 query 刷新 prefix 状态；current-block attention 每步重算，
   再用 online softmax 合并。prefill、首个 dense denoise 和最终 block KV 写入仍走
-  SDAR 原生路径。该实现目前是 PyTorch correctness/reference path，默认关闭。
+  SDAR 原生路径。该实现仍是 correctness/reference path，稳定热点使用 Triton，
+  其余情况回退 PyTorch；默认关闭。
 - GPU 5 的 `SDAR-8B-Chat-b32`、block/steps=32、64-token smoke 已覆盖 Adamas、
   LoSA 及与 Query Sparse 的三者组合。当前 prefix 只有 32 token 时，Adamas
   full-budget 和 LoSA full-active fallback 的生成文本都与 dense 一致；实际压缩/

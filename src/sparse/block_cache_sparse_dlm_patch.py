@@ -10,6 +10,11 @@ from .core import (
     _legacy_prefix_cache,
     _sample_with_confidence,
 )
+from .triton_kernels import (
+    adamas_distances,
+    attention_output_lse,
+    losa_query_delta,
+)
 
 
 def _repeat_kv(hidden_states, num_key_value_groups):
@@ -23,8 +28,22 @@ def _repeat_kv(hidden_states, num_key_value_groups):
     )
 
 
-def _attention_output_lse(query, key, value, attention_mask, num_key_value_groups):
+def _attention_output_lse(
+    query,
+    key,
+    value,
+    attention_mask,
+    num_key_value_groups,
+    use_triton=True,
+):
     """Reference attention returning the normalized output and row-wise LSE."""
+    triton_result = (
+        attention_output_lse(query, key, value, attention_mask)
+        if use_triton
+        else None
+    )
+    if triton_result is not None:
+        return triton_result
     key = _repeat_kv(key, num_key_value_groups)
     value = _repeat_kv(value, num_key_value_groups)
     scores = torch.matmul(query, key.transpose(-2, -1))
@@ -68,11 +87,18 @@ def _new_losa_state(query, block_length):
             device=query.device,
         ),
         "valid": torch.zeros(batch, block_length, dtype=torch.bool, device=query.device),
+        "fully_valid": False,
     }
 
 
 def _losa_active_indices(state, query, query_positions, active_topk):
     positions = query_positions.to(device=query.device, dtype=torch.long)
+    if state.get("fully_valid", False) and state.get("use_triton_delta", True):
+        delta = losa_query_delta(query, state["previous_query"], positions)
+        if delta is not None:
+            return torch.topk(
+                delta, k=min(int(active_topk), positions.numel())
+            ).indices
     valid = state["valid"].index_select(1, positions)[0]
     missing = torch.where(~valid)[0]
     if missing.numel() == positions.numel():
@@ -379,7 +405,9 @@ def _hadamard_transform(x):
     return output.reshape_as(x) / math.sqrt(size)
 
 
-def _adamas_prefix_indices(query, key, token_budget, chunk_size=256):
+def _adamas_prefix_indices(
+    query, key, token_budget, chunk_size=256, use_triton=True
+):
     """Select a shared prefix KV set from the union of query candidates."""
     prefix_length = key.shape[-2]
     budget = min(int(token_budget), prefix_length)
@@ -416,12 +444,17 @@ def _adamas_prefix_indices(query, key, token_budget, chunk_size=256):
     scores = []
     for start in range(0, prefix_length, chunk_size):
         chunk = key_code[:, :, start : start + chunk_size]
-        distances = (
-            query_groups[..., None, :] - chunk[:, :, None, None, :, :]
-        ).abs().sum(dim=-1)
-        scores.append(distances.amin(dim=(1, 2, 3)))
+        flat_distances = adamas_distances(query_code, chunk) if use_triton else None
+        if flat_distances is None:
+            distances = (
+                query_groups[..., None, :] - chunk[:, :, None, None, :, :]
+            ).abs().sum(dim=-1)
+            flat_distances = distances[0].reshape(-1, chunk.shape[-2])
+            scores.append(distances.amin(dim=(1, 2, 3)))
+        else:
+            scores.append(flat_distances.amin(dim=0, keepdim=True))
         chunk_length = chunk.shape[-2]
-        chunk_distances = distances[0].reshape(-1, chunk_length)
+        chunk_distances = flat_distances
         chunk_indices = torch.arange(
             start, start + chunk_length, device=key.device
         ).expand_as(chunk_distances)
@@ -477,6 +510,7 @@ def _compact_prefix_cache(
     block_position_ids,
     token_budget,
     chunk_size,
+    use_triton_adamas=True,
 ):
     prefix_cache = _legacy_prefix_cache(cache, prefix_length)
     if not prefix_cache:
@@ -492,7 +526,13 @@ def _compact_prefix_cache(
         if query is None:
             raise RuntimeError("Failed to capture a layer query during dense refresh")
         query = _apply_rotary(query, cos, sin)
-        indices = _adamas_prefix_indices(query, key, token_budget, chunk_size)
+        indices = _adamas_prefix_indices(
+            query,
+            key,
+            token_budget,
+            chunk_size,
+            use_triton=use_triton_adamas,
+        )
         compact_cache.append(
             (
                 key.index_select(2, indices).contiguous(),
@@ -670,6 +710,8 @@ def _cached_forward(
                 state["prefix_output"].index_copy_(2, positions, prefix_output)
                 state["prefix_lse"].index_copy_(2, positions, prefix_lse)
                 state["valid"][0, positions] = True
+                if positions.numel() == state["valid"].shape[1]:
+                    state["fully_valid"] = True
     finally:
         if losa_context is not None:
             model._llada_losa_context = None

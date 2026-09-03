@@ -80,6 +80,12 @@ def _sdar_losa_attention_forward(
             **kwargs,
         )
 
+    config = getattr(model, "config", None)
+    use_triton_attention = not (
+        getattr(config, "sdar_query_sparse", False)
+        and getattr(config, "sdar_prefix_sparse", False)
+    )
+
     batch_size, query_length, _ = hidden_states.shape
     query = self.q_norm(
         self.q_proj(hidden_states).view(
@@ -128,6 +134,7 @@ def _sdar_losa_attention_forward(
                 cached_value[:, :, :prefix_length],
                 mask[..., :prefix_length],
                 self.num_key_value_groups,
+                use_triton=use_triton_attention,
             )
         else:
             prefix_output = query.new_zeros(
@@ -160,7 +167,12 @@ def _sdar_losa_attention_forward(
     )
     prefix_mask, block_mask = mask[..., :prefix_length], mask[..., prefix_length:]
     block_output, block_lse = _attention_output_lse(
-        query, block_key, block_value, block_mask, self.num_key_value_groups
+        query,
+        block_key,
+        block_value,
+        block_mask,
+        self.num_key_value_groups,
+        use_triton=use_triton_attention,
     )
     active_indices = _losa_active_indices(
         state, query, positions, context["active_topk"]
@@ -172,6 +184,7 @@ def _sdar_losa_attention_forward(
             prefix_value,
             prefix_mask.index_select(2, active_indices),
             self.num_key_value_groups,
+            use_triton=use_triton_attention,
         )
     else:
         active_prefix_output = query.new_zeros(
@@ -375,6 +388,10 @@ def _sparse_cached_forward(
                 state = states.get(layer_idx)
                 if state is None:
                     state = _new_losa_state(query, input_ids.shape[1])
+                    state["use_triton_delta"] = not (
+                        getattr(model.config, "sdar_query_sparse", False)
+                        and getattr(model.config, "sdar_prefix_sparse", False)
+                    )
                     states[layer_idx] = state
                 state["previous_query"].index_copy_(2, positions, query)
             for layer_idx, positions, prefix_output, prefix_lse in losa_context[
@@ -384,6 +401,8 @@ def _sparse_cached_forward(
                 state["prefix_output"].index_copy_(2, positions, prefix_output)
                 state["prefix_lse"].index_copy_(2, positions, prefix_lse)
                 state["valid"][0, positions] = True
+                if positions.numel() == state["valid"].shape[1]:
+                    state["fully_valid"] = True
     finally:
         if losa_context is not None:
             model._sdar_losa_context = None
@@ -503,6 +522,10 @@ def _block_diffusion_generate(self, *args, **kwargs):
                     position_ids,
                     prefix_token_budget,
                     prefix_chunk_size,
+                    # With all three sparse features active, SDAR's Query
+                    # trajectory is sensitive to top-k tie ordering even
+                    # though Triton/PyTorch Adamas distances are identical.
+                    use_triton_adamas=not (query_sparse and active_losa),
                 )
             else:
                 prefix_cache = _legacy_prefix_cache(dense_cache, block_start)

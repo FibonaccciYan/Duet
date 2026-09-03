@@ -172,18 +172,27 @@ def block_diffusion_generate(
     prefill_blocks = prompt_length // block_length
     prefill_length = prefill_blocks * block_length
 
-    # Prefill stage
+    # Prefill stage.  The block-causal mask lets aligned prompt chunks be
+    # written to the same KV cache independently.  Keeping the query side
+    # bounded avoids SDPA materializing an O(prompt_length**2) score tensor.
     if prefill_length > 0:
-        cur_x = x[:, :prefill_length]
-        cur_attn_mask = block_diffusion_attention_mask[:,
-                                                       :prefill_length, :prefill_length]
-        cur_position_ids = position_ids[:, :prefill_length]
-        model(cur_x,
-              attention_mask=cur_attn_mask,
-              position_ids=cur_position_ids,
-              past_key_values=past_key_values,
-              use_cache=True,
-              store_kv=True)
+        prefill_chunk_length = (
+            prefill_length if prefill_length <= 256 * block_length
+            else 128 * block_length
+        )
+        for chunk_start in range(0, prefill_length, prefill_chunk_length):
+            chunk_end = min(chunk_start + prefill_chunk_length, prefill_length)
+            cur_x = x[:, chunk_start:chunk_end]
+            cur_attn_mask = block_diffusion_attention_mask[
+                :, chunk_start:chunk_end, :chunk_end
+            ]
+            cur_position_ids = position_ids[:, chunk_start:chunk_end]
+            model(cur_x,
+                  attention_mask=cur_attn_mask,
+                  position_ids=cur_position_ids,
+                  past_key_values=past_key_values,
+                  use_cache=True,
+                  store_kv=True)
 
     num_transfer_tokens = get_num_transfer_tokens(
         block_length, denoising_steps)
