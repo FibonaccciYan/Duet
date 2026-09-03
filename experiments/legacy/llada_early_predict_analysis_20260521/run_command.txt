@@ -1,1 +1,0 @@
-CUDA_VISIBLE_DEVICES=4 GEN_LENGTH=128 BLOCK_LENGTH=32 STEPS=32 /home/ysy/anaconda3/envs/llada/bin/python LLaDA/test.py --enable_layer_candidate_ratios --layer_candidate_ratio 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 --no_plot_attentions
