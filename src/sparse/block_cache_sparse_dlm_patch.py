@@ -668,27 +668,28 @@ def _compact_prefix_cache(
         return prefix_cache, tuple(indices for _ in prefix_cache)
 
     cos, sin = model.model.rotary_emb(captured_queries[0], block_position_ids)
+    # Token positions are shared across layers; select them once from the most
+    # semantically mature query/key pair, then gather each layer's own KV.
+    selection_layer = len(prefix_cache) - 1
+    query = captured_queries[selection_layer]
+    if query is None:
+        raise RuntimeError("Failed to capture a layer query during dense refresh")
+    indices = _adamas_prefix_indices(
+        _apply_rotary(query, cos, sin),
+        prefix_cache[selection_layer][0],
+        token_budget,
+        chunk_size,
+        use_triton=use_triton_adamas,
+    )
     compact_cache = []
-    prefix_indices = []
-    for query, (key, value) in zip(captured_queries, prefix_cache):
-        if query is None:
-            raise RuntimeError("Failed to capture a layer query during dense refresh")
-        query = _apply_rotary(query, cos, sin)
-        indices = _adamas_prefix_indices(
-            query,
-            key,
-            token_budget,
-            chunk_size,
-            use_triton=use_triton_adamas,
-        )
+    for key, value in prefix_cache:
         compact_cache.append(
             (
                 key.index_select(2, indices).contiguous(),
                 value.index_select(2, indices).contiguous(),
             )
         )
-        prefix_indices.append(indices)
-    return tuple(compact_cache), tuple(prefix_indices)
+    return tuple(compact_cache), tuple(indices for _ in prefix_cache)
 
 
 def _layer_attention_mask(

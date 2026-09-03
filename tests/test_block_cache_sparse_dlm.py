@@ -6,6 +6,7 @@ from unittest.mock import patch as mock_patch
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
+from transformers.cache_utils import DynamicCache
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -16,6 +17,7 @@ from src.sparse.block_cache_sparse_dlm_patch import (
     _adamas_prefix_indices,
     _attention_output_lse,
     _cached_forward,
+    _compact_prefix_cache,
     _dual_cache_from_dense,
     _hadamard_transform,
     _legacy_prefix_cache,
@@ -71,6 +73,35 @@ def _block_mask(num_blocks, block_length, dtype):
 
 
 class BlockCacheSparsePatchTest(unittest.TestCase):
+    def test_prefix_compaction_selects_once_and_shares_indices(self):
+        cache = DynamicCache.from_legacy_cache(
+            tuple(
+                (torch.randn(1, 1, 4, 2), torch.randn(1, 1, 4, 2))
+                for _ in range(2)
+            )
+        )
+        model = SimpleNamespace(
+            model=SimpleNamespace(
+                layers=[None, None],
+                rotary_emb=lambda query, positions: (
+                    torch.ones(1, positions.shape[-1], query.shape[-1]),
+                    torch.zeros(1, positions.shape[-1], query.shape[-1]),
+                ),
+            )
+        )
+        queries = [torch.randn(1, 1, 2, 2) for _ in range(2)]
+        with mock_patch(
+            "src.sparse.block_cache_sparse_dlm_patch._adamas_prefix_indices",
+            return_value=torch.tensor([1, 3]),
+        ) as selector:
+            compact, indices = _compact_prefix_cache(
+                model, cache, 4, queries, torch.arange(2).unsqueeze(0), 2, 2
+            )
+
+        selector.assert_called_once()
+        self.assertTrue(all(value.tolist() == [1, 3] for value in indices))
+        self.assertTrue(all(key.shape[-2] == 2 for key, _ in compact))
+
     def test_losa_online_merge_matches_concatenated_attention(self):
         torch.manual_seed(1)
         query = torch.randn(1, 4, 3, 8)

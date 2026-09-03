@@ -264,15 +264,29 @@ screen. On the full 164 problems, Prefix-512 scored 71/164 official and 135/164
 after indentation normalization, versus dense 74/164 and 137/164. Prefix-1024
 preserved the dense official score at 74/164 and reached 138/164 normalized, so
 its 0.36% latency cost relative to Prefix-512 is the better accuracy/speed
-tradeoff. LoSA did
-not qualify for further late/deep scheduling: at budget 1024 it took 27.674s
+tradeoff. LoSA did not qualify for further late/deep scheduling: at budget 1024 it took 27.674s
 versus 27.154s without LoSA in the matched 32K sweep, and its 32-case score fell
 from 13/32 official, 31/32 normalized for Query+Prefix to 11/32 and 28/32.
 
-The same 32K steady comparison on SDAR did not find an end-to-end sparse win:
-dense was 34.939s, Query-only 34.897s, Prefix-512 35.792s, and Query+Prefix-512
-35.598s. Thus the currently measured deployment candidate is model-specific:
-Prefix-1024 for LLaDA and dense for SDAR, pending a faster SDAR selector/path.
+The original SDAR implementation did not find an end-to-end sparse win: dense
+was 34.939s while Prefix-512 was 35.792s. Profiling showed that Adamas selection
+cost 12.1ms per LLaDA layer and 16.3ms per SDAR layer at 32K. Prefix token
+positions are now selected once from the final layer and shared, while every
+layer continues to gather its own KV values. Steady fixed-work results are:
+
+| Model/config | 8K | 16K | 32K |
+| --- | ---: | ---: | ---: |
+| LLaDA dense | 6.740s | 12.577s | 26.707s |
+| LLaDA Prefix-1024 shared | 6.403s (1.05x) | 12.323s (1.02x) | 25.426s (1.05x) |
+| SDAR dense | 6.280s | 12.268s | 35.418s |
+| SDAR Prefix-512 shared | 5.846s (1.07x) | 11.958s (1.03x) | 34.600s (1.02x) |
+
+The full HumanEval results also stay within run-level variance. LLaDA shared
+Prefix-1024 scored 74/164 official and 137/164 normalized, exactly matching
+dense. SDAR shared Prefix-512 scored 129/164 official and 129/164 normalized,
+versus dense 129/164 and 130/164; it also improves over the earlier per-layer
+Prefix result of 127/164 official and 129/164 normalized. The deployment
+candidates are therefore Prefix-1024 for LLaDA and Prefix-512 for SDAR.
 
 For the attention-aware estimator on GPU 5, fixed-work LLaDA LoSA-only wall
 time was 9.964s/15.198s/28.770s at 8K/16K/32K. The corresponding query-score
