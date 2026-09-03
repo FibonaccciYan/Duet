@@ -223,8 +223,10 @@ The end-to-end long-context benchmark is `scripts/bench_long_context.py`.
 run uses 64 requested output tokens, disables early EOS for fixed work, and
 uses block/steps 32/32 with eval dtype/settings. Returned sequences may still
 be trimmed at EOS, so compare wall time or `requested_tokens_per_second`, not
-the legacy returned-token throughput field. On GPU 2, the measured PyTorch ->
-Triton times were:
+the legacy returned-token throughput field. Its explicit `dense`, `query`,
+`prefix`, and `query_prefix` modes make sparse-vs-dense comparisons independent
+of each model's eval defaults; `--prefix-token-budget` controls the Prefix
+Sparse budget. On GPU 2, the measured PyTorch -> Triton times were:
 
 | `eval.sh` configuration | 8K | 16K | 32K |
 | --- | ---: | ---: | ---: |
@@ -250,6 +252,27 @@ gain. SDAR originally OOMed during dense prefill at 16K. Its prefill now uses
 the same block-causal mask in aligned 4K-token KV-cache chunks above 8K; peak
 allocated memory was 43.2/45.1/76.7 GiB at 8K/16K/32K. The normal <=8K path
 remains a single prefill call and preserves its previous output checksum.
+
+For deployment-oriented selection, a later fixed-work 32K comparison used two
+consecutive measurements per loaded model and reports the second (steady)
+measurement. On LLaDA, dense was 26.394s while Prefix Sparse budgets 512, 1024,
+and 2048 were 25.782s, 25.877s, and 25.928s respectively (1.024x, 1.020x, and
+1.018x). Query+Prefix at budget 1024 was 26.328s (1.003x), so query selection
+cost consumed nearly all of the Prefix gain. Prefix 512/1024/2048 each scored
+9/32 official and 30/32 after indentation normalization on the same HumanEval
+screen. On the full 164 problems, Prefix-512 scored 71/164 official and 135/164
+after indentation normalization, versus dense 74/164 and 137/164. Prefix-1024
+preserved the dense official score at 74/164 and reached 138/164 normalized, so
+its 0.36% latency cost relative to Prefix-512 is the better accuracy/speed
+tradeoff. LoSA did
+not qualify for further late/deep scheduling: at budget 1024 it took 27.674s
+versus 27.154s without LoSA in the matched 32K sweep, and its 32-case score fell
+from 13/32 official, 31/32 normalized for Query+Prefix to 11/32 and 28/32.
+
+The same 32K steady comparison on SDAR did not find an end-to-end sparse win:
+dense was 34.939s, Query-only 34.897s, Prefix-512 35.792s, and Query+Prefix-512
+35.598s. Thus the currently measured deployment candidate is model-specific:
+Prefix-1024 for LLaDA and dense for SDAR, pending a faster SDAR selector/path.
 
 For the attention-aware estimator on GPU 5, fixed-work LLaDA LoSA-only wall
 time was 9.964s/15.198s/28.770s at 8K/16K/32K. The corresponding query-score

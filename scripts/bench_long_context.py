@@ -39,7 +39,15 @@ def parse_args():
     parser.add_argument("--model-path", default=None)
     parser.add_argument(
         "--mode",
-        choices=("eval", "prefix", "losa", "combined"),
+        choices=(
+            "dense",
+            "query",
+            "prefix",
+            "query_prefix",
+            "losa",
+            "combined",
+            "eval",
+        ),
         required=True,
         help="combined enables Query Sparse, Prefix Sparse, and LoSA",
     )
@@ -52,6 +60,7 @@ def parse_args():
         default="query",
     )
     parser.add_argument("--losa-key-samples", type=int, default=32)
+    parser.add_argument("--prefix-token-budget", type=int, default=256)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
@@ -79,6 +88,10 @@ def load(args):
 
     combined = args.mode == "combined"
     eval_mode = args.mode == "eval"
+    query_sparse = args.mode in {"query", "query_prefix", "combined"} or eval_mode
+    prefix_sparse = args.mode in {"prefix", "query_prefix", "combined"} or (
+        eval_mode and not is_sdar
+    )
     patch_model(
         model,
         model_name=args.model,
@@ -89,11 +102,9 @@ def load(args):
         refresh_step=-1 if is_sdar else 2,
         selection_layer=5 if is_sdar else 1,
         deep_only_transfer=False,
-        query_sparse=combined or eval_mode,
-        prefix_sparse=(
-            args.mode in {"prefix", "combined"} or (eval_mode and not is_sdar)
-        ),
-        prefix_token_budget=256,
+        query_sparse=query_sparse,
+        prefix_sparse=prefix_sparse,
+        prefix_token_budget=args.prefix_token_budget,
         prefix_chunk_size=256,
         losa=args.mode in {"losa", "combined"},
         losa_active_topk=args.losa_active_topk,
@@ -221,6 +232,7 @@ def main():
         "losa_active_topk": args.losa_active_topk,
         "losa_score_mode": args.losa_score_mode,
         "losa_key_samples": args.losa_key_samples,
+        "prefix_token_budget": args.prefix_token_budget,
         "results": results,
     }
     if args.output:
