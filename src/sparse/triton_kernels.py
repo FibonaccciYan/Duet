@@ -88,6 +88,7 @@ if TRITON_AVAILABLE:
         query,
         previous,
         positions,
+        weights,
         output,
         query_stride_0,
         query_stride_1,
@@ -97,8 +98,11 @@ if TRITON_AVAILABLE:
         previous_stride_1,
         previous_stride_2,
         previous_stride_3,
+        weight_stride_0,
+        weight_stride_1,
         heads: tl.constexpr,
         head_dim: tl.constexpr,
+        WEIGHTED: tl.constexpr,
         BLOCK: tl.constexpr,
     ):
         query_position = tl.program_id(0)
@@ -120,6 +124,12 @@ if TRITON_AVAILABLE:
         current = tl.load(query + query_offsets, mask=valid).to(tl.float32)
         old = tl.load(previous + previous_offsets, mask=valid).to(tl.float32)
         squared = tl.where(valid, (current - old) * (current - old), 0.0)
+        if WEIGHTED:
+            weight = tl.load(
+                weights + head * weight_stride_0 + dim * weight_stride_1,
+                mask=valid,
+            ).to(tl.float32)
+            squared *= weight
         tl.store(output + query_position, tl.sum(squared) / (heads * head_dim))
 
 
@@ -303,7 +313,7 @@ def adamas_distances(query_code, key_code):
     return output
 
 
-def losa_query_delta(query, previous_query, positions):
+def losa_query_delta(query, previous_query, positions, weights=None):
     if not (
         LOSA_DELTA_ENABLED
         and query.is_cuda
@@ -313,6 +323,14 @@ def losa_query_delta(query, previous_query, positions):
         and query.shape[0] == previous_query.shape[0] == 1
         and query.shape[1] == previous_query.shape[1]
         and query.shape[-1] == previous_query.shape[-1]
+        and (
+            weights is None
+            or (
+                weights.is_cuda
+                and weights.device == query.device
+                and weights.shape == (query.shape[1], query.shape[-1])
+            )
+        )
     ):
         return None
     heads, query_length, head_dim = query.shape[1:]
@@ -321,11 +339,14 @@ def losa_query_delta(query, previous_query, positions):
         query,
         previous_query,
         positions,
+        weights if weights is not None else query,
         output,
         *query.stride(),
         *previous_query.stride(),
+        *(weights.stride() if weights is not None else (0, 0)),
         heads=heads,
         head_dim=head_dim,
+        WEIGHTED=weights is not None,
         BLOCK=triton.next_power_of_2(heads * head_dim),
         num_warps=8,
     )

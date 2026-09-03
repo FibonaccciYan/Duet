@@ -325,6 +325,8 @@ def patch_model(
     prefix_chunk_size=256,
     losa=False,
     losa_active_topk=5,
+    losa_score_mode="query",
+    losa_key_samples=32,
     query_losa_union=False,
     moe_expert_patch=True,
 ):
@@ -348,6 +350,8 @@ def patch_model(
             prefix_chunk_size=prefix_chunk_size,
             losa=losa,
             losa_active_topk=losa_active_topk,
+            losa_score_mode=losa_score_mode,
+            losa_key_samples=losa_key_samples,
             query_losa_union=query_losa_union,
         )
         
@@ -373,6 +377,8 @@ def patch_model(
             prefix_chunk_size=prefix_chunk_size,
             losa=losa,
             losa_active_topk=losa_active_topk,
+            losa_score_mode=losa_score_mode,
+            losa_key_samples=losa_key_samples,
         )
 
     model._sparse_patch_family = family

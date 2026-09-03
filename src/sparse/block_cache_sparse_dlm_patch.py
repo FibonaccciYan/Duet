@@ -28,6 +28,18 @@ def _repeat_kv(hidden_states, num_key_value_groups):
     )
 
 
+def _losa_key_energy(prefix_key, num_key_value_groups, sample_count):
+    """Estimate diagonal E[k^2] once; runtime scoring stays O(QHD)."""
+    prefix_length = prefix_key.shape[2]
+    if prefix_length > sample_count:
+        indices = torch.arange(
+            sample_count, device=prefix_key.device, dtype=torch.long
+        ).mul_(prefix_length).div_(sample_count, rounding_mode="floor")
+        prefix_key = prefix_key.index_select(2, indices)
+    energy = prefix_key.float().square().mean(dim=2)
+    return energy.repeat_interleave(num_key_value_groups, dim=1)[0]
+
+
 def _attention_output_lse(
     query,
     key,
@@ -115,10 +127,14 @@ def _losa_active_indices(
     query_positions,
     active_topk,
     return_metadata=False,
+    score_mode="query",
 ):
     positions = query_positions.to(device=query.device, dtype=torch.long)
+    weights = state.get("key_energy") if score_mode.startswith("key_diag") else None
     if state.get("fully_valid", False) and state.get("use_triton_delta", True):
-        delta = losa_query_delta(query, state["previous_query"], positions)
+        delta = losa_query_delta(
+            query, state["previous_query"], positions, weights=weights
+        )
         if delta is not None:
             active = torch.topk(
                 delta, k=min(int(active_topk), positions.numel())
@@ -144,9 +160,13 @@ def _losa_active_indices(
     if remaining or return_metadata:
         stable = torch.where(valid)[0]
         previous = state["previous_query"].index_select(2, positions[stable])
-        stable_delta = (
-            (query[:, :, stable, :] - previous).float().pow(2).mean(dim=(1, 3))[0]
-        )
+        difference = query[:, :, stable, :].float() - previous.float()
+        if score_mode.startswith("key_diag") and weights is not None:
+            stable_delta = difference.square().mul(weights[None, :, None, :]).mean(
+                dim=(1, 3)
+            )[0]
+        else:
+            stable_delta = difference.square().mean(dim=(1, 3))[0]
         if remaining:
             active.extend(
                 stable[torch.topk(stable_delta, k=remaining).indices].tolist()
@@ -285,6 +305,18 @@ def _losa_attention_forward(
     )
 
     query_positions = context["query_positions"]
+    score_mode = context.get("score_mode", "query")
+    if score_mode.startswith("key_diag") and "key_energy" not in state:
+        if prefix_length:
+            state["key_energy"] = _losa_key_energy(
+                prefix_key,
+                self.num_key_value_groups,
+                context.get("key_samples", 32),
+            )
+        else:
+            state["key_energy"] = torch.ones(
+                self.num_heads, self.head_dim, device=query.device
+            )
     collector = getattr(model, "_llada_query_losa_collector", None)
     expose_priority = (
         context.get("unify_query_losa", False)
@@ -296,6 +328,7 @@ def _losa_attention_forward(
         query_positions,
         context["active_topk"],
         return_metadata=collector is not None or expose_priority,
+        score_mode=score_mode,
     )
     if collector is None and not expose_priority:
         active_indices = active_result
@@ -724,6 +757,8 @@ def _cached_forward(
             "prefix_cache_length": prefix_cache[0][0].shape[-2] if prefix_cache else 0,
             "block_length": input_ids.shape[1],
             "active_topk": int(getattr(model.config, "llada_losa_active_topk", 5)),
+            "score_mode": getattr(model.config, "llada_losa_score_mode", "query"),
+            "key_samples": int(getattr(model.config, "llada_losa_key_samples", 32)),
             "pending_losa": [],
             "pending_losa_queries": [],
             "query_positions": None,
@@ -1087,6 +1122,8 @@ def patch_llada_model(
     prefix_chunk_size=256,
     losa=False,
     losa_active_topk=5,
+    losa_score_mode="query",
+    losa_key_samples=32,
     query_losa_union=False,
 ):
     if (
@@ -1095,6 +1132,8 @@ def patch_llada_model(
         or prefix_token_budget <= 0
         or prefix_chunk_size <= 0
         or losa_active_topk <= 0
+        or losa_score_mode not in {"query", "key_diag"}
+        or losa_key_samples <= 0
         or (
             query_sparse
             and (
@@ -1117,6 +1156,8 @@ def patch_llada_model(
     model.config.llada_prefix_chunk_size = int(prefix_chunk_size)
     model.config.llada_losa = bool(losa)
     model.config.llada_losa_active_topk = int(losa_active_topk)
+    model.config.llada_losa_score_mode = losa_score_mode
+    model.config.llada_losa_key_samples = int(losa_key_samples)
     model.config.llada_query_losa_union = bool(query_losa_union)
     if not hasattr(model, "_llada_block_cache_dense_forward"):
         model._llada_block_cache_dense_forward = model.forward

@@ -59,6 +59,8 @@ args=(
   --prefix_chunk_size "${PREFIX_CHUNK_SIZE:-256}"
   --losa "${LOSA:-false}"
   --losa_active_topk "${LOSA_ACTIVE_TOPK:-5}"
+  --losa_score_mode "${LOSA_SCORE_MODE:-query}"
+  --losa_key_samples "${LOSA_KEY_SAMPLES:-32}"
   --moe_expert_patch "${MOE_EXPERT_PATCH:-${default_moe_expert_patch}}"
   --prompt "${PROMPT:-Write a short story about history.}"
 )

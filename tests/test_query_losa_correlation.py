@@ -6,6 +6,7 @@ import torch
 from scripts.analyze_llada_query_losa_correlation import summarize_records
 from src.sparse.block_cache_sparse_dlm_patch import (
     _losa_active_indices,
+    _losa_key_energy,
     _new_losa_state,
     _queue_losa_active_update,
 )
@@ -42,6 +43,14 @@ def _record(sample, confidence, delta, transfer):
 
 
 class QueryLosaCorrelationTest(unittest.TestCase):
+    def test_key_energy_uses_uniform_samples_and_expands_gqa_heads(self):
+        key = torch.arange(1, 9, dtype=torch.float32).reshape(1, 1, 8, 1)
+
+        energy = _losa_key_energy(key, num_key_value_groups=2, sample_count=2)
+
+        expected = torch.tensor([[(1.0**2 + 5.0**2) / 2]]).expand(2, 1)
+        torch.testing.assert_close(energy, expected)
+
     def test_losa_query_reference_updates_exactly_with_prefix_state(self):
         context = {"pending_losa_queries": [], "pending_losa": []}
         positions = torch.tensor([1, 4, 7])
@@ -104,6 +113,24 @@ class QueryLosaCorrelationTest(unittest.TestCase):
         self.assertEqual(active.tolist(), [1, 2])
         self.assertTrue(valid.all())
         torch.testing.assert_close(delta, torch.tensor([0.1, 0.9, 0.2]))
+
+    def test_key_diagonal_score_weights_query_drift(self):
+        query = torch.zeros(1, 1, 2, 2)
+        query[0, 0, 0, 0] = 2
+        query[0, 0, 1, 1] = 1
+        state = _new_losa_state(query, block_length=2)
+        state["valid"].fill_(True)
+        state["key_energy"] = torch.tensor([[0.01, 10.0]])
+
+        active = _losa_active_indices(
+            state,
+            query,
+            torch.arange(2),
+            active_topk=1,
+            score_mode="key_diag",
+        )
+
+        self.assertEqual(active.tolist(), [1])
 
     def test_perfectly_aligned_scores_have_perfect_metrics(self):
         records = [

@@ -83,6 +83,8 @@ class LLaDA(LM):
         prefix_chunk_size: int = 256,
         losa: bool = False,
         losa_active_topk: int = 5,
+        losa_score_mode: str = "query",
+        losa_key_samples: int = 32,
         query_losa_union: bool = False,
         moe_expert_patch: bool = True,
         show_samples: bool = False,
@@ -150,6 +152,8 @@ class LLaDA(LM):
                 prefix_chunk_size=int(prefix_chunk_size),
                 losa=sparse_enabled and _as_bool(losa),
                 losa_active_topk=int(losa_active_topk),
+                losa_score_mode=losa_score_mode,
+                losa_key_samples=int(losa_key_samples),
                 query_losa_union=sparse_enabled and _as_bool(query_losa_union),
                 moe_expert_patch=_as_bool(moe_expert_patch),
             )

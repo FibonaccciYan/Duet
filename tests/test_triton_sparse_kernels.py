@@ -45,6 +45,18 @@ class TritonSparseKernelsTest(unittest.TestCase):
         ).float().pow(2).mean(dim=(1, 3))[0]
         torch.testing.assert_close(actual, expected, rtol=1e-4, atol=2e-4)
 
+    def test_losa_query_delta_supports_key_weights(self):
+        query = torch.randn(1, 4, 7, 16, device="cuda", dtype=torch.bfloat16)
+        previous = torch.randn(1, 4, 12, 16, device="cuda", dtype=torch.bfloat16)
+        positions = torch.tensor([0, 2, 3, 5, 7, 9, 11], device="cuda")
+        weights = torch.rand(4, 16, device="cuda")
+
+        actual = losa_query_delta(query, previous, positions, weights=weights)
+        difference = query.float() - previous.index_select(2, positions).float()
+        expected = (difference.square() * weights[None, :, None, :]).mean((1, 3))[0]
+
+        torch.testing.assert_close(actual, expected, rtol=1e-4, atol=2e-4)
+
     def test_attention_output_and_lse_match_reference(self):
         torch.manual_seed(2)
         query = torch.randn(1, 8, 5, 128, device="cuda", dtype=torch.float16)

@@ -23,6 +23,7 @@ from .block_cache_sparse_dlm_patch import (
     _attention_output_lse,
     _compact_prefix_cache,
     _losa_active_indices,
+    _losa_key_energy,
     _merge_attention_states,
     _new_losa_state,
     _queue_losa_active_update,
@@ -175,11 +176,24 @@ def _sdar_losa_attention_forward(
         self.num_key_value_groups,
         use_triton=False,
     )
+    score_mode = context.get("score_mode", "query")
+    if score_mode.startswith("key_diag") and "key_energy" not in state:
+        if prefix_length:
+            state["key_energy"] = _losa_key_energy(
+                prefix_key,
+                self.num_key_value_groups,
+                context.get("key_samples", 32),
+            )
+        else:
+            state["key_energy"] = torch.ones(
+                self.num_attention_heads, self.head_dim, device=query.device
+            )
     active_indices = _losa_active_indices(
         state,
         query,
         positions,
         context["active_topk"],
+        score_mode=score_mode,
     )
     if prefix_length:
         active_prefix_output, active_prefix_lse = _attention_output_lse(
@@ -285,6 +299,8 @@ def _sparse_cached_forward(
             "selection_state": selection_state,
             "prefix_cache_length": 0,
             "active_topk": losa_active_topk,
+            "score_mode": getattr(model.config, "sdar_losa_score_mode", "query"),
+            "key_samples": int(getattr(model.config, "sdar_losa_key_samples", 32)),
             "pending_losa": [],
             "pending_losa_queries": [],
             "query_positions": None,
@@ -622,6 +638,8 @@ def patch_sdar_model(
     prefix_chunk_size=256,
     losa=False,
     losa_active_topk=5,
+    losa_score_mode="query",
+    losa_key_samples=32,
 ):
     if getattr(model.config, "model_type", None) != "sdar":
         raise TypeError("SDAR patch requires a model with config.model_type == 'sdar'")
@@ -633,6 +651,8 @@ def patch_sdar_model(
         or prefix_token_budget <= 0
         or prefix_chunk_size <= 0
         or losa_active_topk <= 0
+        or losa_score_mode not in {"query", "key_diag"}
+        or losa_key_samples <= 0
     ):
         raise ValueError(
             "top_k, intervals, prefix budget, chunk size, and LoSA active "
@@ -654,6 +674,8 @@ def patch_sdar_model(
     model.config.sdar_prefix_chunk_size = int(prefix_chunk_size)
     model.config.sdar_losa = bool(losa)
     model.config.sdar_losa_active_topk = int(losa_active_topk)
+    model.config.sdar_losa_score_mode = losa_score_mode
+    model.config.sdar_losa_key_samples = int(losa_key_samples)
     if losa:
         for layer in model.model.layers:
             attention = layer.self_attn

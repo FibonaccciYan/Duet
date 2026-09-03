@@ -45,6 +45,13 @@ def parse_args():
     )
     parser.add_argument("--contexts", type=int, nargs="+", default=(8192, 16384, 32768))
     parser.add_argument("--gen-length", type=int, default=64)
+    parser.add_argument("--losa-active-topk", type=int, default=5)
+    parser.add_argument(
+        "--losa-score-mode",
+        choices=("query", "key_diag"),
+        default="query",
+    )
+    parser.add_argument("--losa-key-samples", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
@@ -89,7 +96,9 @@ def load(args):
         prefix_token_budget=256,
         prefix_chunk_size=256,
         losa=args.mode in {"losa", "combined"},
-        losa_active_topk=5,
+        losa_active_topk=args.losa_active_topk,
+        losa_score_mode=args.losa_score_mode,
+        losa_key_samples=args.losa_key_samples,
         moe_expert_patch=not is_sdar,
     )
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
@@ -123,7 +132,9 @@ def generation_kwargs(args, tokenizer, input_ids):
     is_sdar = args.model == "sdar"
     kwargs = {
         "inputs": input_ids,
-        "eos_early_stop": True,
+        # Fixed work is required for comparable end-to-end latency. Early EOS
+        # makes different sparse selectors execute different numbers of blocks.
+        "eos_early_stop": False,
         "gen_length": args.gen_length,
         "block_length": 32,
         "steps": 32,
@@ -156,8 +167,10 @@ def run_once(args, model, tokenizer, context_length):
     return {
         "context_tokens": context_length,
         "prompt_tokens": prompt_length,
+        "requested_output_tokens": args.gen_length,
         "generated_tokens": int(sequences.shape[-1]),
         "seconds": elapsed,
+        "requested_tokens_per_second": args.gen_length / elapsed,
         "generated_tokens_per_second": int(sequences.shape[-1]) / elapsed,
         "peak_memory_gib": torch.cuda.max_memory_allocated() / 2**30,
         "input_checksum": checksum(input_ids),
@@ -184,7 +197,12 @@ def main():
     results = []
     print(
         json.dumps(
-            {"model": args.model, "mode": args.mode, "triton": triton_env},
+            {
+                "model": args.model,
+                "mode": args.mode,
+                "triton": triton_env,
+                "losa_score_mode": args.losa_score_mode,
+            },
             sort_keys=True,
         ),
         flush=True,
@@ -200,6 +218,9 @@ def main():
         "triton": triton_env,
         "dtype": "float16" if args.model == "sdar" else "bfloat16",
         "gen_length": args.gen_length,
+        "losa_active_topk": args.losa_active_topk,
+        "losa_score_mode": args.losa_score_mode,
+        "losa_key_samples": args.losa_key_samples,
         "results": results,
     }
     if args.output:

@@ -137,6 +137,18 @@ mask/decoded LoSA budget regressed to 124/164 and was discarded. The union is
 disabled by default; the evidence does not support replacing both selectors
 with one score.
 
+An opt-in attention-aware LoSA score is available with
+`LOSA_SCORE_MODE=key_diag LOSA_KEY_SAMPLES=32`. It estimates
+`E[(delta_q dot k)^2]` from the diagonal second moment of 32 uniformly sampled
+prefix keys, then performs the weighted delta reduction in Triton. The prefix
+statistic is computed once per block/layer, so per-step selection remains
+`O(QHD)` rather than scanning the full prefix. On full LLaDA HumanEval with
+Query+LoSA union, the original query score produced 80/164 official and
+130/164 normalized passes; `key_diag` produced 82/164 and 130/164. Since the
+normalized aggregate was unchanged (10 fixes and 10 regressions), `query`
+remains the default. Direct sampled-logit scoring and weighting by stale prefix
+LSE mass were slower or less accurate in the 32-case screen and were discarded.
+
 For the full-active control, the BF16 Triton output/LSE kernel keeps the LoSA
 split/merge path active and reaches 137/164 (83.54%) normalized HumanEval versus
 138/164 (84.15%) for Query Sparse without LoSA. The kernel is selected only when
@@ -208,9 +220,11 @@ CUDA_VISIBLE_DEVICES=2 /home/ysy/anaconda3/envs/llada/bin/python \
 
 The end-to-end long-context benchmark is `scripts/bench_long_context.py`.
 `context_tokens` is the complete prompt-plus-generation window; the standard
-run uses 64 requested output tokens, block/steps 32/32, eval dtype/settings,
-and one fresh process per data point. On GPU 2, the measured PyTorch -> Triton
-times were:
+run uses 64 requested output tokens, disables early EOS for fixed work, and
+uses block/steps 32/32 with eval dtype/settings. Returned sequences may still
+be trimmed at EOS, so compare wall time or `requested_tokens_per_second`, not
+the legacy returned-token throughput field. On GPU 2, the measured PyTorch ->
+Triton times were:
 
 | `eval.sh` configuration | 8K | 16K | 32K |
 | --- | ---: | ---: | ---: |
@@ -236,6 +250,15 @@ gain. SDAR originally OOMed during dense prefill at 16K. Its prefill now uses
 the same block-causal mask in aligned 4K-token KV-cache chunks above 8K; peak
 allocated memory was 43.2/45.1/76.7 GiB at 8K/16K/32K. The normal <=8K path
 remains a single prefill call and preserves its previous output checksum.
+
+For the attention-aware estimator on GPU 5, fixed-work LLaDA LoSA-only wall
+time was 9.964s/15.198s/28.770s at 8K/16K/32K. The corresponding query-score
+runs were 9.515s/15.093s/28.481s (median of two runs), so the final 32K cost was
+about 1.0%. The weighted selector itself measured 0.0273ms versus 0.0214ms for
+query MSE at 32 heads x 32 positions x 128 dimensions. SDAR 32K measured
+37.879s for query scoring and 35.189s for the final 32-key statistic in
+representative runs, with the same output checksum and peak allocation; treat
+the timing difference as run variance until repeated medians are collected.
 
 For example, run an isolated 32K SDAR Prefix-Sparse A/B with:
 
