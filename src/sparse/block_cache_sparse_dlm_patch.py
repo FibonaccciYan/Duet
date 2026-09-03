@@ -91,16 +91,41 @@ def _new_losa_state(query, block_length):
     }
 
 
+def _queue_losa_active_update(
+    context,
+    layer_idx,
+    positions,
+    query,
+    active_indices,
+    prefix_output,
+    prefix_lse,
+):
+    active_positions = positions.index_select(0, active_indices)
+    context["pending_losa_queries"].append(
+        (layer_idx, active_positions, query.index_select(2, active_indices))
+    )
+    context["pending_losa"].append(
+        (layer_idx, active_positions, prefix_output, prefix_lse)
+    )
+
+
 def _losa_active_indices(
-    state, query, query_positions, active_topk, return_metadata=False
+    state,
+    query,
+    query_positions,
+    active_topk,
+    return_metadata=False,
 ):
     positions = query_positions.to(device=query.device, dtype=torch.long)
     if state.get("fully_valid", False) and state.get("use_triton_delta", True):
         delta = losa_query_delta(query, state["previous_query"], positions)
         if delta is not None:
-            return torch.topk(
+            active = torch.topk(
                 delta, k=min(int(active_topk), positions.numel())
             ).indices
+            if return_metadata:
+                return active, state["valid"].index_select(1, positions)[0], delta
+            return active
     valid = state["valid"].index_select(1, positions)[0]
     missing = torch.where(~valid)[0]
     if missing.numel() == positions.numel():
@@ -158,6 +183,7 @@ def _losa_attention_forward(
             position_embeddings=position_embeddings,
             **kwargs,
         )
+    use_triton_attention = context["active_topk"] >= context["block_length"]
     input_shape = hidden_states.shape[:-1]
     batch_size, query_length, _ = hidden_states.shape
     qkv = self.query_key_value(hidden_states).view(
@@ -217,7 +243,12 @@ def _losa_attention_forward(
         if prefix_length:
             prefix_mask = attention_mask[..., :prefix_length]
             prefix_output, prefix_lse = _attention_output_lse(
-                query, prefix_key, prefix_value, prefix_mask, self.num_key_value_groups
+                query,
+                prefix_key,
+                prefix_value,
+                prefix_mask,
+                self.num_key_value_groups,
+                use_triton=use_triton_attention,
             )
         else:
             prefix_output = query.new_zeros(
@@ -245,29 +276,44 @@ def _losa_attention_forward(
     prefix_mask = attention_mask[..., :prefix_length]
     block_mask = attention_mask[..., prefix_length:]
     block_output, block_lse = _attention_output_lse(
-        query, block_key, block_value, block_mask, self.num_key_value_groups
+        query,
+        block_key,
+        block_value,
+        block_mask,
+        self.num_key_value_groups,
+        use_triton=use_triton_attention,
     )
 
     query_positions = context["query_positions"]
     collector = getattr(model, "_llada_query_losa_collector", None)
+    expose_priority = (
+        context.get("unify_query_losa", False)
+        and self.layer_idx == context.get("selection_layer")
+    )
     active_result = _losa_active_indices(
         state,
         query,
         query_positions,
         context["active_topk"],
-        return_metadata=collector is not None,
+        return_metadata=collector is not None or expose_priority,
     )
-    if collector is None:
+    if collector is None and not expose_priority:
         active_indices = active_result
     else:
         active_indices, valid, delta = active_result
-        collector.record_losa(
-            self.layer_idx,
-            query_positions,
-            valid,
-            delta,
-            active_indices,
-        )
+        if collector is not None:
+            collector.record_losa(
+                self.layer_idx,
+                query_positions,
+                valid,
+                delta,
+                active_indices,
+            )
+        if expose_priority:
+            ranked = active_indices[valid.index_select(0, active_indices)]
+            context["query_priority_positions"] = query_positions.index_select(
+                0, ranked
+            )
     if prefix_length:
         active_query = query.index_select(2, active_indices)
         active_prefix_mask = prefix_mask.index_select(2, active_indices)
@@ -277,6 +323,7 @@ def _losa_attention_forward(
             prefix_value,
             active_prefix_mask,
             self.num_key_value_groups,
+            use_triton=use_triton_attention,
         )
     else:
         active_prefix_output = query.new_zeros(
@@ -293,14 +340,18 @@ def _losa_attention_forward(
     prefix_output = state["prefix_output"].index_select(2, positions)
     prefix_lse = state["prefix_lse"].index_select(2, positions)
     if active_indices.numel():
-        active_positions = positions.index_select(0, active_indices)
         active_prefix_output = active_prefix_output.float()
         prefix_output.index_copy_(2, active_indices, active_prefix_output)
         prefix_lse.index_copy_(2, active_indices, active_prefix_lse)
-        context["pending_losa"].append(
-            (self.layer_idx, active_positions, active_prefix_output, active_prefix_lse)
+        _queue_losa_active_update(
+            context,
+            self.layer_idx,
+            positions,
+            query,
+            active_indices,
+            active_prefix_output,
+            active_prefix_lse,
         )
-    context["pending_losa_queries"].append((self.layer_idx, positions, query))
     output, _ = _merge_attention_states(
         prefix_output, prefix_lse, block_output, block_lse
     )
@@ -364,6 +415,12 @@ def _select_positions(
             torch.topk(confidence[0], k=candidate_count).indices
         ]
     selected = torch.cat((decoded, selected_masks))
+    context = getattr(model, "_llada_losa_context", None)
+    priority = None if context is None else context.get("query_priority_positions")
+    if priority is not None:
+        priority = priority[mask.index_select(0, priority)]
+        priority = priority[~torch.isin(priority, selected)]
+        selected = torch.cat((selected, priority))
     if collector is not None:
         collector.record_query(
             (mask_positions, confidence[0]), selected, "fresh"
@@ -670,6 +727,11 @@ def _cached_forward(
             "pending_losa": [],
             "pending_losa_queries": [],
             "query_positions": None,
+            "selection_layer": selection_layer,
+            "unify_query_losa": bool(
+                getattr(model.config, "llada_query_losa_union", False)
+            ),
+            "query_priority_positions": None,
         }
         model._llada_losa_context = losa_context
 
@@ -1025,6 +1087,7 @@ def patch_llada_model(
     prefix_chunk_size=256,
     losa=False,
     losa_active_topk=5,
+    query_losa_union=False,
 ):
     if (
         top_k <= 0
@@ -1054,6 +1117,7 @@ def patch_llada_model(
     model.config.llada_prefix_chunk_size = int(prefix_chunk_size)
     model.config.llada_losa = bool(losa)
     model.config.llada_losa_active_topk = int(losa_active_topk)
+    model.config.llada_query_losa_union = bool(query_losa_union)
     if not hasattr(model, "_llada_block_cache_dense_forward"):
         model._llada_block_cache_dense_forward = model.forward
     if losa:

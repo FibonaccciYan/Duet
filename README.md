@@ -119,10 +119,29 @@ LOSA=true LOSA_ACTIVE_TOPK=5 bash scripts/test.sh
 Adamas selects each layer's historical prefix KV after the first dense denoise
 step and always keeps the complete current block. LoSA reuses prefix attention
 output/LSE while recomputing current-block attention every step. Setting
-`PREFIX_TOKEN_BUDGET` at least as large as the prefix, or
-`LOSA_ACTIVE_TOPK >= BLOCK_LENGTH`, falls back to the corresponding dense path.
+`PREFIX_TOKEN_BUDGET` at least as large as the prefix disables Prefix Sparse.
+`LOSA_ACTIVE_TOPK >= BLOCK_LENGTH` still executes LoSA's split prefix/current
+attention and online-softmax merge, but refreshes every position.
 Both features can be combined with each other and with query sparse. They are
 still intended for quality validation before long-context performance tuning.
+
+Query confidence and LoSA query-delta are complementary rather than
+interchangeable selection signals. After fixing the LoSA reference query to
+advance only when its prefix state is refreshed, a four-prompt, 128-token
+diagnostic measured pooled Spearman 0.135 and transfer recall@5 of 0.932 for
+confidence versus 0.831 for query delta. `QUERY_LOSA_UNION=true` therefore keeps
+the confidence selector and only adds valid LoSA top-k mask positions that it
+missed. Before the BF16-kernel experiment this raised normalized HumanEval
+Query+LoSA-topk5 pass@1 from 126/164 (76.83%) to 130/164 (79.27%). A fixed 50/50
+mask/decoded LoSA budget regressed to 124/164 and was discarded. The union is
+disabled by default; the evidence does not support replacing both selectors
+with one score.
+
+For the full-active control, the BF16 Triton output/LSE kernel keeps the LoSA
+split/merge path active and reaches 137/164 (83.54%) normalized HumanEval versus
+138/164 (84.15%) for Query Sparse without LoSA. The kernel is selected only when
+`LOSA_ACTIVE_TOPK >= BLOCK_LENGTH`; low-budget LoSA retains the more stable
+PyTorch reference reduction order.
 
 The SDAR adapter applies query selection after `layers[5]` (the former
 1-based layer 6) and keeps all decoded
@@ -169,12 +188,10 @@ CUDA execution uses the shared Triton sparse kernels when Triton is available:
   top-k tie ordering; standalone Prefix Sparse still uses Triton.
 - LoSA fuses the per-position Query-delta reduction for both model families,
   except for the same SDAR three-feature safety fallback described below.
-- LoSA attention output/LSE uses a GQA-aware online-softmax kernel for SDAR's
-  FP16 eval path when the prefix is longer than 256 tokens. Compact
-  Prefix-Sparse caches, SDAR's Query+Prefix+LoSA combination, and LLaDA BF16
-  deliberately retain the PyTorch path. The SDAR combination falls back for
-  all three new reductions: Triton has no useful compact-prefix win, and small
-  reduction-order deltas can change its greedy diffusion trajectory.
+- LoSA attention output/LSE uses a GQA-aware online-softmax kernel for FP16 and
+  BF16. LLaDA enables it for the full-active control; low-budget LLaDA LoSA and
+  SDAR's Query+Prefix+LoSA combination retain the PyTorch path because small
+  reduction-order deltas can change their greedy diffusion trajectories.
 - Query Sparse already uses the fused Triton K/V cache writer in
   `src/sparse/core.py`; profiling did not justify another Query kernel.
 

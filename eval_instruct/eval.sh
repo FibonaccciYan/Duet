@@ -68,9 +68,8 @@ if [[ "${model_type}" == "sdar" ]]; then
     model_args+=",eos_id=${EOS_ID}"
   fi
 else
-  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},sparse_dlm=${sparse_dlm},sparse_dlm_ratio=${SPARSE_DLM_RATIO:-0.7},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-4},sparse_dlm_dense_fallback_mask_count=${SPARSE_DLM_DENSE_FALLBACK_MASK_COUNT:-4},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-1},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-256},losa=${losa},losa_active_topk=${losa_active_topk},moe_expert_patch=${MOE_EXPERT_PATCH:-true},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${threshold},editing_threshold=${EDITING_THRESHOLD:-0.0},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${mask_id},eos_id=${eos_id}"
+  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},sparse_dlm=${sparse_dlm},sparse_dlm_ratio=${SPARSE_DLM_RATIO:-0.7},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-4},sparse_dlm_dense_fallback_mask_count=${SPARSE_DLM_DENSE_FALLBACK_MASK_COUNT:-4},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-1},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-256},losa=${losa},losa_active_topk=${losa_active_topk},query_losa_union=${QUERY_LOSA_UNION:-false},moe_expert_patch=${MOE_EXPERT_PATCH:-true},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${threshold},editing_threshold=${EDITING_THRESHOLD:-0.0},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${mask_id},eos_id=${eos_id}"
 fi
-
 minerva_tasks="minerva_math_algebra,minerva_math_counting_and_prob,minerva_math_geometry,minerva_math_intermediate_algebra,minerva_math_num_theory,minerva_math_prealgebra,minerva_math_precalc"
 gsm8k_task=gsm8k
 gsm8k_gen_length=256

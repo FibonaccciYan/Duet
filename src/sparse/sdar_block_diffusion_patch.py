@@ -25,6 +25,7 @@ from .block_cache_sparse_dlm_patch import (
     _losa_active_indices,
     _merge_attention_states,
     _new_losa_state,
+    _queue_losa_active_update,
 )
 from .sdar_generate import (
     block_diffusion_generate,
@@ -134,7 +135,7 @@ def _sdar_losa_attention_forward(
                 cached_value[:, :, :prefix_length],
                 mask[..., :prefix_length],
                 self.num_key_value_groups,
-                use_triton=use_triton_attention,
+                use_triton=use_triton_attention and prefix_length > 256,
             )
         else:
             prefix_output = query.new_zeros(
@@ -172,10 +173,13 @@ def _sdar_losa_attention_forward(
         block_value,
         block_mask,
         self.num_key_value_groups,
-        use_triton=use_triton_attention,
+        use_triton=False,
     )
     active_indices = _losa_active_indices(
-        state, query, positions, context["active_topk"]
+        state,
+        query,
+        positions,
+        context["active_topk"],
     )
     if prefix_length:
         active_prefix_output, active_prefix_lse = _attention_output_lse(
@@ -184,7 +188,7 @@ def _sdar_losa_attention_forward(
             prefix_value,
             prefix_mask.index_select(2, active_indices),
             self.num_key_value_groups,
-            use_triton=use_triton_attention,
+            use_triton=use_triton_attention and prefix_length > 256,
         )
     else:
         active_prefix_output = query.new_zeros(
@@ -203,19 +207,18 @@ def _sdar_losa_attention_forward(
     prefix_output = state["prefix_output"].index_select(2, positions)
     prefix_lse = state["prefix_lse"].index_select(2, positions)
     if active_indices.numel():
-        active_positions = positions.index_select(0, active_indices)
         active_prefix_output = active_prefix_output.float()
         prefix_output.index_copy_(2, active_indices, active_prefix_output)
         prefix_lse.index_copy_(2, active_indices, active_prefix_lse)
-        context["pending_losa"].append(
-            (
-                self.layer_idx,
-                active_positions,
-                active_prefix_output,
-                active_prefix_lse,
-            )
+        _queue_losa_active_update(
+            context,
+            self.layer_idx,
+            positions,
+            query,
+            active_indices,
+            active_prefix_output,
+            active_prefix_lse,
         )
-    context["pending_losa_queries"].append((self.layer_idx, positions, query))
     output, _ = _merge_attention_states(
         prefix_output, prefix_lse, block_output, block_lse
     )

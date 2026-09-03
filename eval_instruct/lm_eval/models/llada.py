@@ -83,6 +83,7 @@ class LLaDA(LM):
         prefix_chunk_size: int = 256,
         losa: bool = False,
         losa_active_topk: int = 5,
+        query_losa_union: bool = False,
         moe_expert_patch: bool = True,
         show_samples: bool = False,
         **kwargs,
@@ -149,6 +150,7 @@ class LLaDA(LM):
                 prefix_chunk_size=int(prefix_chunk_size),
                 losa=sparse_enabled and _as_bool(losa),
                 losa_active_topk=int(losa_active_topk),
+                query_losa_union=sparse_enabled and _as_bool(query_losa_union),
                 moe_expert_patch=_as_bool(moe_expert_patch),
             )
             eval_logger.info(

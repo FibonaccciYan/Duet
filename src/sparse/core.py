@@ -325,6 +325,7 @@ def patch_model(
     prefix_chunk_size=256,
     losa=False,
     losa_active_topk=5,
+    query_losa_union=False,
     moe_expert_patch=True,
 ):
     """Enable requested sparse features through the matching model patch."""
@@ -347,6 +348,7 @@ def patch_model(
             prefix_chunk_size=prefix_chunk_size,
             losa=losa,
             losa_active_topk=losa_active_topk,
+            query_losa_union=query_losa_union,
         )
         
         if moe_expert_patch:

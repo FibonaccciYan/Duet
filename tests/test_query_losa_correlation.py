@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import torch
 
@@ -6,6 +7,7 @@ from scripts.analyze_llada_query_losa_correlation import summarize_records
 from src.sparse.block_cache_sparse_dlm_patch import (
     _losa_active_indices,
     _new_losa_state,
+    _queue_losa_active_update,
 )
 
 
@@ -40,6 +42,28 @@ def _record(sample, confidence, delta, transfer):
 
 
 class QueryLosaCorrelationTest(unittest.TestCase):
+    def test_losa_query_reference_updates_exactly_with_prefix_state(self):
+        context = {"pending_losa_queries": [], "pending_losa": []}
+        positions = torch.tensor([1, 4, 7])
+        query = torch.arange(24.0).reshape(1, 2, 3, 4)
+        active = torch.tensor([0, 2])
+        prefix_output = torch.zeros(1, 2, 2, 4)
+        prefix_lse = torch.zeros(1, 2, 2)
+
+        _queue_losa_active_update(
+            context, 3, positions, query, active, prefix_output, prefix_lse
+        )
+
+        query_layer, query_positions, queued_query = context[
+            "pending_losa_queries"
+        ][0]
+        prefix_layer, prefix_positions, _, _ = context["pending_losa"][0]
+        self.assertEqual(query_layer, prefix_layer)
+        self.assertEqual(query_layer, 3)
+        torch.testing.assert_close(query_positions, torch.tensor([1, 7]))
+        torch.testing.assert_close(query_positions, prefix_positions)
+        torch.testing.assert_close(queued_query, query[:, :, [0, 2]])
+
     def test_losa_metadata_uses_global_validity_and_local_active_indices(self):
         query = torch.zeros(1, 2, 3, 4)
         query[:, :, 2] = 1
@@ -58,6 +82,28 @@ class QueryLosaCorrelationTest(unittest.TestCase):
         self.assertEqual(valid.tolist(), [True, False, True])
         self.assertEqual(delta[[0, 2]].tolist(), [0.0, 1.0])
         self.assertTrue(torch.isnan(delta[1]))
+
+    def test_losa_triton_fast_path_preserves_metadata_contract(self):
+        query = torch.zeros(1, 2, 3, 4)
+        state = _new_losa_state(query, block_length=3)
+        state["valid"].fill_(True)
+        state["fully_valid"] = True
+
+        with patch(
+            "src.sparse.block_cache_sparse_dlm_patch.losa_query_delta",
+            return_value=torch.tensor([0.1, 0.9, 0.2]),
+        ):
+            active, valid, delta = _losa_active_indices(
+                state,
+                query,
+                torch.arange(3),
+                active_topk=2,
+                return_metadata=True,
+            )
+
+        self.assertEqual(active.tolist(), [1, 2])
+        self.assertTrue(valid.all())
+        torch.testing.assert_close(delta, torch.tensor([0.1, 0.9, 0.2]))
 
     def test_perfectly_aligned_scores_have_perfect_metrics(self):
         records = [

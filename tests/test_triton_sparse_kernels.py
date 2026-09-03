@@ -65,11 +65,19 @@ class TritonSparseKernelsTest(unittest.TestCase):
         torch.testing.assert_close(actual, expected, rtol=5e-3, atol=5e-3)
         torch.testing.assert_close(actual_lse, expected_lse, rtol=2e-3, atol=2e-3)
 
-    def test_bfloat16_attention_keeps_reference_path(self):
+    def test_bfloat16_attention_matches_reference(self):
         query = torch.randn(1, 4, 3, 128, device="cuda", dtype=torch.bfloat16)
-        key = torch.randn(1, 1, 17, 128, device="cuda", dtype=torch.bfloat16)
-        mask = torch.zeros(1, 1, 3, 17, device="cuda", dtype=torch.bfloat16)
-        self.assertIsNone(attention_output_lse(query, key, key, mask))
+        key = torch.randn(1, 1, 257, 128, device="cuda", dtype=torch.bfloat16)
+        mask = torch.zeros(1, 1, 3, 257, device="cuda", dtype=torch.bfloat16)
+        output, lse = attention_output_lse(query, key, key, mask)
+
+        repeated_key = key.repeat_interleave(4, dim=1)
+        scores = torch.matmul(query, repeated_key.transpose(-2, -1)) / 128**0.5
+        expected_lse = torch.logsumexp(scores.float(), dim=-1)
+        weights = torch.softmax(scores, dim=-1, dtype=torch.float32).to(query.dtype)
+        expected = torch.matmul(weights, repeated_key)
+        torch.testing.assert_close(output, expected, rtol=1e-2, atol=1e-2)
+        torch.testing.assert_close(lse, expected_lse, rtol=2e-3, atol=2e-3)
 
 if __name__ == "__main__":
     unittest.main()

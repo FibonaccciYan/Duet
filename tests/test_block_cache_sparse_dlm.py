@@ -168,6 +168,30 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         self.assertEqual(selected.tolist(), [0, 1, 3])
 
+    def test_query_selection_unions_losa_priority_without_duplicates(self):
+        class ConfidenceModel:
+            lm_head = torch.nn.Identity()
+            model = SimpleNamespace(norm=torch.nn.Identity())
+            _llada_losa_context = {
+                "query_priority_positions": torch.tensor([2, 3])
+            }
+
+            @staticmethod
+            def _sample_with_temperature_topk_topp(logits, **kwargs):
+                confidence = torch.tensor([[0.1, 0.9, 0.2, 0.8]])
+                return torch.argmax(logits, dim=-1), confidence
+
+        selected = _select_positions(
+            ConfidenceModel(),
+            torch.eye(4).view(1, 4, 4),
+            torch.full((1, 4), 127),
+            mask_id=127,
+            ratio=0.5,
+            top_k=0,
+        )
+
+        self.assertEqual(selected.tolist(), [1, 3, 2])
+
     def test_transfer_uses_llada_confidence_threshold_rule(self):
         class ConfidenceModel:
             @staticmethod

@@ -86,6 +86,7 @@ def parse_args():
     )
     parser.add_argument("--sparse_dlm_deep_only_transfer", type=parse_bool, default=False)
     parser.add_argument("--query_sparse", type=parse_bool, default=True)
+    parser.add_argument("--query_losa_union", type=parse_bool, default=False)
     parser.add_argument("--prefix_sparse", type=parse_bool, default=None)
     parser.add_argument("--prefix_token_budget", type=int, default=256)
     parser.add_argument("--prefix_chunk_size", type=int, default=256)
@@ -155,6 +156,7 @@ def load_model_and_tokenizer(args):
             prefix_chunk_size=args.prefix_chunk_size,
             losa=args.losa,
             losa_active_topk=args.losa_active_topk,
+            query_losa_union=args.query_losa_union,
             moe_expert_patch=args.moe_expert_patch,
         )
         args.pattern = "patch"

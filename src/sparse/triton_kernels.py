@@ -336,7 +336,7 @@ def attention_output_lse(query, key, value, attention_mask):
     if not (
         LOSA_ATTENTION_ENABLED
         and query.is_cuda
-        and query.dtype == torch.float16
+        and query.dtype in (torch.float16, torch.bfloat16)
         and key.is_cuda
         and value.is_cuda
         and attention_mask is not None
@@ -352,10 +352,6 @@ def attention_output_lse(query, key, value, attention_mask):
         and attention_mask.shape[1] in (1, query.shape[1])
         and attention_mask.shape[2] == query.shape[2]
         and attention_mask.shape[3] == key.shape[2]
-        # Compact Prefix Sparse caches are at most the default 256-token
-        # budget. PyTorch is already fast there and preserves the combined
-        # Prefix+LoSA greedy trajectory at long context.
-        and key.shape[2] > 256
     ):
         return None
     batch, query_heads, query_length, head_dim = query.shape

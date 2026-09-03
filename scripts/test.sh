@@ -54,6 +54,7 @@ args=(
   --sparse_dlm_selection_layer "${SPARSE_DLM_SELECTION_LAYER:-5}"
   --sparse_dlm_deep_only_transfer "${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false}"
   --query_sparse "${QUERY_SPARSE:-true}"
+  --query_losa_union "${QUERY_LOSA_UNION:-false}"
   --prefix_token_budget "${PREFIX_TOKEN_BUDGET:-256}"
   --prefix_chunk_size "${PREFIX_CHUNK_SIZE:-256}"
   --losa "${LOSA:-false}"

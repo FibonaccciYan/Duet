@@ -15,6 +15,31 @@ from lm_eval.models import llada
 
 
 class LLaDAEvalAdapterTest(unittest.TestCase):
+    def test_query_losa_union_is_forwarded_to_sparse_patch(self):
+        model = MagicMock()
+        model.eval.return_value = model
+        model.config.model_type = "llada2_moe"
+        accelerator = SimpleNamespace(num_processes=1, device=torch.device("cpu"))
+
+        with (
+            patch.object(llada, "Accelerator", return_value=accelerator),
+            patch.object(
+                llada.transformers.AutoModelForCausalLM,
+                "from_pretrained",
+                return_value=model,
+            ),
+            patch.object(llada.transformers.AutoTokenizer, "from_pretrained"),
+            patch.object(llada, "patch_model") as sparse_patch,
+        ):
+            llada.LLaDA(
+                pretrained="fake",
+                device="cpu",
+                sparse_dlm=True,
+                query_losa_union=True,
+            )
+
+        self.assertTrue(sparse_patch.call_args.kwargs["query_losa_union"])
+
     def test_dense_llada_still_applies_moe_expert_patch(self):
         model = MagicMock()
         model.eval.return_value = model

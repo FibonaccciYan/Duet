@@ -410,6 +410,7 @@ def parse_args():
     parser.add_argument("--selection_layer", type=int, default=1)
     parser.add_argument("--selection_interval", type=int, default=1)
     parser.add_argument("--losa_active_topk", type=int, default=5)
+    parser.add_argument("--query_losa_union", action="store_true")
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--mask_id", type=int, default=156895)
     parser.add_argument("--eos_id", type=int, default=156892)
@@ -550,6 +551,7 @@ def main():
         prefix_sparse=False,
         losa=True,
         losa_active_topk=args.losa_active_topk,
+        query_losa_union=args.query_losa_union,
         moe_expert_patch=args.moe_expert_patch,
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
