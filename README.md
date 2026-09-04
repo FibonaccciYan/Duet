@@ -222,6 +222,8 @@ The runtime stores block-causal structure as implicit metadata, caches the
 fixed prompt KV once, and only refreshes the generated suffix for each new
 block. Peak memory is 34--36 GiB; the former quadratic-mask path used about
 64 GiB at 32K and could not run the 32K/gen=768 dense case on an 80 GiB GPU.
+Full HumanEval validation for Query+Prefix-256 is 79/164 official and 130/164
+indentation-normalized (the previous implementation was 71/164 and 128/164).
 
 ## Supporting tools
 
