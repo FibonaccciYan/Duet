@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 
 
-_MOE_BLOCK_M = 16
+_MOE_BLOCK_M = 32
 _MOE_BLOCK_N = 128
 _MOE_BLOCK_K = 128
 
