@@ -45,7 +45,7 @@ def patch_model(
     losa_active_topk=None,
     losa_score_mode=None,
     losa_key_samples=None,
-    query_losa_union=False,
+    query_losa_union=None,
     moe_expert_patch=None,
     sparse_config=None,
 ):
