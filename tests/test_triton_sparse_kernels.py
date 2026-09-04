@@ -5,6 +5,7 @@ import torch
 from src.sparse.triton_kernels import (
     adamas_distances,
     attention_output_lse,
+    block_causal_prefill,
     losa_query_delta,
 )
 
@@ -73,6 +74,20 @@ class TritonSparseKernelsTest(unittest.TestCase):
         expected = torch.matmul(weights, repeated_value)
         torch.testing.assert_close(actual, expected, rtol=5e-3, atol=5e-3)
         torch.testing.assert_close(actual_lse, expected_lse, rtol=2e-3, atol=2e-3)
+
+    def test_block_causal_prefill_matches_explicit_mask(self):
+        torch.manual_seed(3)
+        query = torch.randn(1, 8, 64, 128, device="cuda", dtype=torch.float16)
+        key = torch.randn(1, 2, 128, 128, device="cuda", dtype=torch.float16)
+        value = torch.randn_like(key)
+        query_blocks = torch.arange(64, 128, device="cuda") // 32
+        key_blocks = torch.arange(128, device="cuda") // 32
+        mask = (key_blocks[None, :] <= query_blocks[:, None])[None, None]
+
+        expected, _ = attention_output_lse(query, key, value, mask)
+        actual = block_causal_prefill(query, key, value)
+
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     def test_bfloat16_attention_matches_reference(self):
         query = torch.randn(1, 4, 3, 128, device="cuda", dtype=torch.bfloat16)

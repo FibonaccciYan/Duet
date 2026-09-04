@@ -28,6 +28,7 @@ from .sparse_ops import (
     _queue_losa_active_update,
     _prefix_from_dynamic_cache,
 )
+from .triton_kernels import block_causal_prefill
 # Zero-based decoder layer after which Query Sparse chooses mask candidates.
 # Layer 4 is too early for SDAR-b32: its candidate ranking diverges sharply
 # from the final-layer transfer positions.
@@ -157,8 +158,7 @@ def _sdar_prefill_attention_forward(
     if past_key_value is not None and kwargs.get("store_kv", False):
         key, value = past_key_value.update(key, value, self.layer_idx)
 
-    mask = attention_mask.unsqueeze(1) if attention_mask.ndim == 3 else attention_mask
-    output, _ = _attention_output_lse(query, key, value, mask)
+    output = block_causal_prefill(query, key, value)
     output = output.transpose(1, 2).reshape(batch_size, query_length, -1)
     return self.o_proj(output.contiguous()), None
 
@@ -962,16 +962,9 @@ def block_diffusion_generate(
             for chunk_start in range(0, prefill_length, prefill_chunk_length):
                 chunk_end = min(chunk_start + prefill_chunk_length, prefill_length)
                 cur_x = x[:, chunk_start:chunk_end]
-                query_blocks = torch.arange(
-                    chunk_start, chunk_end, device=model.device
-                ).div(block_length, rounding_mode="floor")
-                key_blocks = torch.arange(chunk_end, device=model.device).div(
-                    block_length, rounding_mode="floor"
-                )
-                cur_attn_mask = (key_blocks <= query_blocks[:, None]).unsqueeze(0)
                 cur_position_ids = position_ids[:, chunk_start:chunk_end]
                 model(cur_x,
-                      attention_mask=cur_attn_mask,
+                      attention_mask=None,
                       position_ids=cur_position_ids,
                       past_key_values=past_key_values,
                       use_cache=True,

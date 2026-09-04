@@ -37,7 +37,11 @@ class _FakeSDAR(torch.nn.Module):
         return self.anchor.device
 
     def forward(self, input_ids, attention_mask, store_kv=False, **kwargs):
-        self.assert_attention_shape = (input_ids.shape[1], attention_mask.shape[-1])
+        if attention_mask is not None:
+            self.assert_attention_shape = (
+                input_ids.shape[1],
+                attention_mask.shape[-1],
+            )
         self.store_calls += int(store_kv)
         logits = torch.zeros(*input_ids.shape, 16, device=input_ids.device)
         logits[..., 2] = 10

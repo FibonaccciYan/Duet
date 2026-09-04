@@ -251,6 +251,117 @@ def _attention_output_lse_kernel(
     )
 
 
+@triton.jit
+def _block_causal_prefill_kernel(
+    query,
+    key,
+    value,
+    output,
+    query_stride_0,
+    query_stride_1,
+    query_stride_2,
+    query_stride_3,
+    key_stride_0,
+    key_stride_1,
+    key_stride_2,
+    key_stride_3,
+    value_stride_0,
+    value_stride_1,
+    value_stride_2,
+    value_stride_3,
+    output_stride_0,
+    output_stride_1,
+    output_stride_2,
+    output_stride_3,
+    scale,
+    query_length: tl.constexpr,
+    prefix_length: tl.constexpr,
+    query_heads: tl.constexpr,
+    key_heads: tl.constexpr,
+    head_dim: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    query_block = tl.program_id(0)
+    batch_head = tl.program_id(1)
+    query_head = batch_head % query_heads
+    batch = batch_head // query_heads
+    key_head = query_head // (query_heads // key_heads)
+    offsets_m = query_block * BLOCK_M + tl.arange(0, BLOCK_M)
+    offsets_d = tl.arange(0, BLOCK_D)
+    query_offsets = (
+        batch * query_stride_0
+        + query_head * query_stride_1
+        + offsets_m[:, None] * query_stride_2
+        + offsets_d[None, :] * query_stride_3
+    )
+    q = tl.load(
+        query + query_offsets,
+        mask=(offsets_m[:, None] < query_length)
+        & (offsets_d[None, :] < head_dim),
+        other=0.0,
+    )
+    running_max = tl.full((BLOCK_M,), -float("inf"), tl.float32)
+    running_sum = tl.zeros((BLOCK_M,), tl.float32)
+    accumulator = tl.zeros((BLOCK_M, BLOCK_D), dtype=tl.float32)
+    visible_length = prefix_length - query_length + (query_block + 1) * BLOCK_M
+
+    for start_n in range(0, prefix_length, BLOCK_N):
+        offsets_n = start_n + tl.arange(0, BLOCK_N)
+        valid_n = offsets_n < prefix_length
+        key_offsets = (
+            batch * key_stride_0
+            + key_head * key_stride_1
+            + offsets_n[:, None] * key_stride_2
+            + offsets_d[None, :] * key_stride_3
+        )
+        k = tl.load(
+            key + key_offsets,
+            mask=valid_n[:, None] & (offsets_d[None, :] < head_dim),
+        )
+        scores = (tl.dot(q, tl.trans(k)) * scale).to(q.dtype).to(tl.float32)
+        valid = (
+            (offsets_m[:, None] < query_length)
+            & valid_n[None, :]
+            & (offsets_n[None, :] < visible_length)
+        )
+        scores = tl.where(valid, scores, -float("inf"))
+
+        block_max = tl.max(scores, axis=1)
+        new_max = tl.maximum(running_max, block_max)
+        old_scale = tl.exp(running_max - new_max)
+        probabilities = tl.exp(scores - new_max[:, None])
+        value_offsets = (
+            batch * value_stride_0
+            + key_head * value_stride_1
+            + offsets_n[:, None] * value_stride_2
+            + offsets_d[None, :] * value_stride_3
+        )
+        v = tl.load(
+            value + value_offsets,
+            mask=valid_n[:, None] & (offsets_d[None, :] < head_dim),
+        )
+        accumulator = accumulator * old_scale[:, None] + tl.dot(
+            probabilities.to(v.dtype), v
+        )
+        running_sum = running_sum * old_scale + tl.sum(probabilities, axis=1)
+        running_max = new_max
+
+    output_offsets = (
+        batch * output_stride_0
+        + query_head * output_stride_1
+        + offsets_m[:, None] * output_stride_2
+        + offsets_d[None, :] * output_stride_3
+    )
+    tl.store(
+        output + output_offsets,
+        accumulator / running_sum[:, None],
+        mask=(offsets_m[:, None] < query_length)
+        & (offsets_d[None, :] < head_dim),
+    )
+
+
 def adamas_distances(query_code, key_code):
     if not (
         query_code.is_cuda
@@ -393,6 +504,56 @@ def attention_output_lse(query, key, value, attention_mask):
         num_warps=4,
     )
     return output, output_lse
+
+
+def block_causal_prefill(query, key, value, block_length=32):
+    if not (
+        query.is_cuda
+        and query.dtype in (torch.float16, torch.bfloat16)
+        and key.is_cuda
+        and value.is_cuda
+        and query.device == key.device == value.device
+        and query.dtype == key.dtype == value.dtype
+        and query.ndim == key.ndim == value.ndim == 4
+        and query.shape[0] == key.shape[0] == value.shape[0]
+        and key.shape == value.shape
+        and query.shape[-1] == key.shape[-1]
+        and query.shape[1] % key.shape[1] == 0
+    ):
+        raise ValueError("prefill attention inputs must be compatible CUDA tensors")
+    batch, query_heads, query_length, head_dim = query.shape
+    key_heads, prefix_length = key.shape[1:3]
+    if (
+        block_length != 32
+        or query_length % block_length
+        or (prefix_length - query_length) % block_length
+    ):
+        raise ValueError("prefill attention requires aligned 32-token blocks")
+    output = torch.empty_like(query)
+    block_m = 32
+    _block_causal_prefill_kernel[
+        (triton.cdiv(query_length, block_m), batch * query_heads)
+    ](
+        query,
+        key,
+        value,
+        output,
+        *query.stride(),
+        *key.stride(),
+        *value.stride(),
+        *output.stride(),
+        head_dim**-0.5,
+        query_length=query_length,
+        prefix_length=prefix_length,
+        query_heads=query_heads,
+        key_heads=key_heads,
+        head_dim=head_dim,
+        BLOCK_M=block_m,
+        BLOCK_N=64,
+        BLOCK_D=triton.next_power_of_2(head_dim),
+        num_warps=4,
+    )
+    return output
 
 
 @triton.jit
