@@ -13,21 +13,26 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.sparse.llada_patch import (
-    _BlockDualCache,
-    _adamas_prefix_indices,
-    _attention_output_lse,
     _cached_forward,
-    _compact_prefix_cache,
-    _dual_cache_from_dense,
-    _hadamard_transform,
-    _legacy_prefix_cache,
-    _merge_attention_states,
-    _new_losa_state,
     _select_positions,
     _transfer_tokens,
     patch_model,
 )
-from src.sparse.core import _TRITON_AVAILABLE, _fused_kv_index_copy_
+from src.sparse.core import (
+    _BlockDualCache,
+    _TRITON_AVAILABLE,
+    _dual_cache_from_dense,
+    _fused_kv_index_copy_,
+    _legacy_prefix_cache,
+)
+from src.sparse.sparse_ops import (
+    _adamas_prefix_indices,
+    _attention_output_lse,
+    _compact_prefix_cache,
+    _hadamard_transform,
+    _merge_attention_states,
+    _new_losa_state,
+)
 
 
 MODEL_PATH = "/data0/ysy/models/LLaDA2.1-mini"
@@ -92,7 +97,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         )
         queries = [torch.randn(1, 1, 2, 2) for _ in range(2)]
         with mock_patch(
-            "src.sparse.llada_patch._adamas_prefix_indices",
+            "src.sparse.sparse_ops._adamas_prefix_indices",
             return_value=torch.tensor([1, 3]),
         ) as selector:
             compact, indices = _compact_prefix_cache(

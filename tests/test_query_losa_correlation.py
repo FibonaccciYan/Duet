@@ -4,7 +4,7 @@ from unittest.mock import patch
 import torch
 
 from scripts.analyze_llada_query_losa_correlation import summarize_records
-from src.sparse.llada_patch import (
+from src.sparse.sparse_ops import (
     _losa_active_indices,
     _losa_key_energy,
     _new_losa_state,
@@ -99,7 +99,7 @@ class QueryLosaCorrelationTest(unittest.TestCase):
         state["fully_valid"] = True
 
         with patch(
-            "src.sparse.llada_patch.losa_query_delta",
+            "src.sparse.sparse_ops.losa_query_delta",
             return_value=torch.tensor([0.1, 0.9, 0.2]),
         ):
             active, valid, delta = _losa_active_indices(

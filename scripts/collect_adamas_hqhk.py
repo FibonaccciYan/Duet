@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 import bench_long_context as bench
-import src.sparse.llada_patch as sparse
+import src.sparse.sparse_ops as sparse
 
 
 QUANTILES = (0.158655253931, 0.5, 0.841344746069)

@@ -6,7 +6,7 @@ from unittest import mock
 import torch
 from transformers.cache_utils import DynamicCache
 
-from src.sparse.llada_patch import (
+from src.sparse.sparse_ops import (
     _apply_rotary,
     _attention_output_lse,
     _new_losa_state,
