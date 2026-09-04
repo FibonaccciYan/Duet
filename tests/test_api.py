@@ -30,6 +30,7 @@ class SparseApiTest(unittest.TestCase):
         self.assertTrue(kwargs["prefix_sparse"])
         self.assertTrue(kwargs["losa"])
         self.assertEqual(kwargs["selection_layer"], 3)
+        self.assertEqual(kwargs["prefix_chunk_size"], 256)
         patch_moe.assert_called_once_with(model)
         self.assertEqual(model._sparse_patch_family, "llada")
 
@@ -61,6 +62,7 @@ class SparseApiTest(unittest.TestCase):
         self.assertEqual(kwargs["losa_active_topk"], 7)
         self.assertEqual(kwargs["selection_layer"], 5)
         self.assertEqual(kwargs["refresh_step"], -1)
+        self.assertEqual(kwargs["prefix_chunk_size"], 1024)
         patch_moe.assert_not_called()
         self.assertEqual(model._sparse_patch_family, "sdar")
 

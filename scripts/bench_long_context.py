@@ -104,7 +104,7 @@ def load(args):
         query_sparse=query_sparse,
         prefix_sparse=prefix_sparse,
         prefix_token_budget=args.prefix_token_budget,
-        prefix_chunk_size=256,
+        prefix_chunk_size=1024 if is_sdar else 256,
         losa=args.mode in {"losa", "combined"},
         losa_active_topk=args.losa_active_topk,
         losa_score_mode=args.losa_score_mode,

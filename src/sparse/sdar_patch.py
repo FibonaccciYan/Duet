@@ -713,7 +713,7 @@ def patch_sdar_model(
     query_sparse=True,
     prefix_sparse=False,
     prefix_token_budget=256,
-    prefix_chunk_size=256,
+    prefix_chunk_size=1024,
     losa=False,
     losa_active_topk=5,
     losa_score_mode="query",

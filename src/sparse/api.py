@@ -39,7 +39,7 @@ def patch_model(
     query_sparse=False,
     prefix_sparse=False,
     prefix_token_budget=256,
-    prefix_chunk_size=256,
+    prefix_chunk_size=None,
     losa=False,
     losa_active_topk=5,
     losa_score_mode="query",
@@ -49,6 +49,9 @@ def patch_model(
 ):
     """Enable requested sparse features through the matching model patch."""
     family = resolve_model_family(model, model_name)
+    prefix_chunk_size = (
+        1024 if family == "sdar" else 256
+    ) if prefix_chunk_size is None else prefix_chunk_size
     if family == "llada":
         patch_llada_model(
             model,

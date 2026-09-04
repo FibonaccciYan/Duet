@@ -89,7 +89,7 @@ def parse_args():
     parser.add_argument("--query_losa_union", type=parse_bool, default=False)
     parser.add_argument("--prefix_sparse", type=parse_bool, default=None)
     parser.add_argument("--prefix_token_budget", type=int, default=256)
-    parser.add_argument("--prefix_chunk_size", type=int, default=256)
+    parser.add_argument("--prefix_chunk_size", type=int, default=None)
     parser.add_argument("--losa", type=parse_bool, default=False)
     parser.add_argument("--losa_active_topk", type=int, default=5)
     parser.add_argument(
