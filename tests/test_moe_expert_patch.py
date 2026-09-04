@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.sparse.llada_moe_expert_patch import _TRITON_AVAILABLE, patch_moe_experts
+from src.sparse.llada_moe_expert_patch import patch_moe_experts
 
 
 class _TinyExpert(nn.Module):
@@ -51,10 +51,7 @@ class _TinyMoE(nn.Module):
         return result
 
 
-@unittest.skipUnless(
-    torch.cuda.is_available() and _TRITON_AVAILABLE,
-    "requires CUDA and Triton",
-)
+@unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
 class MoEExpertPatchTest(unittest.TestCase):
     def test_packed_kernel_matches_reference(self):
         torch.manual_seed(0)

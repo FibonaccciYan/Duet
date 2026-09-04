@@ -20,14 +20,13 @@ from src.sparse.llada_patch import (
 )
 from src.sparse.core import (
     _BlockDualCache,
-    _TRITON_AVAILABLE,
     _dual_cache_from_dense,
     _fused_kv_index_copy_,
     _legacy_prefix_cache,
 )
 from src.sparse.sparse_ops import (
     _adamas_prefix_indices,
-    _attention_output_lse,
+    _block_attention_output_lse,
     _compact_prefix_cache,
     _hadamard_transform,
     _merge_attention_states,
@@ -77,6 +76,12 @@ def _block_mask(num_blocks, block_length, dtype):
     )
 
 
+def _torch_kv_copy(key_cache, value_cache, positions, key, value, prefix_length):
+    positions = positions + prefix_length
+    key_cache.index_copy_(2, positions, key)
+    value_cache.index_copy_(2, positions, value)
+
+
 class BlockCacheSparsePatchTest(unittest.TestCase):
     def test_prefix_compaction_selects_once_and_shares_indices(self):
         cache = DynamicCache.from_legacy_cache(
@@ -122,16 +127,16 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         prefix_mask = torch.zeros(1, 1, 3, 5)
         block_mask = torch.zeros(1, 1, 3, 4)
 
-        prefix_output, prefix_lse = _attention_output_lse(
+        prefix_output, prefix_lse = _block_attention_output_lse(
             query, prefix_key, prefix_value, prefix_mask, num_key_value_groups=2
         )
-        block_output, block_lse = _attention_output_lse(
+        block_output, block_lse = _block_attention_output_lse(
             query, block_key, block_value, block_mask, num_key_value_groups=2
         )
         merged_output, merged_lse = _merge_attention_states(
             prefix_output, prefix_lse, block_output, block_lse
         )
-        dense_output, dense_lse = _attention_output_lse(
+        dense_output, dense_lse = _block_attention_output_lse(
             query,
             torch.cat((prefix_key, block_key), dim=2),
             torch.cat((prefix_value, block_value), dim=2),
@@ -154,7 +159,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         value = torch.randn_like(key)
         mask = torch.zeros(1, 1, 3, 4, dtype=torch.bfloat16)
 
-        output, lse = _attention_output_lse(query, key, value, mask, 2)
+        output, lse = _block_attention_output_lse(query, key, value, mask, 2)
 
         self.assertEqual(output.dtype, query.dtype)
         self.assertEqual(lse.dtype, torch.float32)
@@ -260,7 +265,8 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(transferred.tolist(), [[True, True, False, True]])
         self.assertEqual(tokens.tolist(), [[10, 11, 127, 13]])
 
-    def test_dual_cache_overwrites_only_selected_current_kv(self):
+    @mock_patch("src.sparse.core._fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    def test_dual_cache_overwrites_only_selected_current_kv(self, _copy):
         prefix = torch.randn(1, 2, 2, 3)
         current = torch.randn(1, 2, 4, 3)
         cache = _BlockDualCache(
@@ -284,10 +290,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         torch.testing.assert_close(key[:, :, [0, 1, 2, 4]], original_key[:, :, [0, 1, 2, 4]])
         torch.testing.assert_close(value[:, :, [0, 1, 2, 4]], original_value[:, :, [0, 1, 2, 4]])
 
-    @unittest.skipUnless(
-        torch.cuda.is_available() and _TRITON_AVAILABLE,
-        "requires CUDA and Triton",
-    )
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
     def test_fused_kv_index_copy_matches_torch(self):
         positions = torch.tensor([1, 3], device="cuda")
         key_states = torch.randn(1, 2, 2, 3, device="cuda")
@@ -311,8 +314,9 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         torch.testing.assert_close(actual_key, expected_key)
         torch.testing.assert_close(actual_value, expected_value)
 
-    def test_python_adamas_selector_returns_sorted_indices(self):
-        values = torch.arange(8, dtype=torch.float32)
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    def test_adamas_selector_returns_sorted_indices(self):
+        values = torch.arange(8, dtype=torch.float16, device="cuda")
         transformed = _hadamard_transform(values)
         expected = values @ (torch.tensor(
             [
@@ -325,21 +329,31 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 [1, 1, -1, -1, -1, -1, 1, 1],
                 [1, -1, -1, 1, -1, 1, 1, -1],
             ],
-            dtype=torch.float32,
+            dtype=torch.float16,
+            device="cuda",
         ) / 8**0.5)
-        torch.testing.assert_close(transformed, expected)
+        torch.testing.assert_close(transformed, expected, rtol=2e-3, atol=2e-3)
 
         torch.manual_seed(0)
-        query = torch.randn(1, 4, 3, 8)
-        key = torch.randn(1, 2, 11, 8)
+        query = torch.randn(1, 4, 3, 8, device="cuda", dtype=torch.float16)
+        key = torch.randn(1, 2, 11, 8, device="cuda", dtype=torch.float16)
         indices = _adamas_prefix_indices(query, key, token_budget=4, chunk_size=3)
         self.assertGreaterEqual(indices.numel(), 4)
         self.assertTrue(torch.all(indices[1:] > indices[:-1]).item())
         self.assertTrue(torch.all((0 <= indices) & (indices < 11)).item())
 
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
     def test_adamas_selector_preserves_union_beyond_budget(self):
-        query = torch.tensor([[[[2.0, 0.0], [-2.0, 0.0], [0.0, 2.0]]]])
-        key = torch.tensor([[[[4.0, 0.0], [-4.0, 0.0], [0.0, 4.0]]]])
+        query = torch.tensor(
+            [[[[2.0, 0.0], [-2.0, 0.0], [0.0, 2.0]]]],
+            device="cuda",
+            dtype=torch.float16,
+        )
+        key = torch.tensor(
+            [[[[4.0, 0.0], [-4.0, 0.0], [0.0, 4.0]]]],
+            device="cuda",
+            dtype=torch.float16,
+        )
         indices = _adamas_prefix_indices(query, key, token_budget=2, chunk_size=1)
 
         self.assertEqual(indices.tolist(), [0, 1, 2])
@@ -378,7 +392,8 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    def test_query_sparse_returns_logits_only_for_selected_masks(self):
+    @mock_patch("src.sparse.core._fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    def test_query_sparse_returns_logits_only_for_selected_masks(self, _copy):
         model = _tiny_model()
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
         positions = torch.arange(8).unsqueeze(0)
@@ -480,7 +495,11 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         self.assertEqual(model.config.llada_query_selection_layer, 3)
 
-    def test_losa_first_cached_forward_matches_dense_forward_exactly(self):
+    @mock_patch(
+        "src.sparse.llada_patch._attention_output_lse",
+        side_effect=_block_attention_output_lse,
+    )
+    def test_losa_first_cached_forward_matches_dense_forward_exactly(self, _attention):
         model = _tiny_model()
         patch_model(
             model,
@@ -530,7 +549,17 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             )
         )
 
-    def test_losa_full_active_budget_uses_losa_after_dense_init(self):
+    @mock_patch(
+        "src.sparse.llada_patch._attention_output_lse",
+        side_effect=_block_attention_output_lse,
+    )
+    @mock_patch(
+        "src.sparse.sparse_ops.losa_query_delta",
+        side_effect=lambda query, *_args, **_kwargs: torch.zeros(query.shape[2]),
+    )
+    def test_losa_full_active_budget_uses_losa_after_dense_init(
+        self, _delta, _attention
+    ):
         model = _tiny_model()
         patch_model(
             model,
@@ -640,7 +669,8 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    def test_sparse_multiblock_generation_uses_llada_selector(self):
+    @mock_patch("src.sparse.core._fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    def test_sparse_multiblock_generation_uses_llada_selector(self, _copy):
         model = _tiny_model()
         patch_model(
             model,
@@ -649,7 +679,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             selection_interval=3,
             dense_fallback_mask_count=0,
             query_sparse=True,
-            prefix_sparse=True,
+            prefix_sparse=False,
             prefix_token_budget=2,
             prefix_chunk_size=2,
         )

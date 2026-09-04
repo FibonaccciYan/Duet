@@ -8,7 +8,7 @@ from transformers.cache_utils import DynamicCache
 
 from src.sparse.sparse_ops import (
     _apply_rotary,
-    _attention_output_lse,
+    _block_attention_output_lse,
     _new_losa_state,
 )
 from src.sparse.sdar_patch import (
@@ -118,7 +118,17 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         self.assertEqual(list(layer.self_attn.children()), [])
         self.assertIs(layer.self_attn._sdar_losa_model_ref(), model)
 
-    def test_losa_full_active_budget_matches_dense_attention(self):
+    @mock.patch(
+        "src.sparse.sdar_patch._attention_output_lse",
+        side_effect=_block_attention_output_lse,
+    )
+    @mock.patch(
+        "src.sparse.sparse_ops.losa_query_delta",
+        side_effect=lambda query, *_args, **_kwargs: torch.zeros(query.shape[2]),
+    )
+    def test_losa_full_active_budget_matches_dense_attention(
+        self, _delta, _attention
+    ):
         class Attention(torch.nn.Module):
             def __init__(self):
                 super().__init__()
@@ -163,7 +173,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
                 if past_key_value is not None and store_kv:
                     key, value = past_key_value.update(key, value, 0)
                 mask = attention_mask.unsqueeze(1)
-                output, _ = _attention_output_lse(
+                output, _ = _block_attention_output_lse(
                     query, key, value, mask, self.num_key_value_groups
                 )
                 output = output.transpose(1, 2).reshape(batch, length, 2)

@@ -13,6 +13,7 @@ from .core import (
 from .sparse_ops import (
     _apply_rotary,
     _attention_output_lse,
+    _block_attention_output_lse,
     _compact_prefix_cache,
     _losa_active_indices,
     _losa_key_energy,
@@ -48,7 +49,6 @@ def _losa_attention_forward(
             position_embeddings=position_embeddings,
             **kwargs,
         )
-    use_triton_attention = context["active_topk"] >= context["block_length"]
     input_shape = hidden_states.shape[:-1]
     batch_size, query_length, _ = hidden_states.shape
     qkv = self.query_key_value(hidden_states).view(
@@ -113,7 +113,6 @@ def _losa_attention_forward(
                 prefix_value,
                 prefix_mask,
                 self.num_key_value_groups,
-                use_triton=use_triton_attention,
             )
         else:
             prefix_output = query.new_zeros(
@@ -140,13 +139,12 @@ def _losa_attention_forward(
     prefix_value, block_value = value[:, :, :prefix_length], value[:, :, prefix_length:]
     prefix_mask = attention_mask[..., :prefix_length]
     block_mask = attention_mask[..., prefix_length:]
-    block_output, block_lse = _attention_output_lse(
+    block_output, block_lse = _block_attention_output_lse(
         query,
         block_key,
         block_value,
         block_mask,
         self.num_key_value_groups,
-        use_triton=use_triton_attention,
     )
 
     query_positions = context["query_positions"]
@@ -201,7 +199,6 @@ def _losa_attention_forward(
             prefix_value,
             active_prefix_mask,
             self.num_key_value_groups,
-            use_triton=use_triton_attention,
         )
     else:
         active_prefix_output = query.new_zeros(

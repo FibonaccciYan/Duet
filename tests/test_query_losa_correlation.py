@@ -79,13 +79,17 @@ class QueryLosaCorrelationTest(unittest.TestCase):
         state = _new_losa_state(query, block_length=4)
         state["valid"][0, [0, 2]] = True
 
-        active, valid, delta = _losa_active_indices(
-            state,
-            query,
-            torch.tensor([0, 1, 2]),
-            active_topk=2,
-            return_metadata=True,
-        )
+        with patch(
+            "src.sparse.sparse_ops.losa_query_delta",
+            return_value=torch.tensor([0.0, 1.0]),
+        ):
+            active, valid, delta = _losa_active_indices(
+                state,
+                query,
+                torch.tensor([0, 1, 2]),
+                active_topk=2,
+                return_metadata=True,
+            )
 
         self.assertEqual(active.tolist(), [1, 2])
         self.assertEqual(valid.tolist(), [True, False, True])
@@ -122,13 +126,17 @@ class QueryLosaCorrelationTest(unittest.TestCase):
         state["valid"].fill_(True)
         state["key_energy"] = torch.tensor([[0.01, 10.0]])
 
-        active = _losa_active_indices(
-            state,
-            query,
-            torch.arange(2),
-            active_topk=1,
-            score_mode="key_diag",
-        )
+        with patch(
+            "src.sparse.sparse_ops.losa_query_delta",
+            return_value=torch.tensor([0.04, 10.0]),
+        ):
+            active = _losa_active_indices(
+                state,
+                query,
+                torch.arange(2),
+                active_topk=1,
+                score_mode="key_diag",
+            )
 
         self.assertEqual(active.tolist(), [1])
 

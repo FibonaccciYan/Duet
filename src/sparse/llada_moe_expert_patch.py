@@ -9,16 +9,8 @@ kernels. The model files are never modified on disk.
 import types
 
 import torch
-
-try:
-    import triton
-    import triton.language as tl
-
-    _TRITON_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised only in minimal installs
-    triton = None
-    tl = None
-    _TRITON_AVAILABLE = False
+import triton
+import triton.language as tl
 
 
 _BLOCK_M = 16
@@ -26,143 +18,141 @@ _BLOCK_N = 128
 _BLOCK_K = 128
 
 
-if _TRITON_AVAILABLE:
+@triton.jit
+def _moe_gate_up_kernel(
+    x_ptr,
+    gate_weight_ptr,
+    up_weight_ptr,
+    gate_out_ptr,
+    up_out_ptr,
+    active_experts_ptr,
+    offsets_ptr,
+    counts_ptr,
+    total_rows,
+    tiles_m,
+    hidden_size,
+    intermediate_size,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    expert_slot = pid // tiles_m
+    expert_id = tl.load(active_experts_ptr + expert_slot)
+    tile_m = pid % tiles_m
+    pid_n = tl.program_id(1)
 
-    @triton.jit
-    def _moe_gate_up_kernel(
-        x_ptr,
-        gate_weight_ptr,
-        up_weight_ptr,
-        gate_out_ptr,
-        up_out_ptr,
-        active_experts_ptr,
-        offsets_ptr,
-        counts_ptr,
-        total_rows,
-        tiles_m,
-        hidden_size,
-        intermediate_size,
-        BLOCK_M: tl.constexpr,
-        BLOCK_N: tl.constexpr,
-        BLOCK_K: tl.constexpr,
-    ):
-        pid = tl.program_id(0)
-        expert_slot = pid // tiles_m
-        expert_id = tl.load(active_experts_ptr + expert_slot)
-        tile_m = pid % tiles_m
-        pid_n = tl.program_id(1)
+    rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    cols = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    count = tl.load(counts_ptr + expert_id)
+    start = tl.load(offsets_ptr + expert_id)
+    row_ids = start + rows
+    row_mask = (rows < count) & (row_ids < total_rows)
+    col_mask = cols < intermediate_size
 
-        rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        cols = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        count = tl.load(counts_ptr + expert_id)
-        start = tl.load(offsets_ptr + expert_id)
-        row_ids = start + rows
-        row_mask = (rows < count) & (row_ids < total_rows)
-        col_mask = cols < intermediate_size
+    gate_acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    up_acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k_start in range(0, tl.cdiv(hidden_size, BLOCK_K)):
+        ks = k_start * BLOCK_K + tl.arange(0, BLOCK_K)
+        k_mask = ks < hidden_size
+        x_ptrs = x_ptr + row_ids[:, None] * hidden_size + ks[None, :]
+        x_tile = tl.load(x_ptrs, mask=row_mask[:, None] & k_mask[None, :], other=0.0)
 
-        gate_acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        up_acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        for k_start in range(0, tl.cdiv(hidden_size, BLOCK_K)):
-            ks = k_start * BLOCK_K + tl.arange(0, BLOCK_K)
-            k_mask = ks < hidden_size
-            x_ptrs = x_ptr + row_ids[:, None] * hidden_size + ks[None, :]
-            x_tile = tl.load(x_ptrs, mask=row_mask[:, None] & k_mask[None, :], other=0.0)
-
-            gate_ptrs = (
-                gate_weight_ptr
-                + expert_id * intermediate_size * hidden_size
-                + cols[:, None] * hidden_size
-                + ks[None, :]
-            )
-            up_ptrs = (
-                up_weight_ptr
-                + expert_id * intermediate_size * hidden_size
-                + cols[:, None] * hidden_size
-                + ks[None, :]
-            )
-            gate_tile = tl.load(
-                gate_ptrs,
-                mask=col_mask[:, None] & k_mask[None, :],
-                other=0.0,
-            )
-            up_tile = tl.load(
-                up_ptrs,
-                mask=col_mask[:, None] & k_mask[None, :],
-                other=0.0,
-            )
-            gate_acc += tl.dot(x_tile, tl.trans(gate_tile), out_dtype=tl.float32)
-            up_acc += tl.dot(x_tile, tl.trans(up_tile), out_dtype=tl.float32)
-
-        out_ptrs = gate_out_ptr + row_ids[:, None] * intermediate_size + cols[None, :]
-        tl.store(out_ptrs, gate_acc, mask=row_mask[:, None] & col_mask[None, :])
-        out_ptrs = up_out_ptr + row_ids[:, None] * intermediate_size + cols[None, :]
-        tl.store(out_ptrs, up_acc, mask=row_mask[:, None] & col_mask[None, :])
-
-
-    @triton.jit
-    def _moe_down_kernel(
-        gate_ptr,
-        up_ptr,
-        down_weight_ptr,
-        out_ptr,
-        active_experts_ptr,
-        offsets_ptr,
-        counts_ptr,
-        total_rows,
-        tiles_m,
-        hidden_size,
-        intermediate_size,
-        BLOCK_M: tl.constexpr,
-        BLOCK_N: tl.constexpr,
-        BLOCK_K: tl.constexpr,
-    ):
-        pid = tl.program_id(0)
-        expert_slot = pid // tiles_m
-        expert_id = tl.load(active_experts_ptr + expert_slot)
-        tile_m = pid % tiles_m
-        pid_n = tl.program_id(1)
-
-        rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        cols = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        count = tl.load(counts_ptr + expert_id)
-        start = tl.load(offsets_ptr + expert_id)
-        row_ids = start + rows
-        row_mask = (rows < count) & (row_ids < total_rows)
-        col_mask = cols < hidden_size
-
-        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        for k_start in range(0, tl.cdiv(intermediate_size, BLOCK_K)):
-            ks = k_start * BLOCK_K + tl.arange(0, BLOCK_K)
-            k_mask = ks < intermediate_size
-            gate_values = tl.load(
-                gate_ptr + row_ids[:, None] * intermediate_size + ks[None, :],
-                mask=row_mask[:, None] & k_mask[None, :],
-                other=0.0,
-            ).to(tl.float32)
-            up_values = tl.load(
-                up_ptr + row_ids[:, None] * intermediate_size + ks[None, :],
-                mask=row_mask[:, None] & k_mask[None, :],
-                other=0.0,
-            ).to(tl.float32)
-            activated = gate_values * tl.sigmoid(gate_values) * up_values
-            weight_ptrs = (
-                down_weight_ptr
-                + expert_id * hidden_size * intermediate_size
-                + cols[:, None] * intermediate_size
-                + ks[None, :]
-            )
-            weights = tl.load(
-                weight_ptrs,
-                mask=col_mask[:, None] & k_mask[None, :],
-                other=0.0,
-            ).to(tl.float32)
-            acc += tl.dot(activated, tl.trans(weights), out_dtype=tl.float32)
-
-        tl.store(
-            out_ptr + row_ids[:, None] * hidden_size + cols[None, :],
-            acc,
-            mask=row_mask[:, None] & col_mask[None, :],
+        gate_ptrs = (
+            gate_weight_ptr
+            + expert_id * intermediate_size * hidden_size
+            + cols[:, None] * hidden_size
+            + ks[None, :]
         )
+        up_ptrs = (
+            up_weight_ptr
+            + expert_id * intermediate_size * hidden_size
+            + cols[:, None] * hidden_size
+            + ks[None, :]
+        )
+        gate_tile = tl.load(
+            gate_ptrs,
+            mask=col_mask[:, None] & k_mask[None, :],
+            other=0.0,
+        )
+        up_tile = tl.load(
+            up_ptrs,
+            mask=col_mask[:, None] & k_mask[None, :],
+            other=0.0,
+        )
+        gate_acc += tl.dot(x_tile, tl.trans(gate_tile), out_dtype=tl.float32)
+        up_acc += tl.dot(x_tile, tl.trans(up_tile), out_dtype=tl.float32)
+
+    out_ptrs = gate_out_ptr + row_ids[:, None] * intermediate_size + cols[None, :]
+    tl.store(out_ptrs, gate_acc, mask=row_mask[:, None] & col_mask[None, :])
+    out_ptrs = up_out_ptr + row_ids[:, None] * intermediate_size + cols[None, :]
+    tl.store(out_ptrs, up_acc, mask=row_mask[:, None] & col_mask[None, :])
+
+
+@triton.jit
+def _moe_down_kernel(
+    gate_ptr,
+    up_ptr,
+    down_weight_ptr,
+    out_ptr,
+    active_experts_ptr,
+    offsets_ptr,
+    counts_ptr,
+    total_rows,
+    tiles_m,
+    hidden_size,
+    intermediate_size,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    expert_slot = pid // tiles_m
+    expert_id = tl.load(active_experts_ptr + expert_slot)
+    tile_m = pid % tiles_m
+    pid_n = tl.program_id(1)
+
+    rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    cols = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    count = tl.load(counts_ptr + expert_id)
+    start = tl.load(offsets_ptr + expert_id)
+    row_ids = start + rows
+    row_mask = (rows < count) & (row_ids < total_rows)
+    col_mask = cols < hidden_size
+
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k_start in range(0, tl.cdiv(intermediate_size, BLOCK_K)):
+        ks = k_start * BLOCK_K + tl.arange(0, BLOCK_K)
+        k_mask = ks < intermediate_size
+        gate_values = tl.load(
+            gate_ptr + row_ids[:, None] * intermediate_size + ks[None, :],
+            mask=row_mask[:, None] & k_mask[None, :],
+            other=0.0,
+        ).to(tl.float32)
+        up_values = tl.load(
+            up_ptr + row_ids[:, None] * intermediate_size + ks[None, :],
+            mask=row_mask[:, None] & k_mask[None, :],
+            other=0.0,
+        ).to(tl.float32)
+        activated = gate_values * tl.sigmoid(gate_values) * up_values
+        weight_ptrs = (
+            down_weight_ptr
+            + expert_id * hidden_size * intermediate_size
+            + cols[:, None] * intermediate_size
+            + ks[None, :]
+        )
+        weights = tl.load(
+            weight_ptrs,
+            mask=col_mask[:, None] & k_mask[None, :],
+            other=0.0,
+        ).to(tl.float32)
+        acc += tl.dot(activated, tl.trans(weights), out_dtype=tl.float32)
+
+    tl.store(
+        out_ptr + row_ids[:, None] * hidden_size + cols[None, :],
+        acc,
+        mask=row_mask[:, None] & col_mask[None, :],
+    )
 
 
 def _packed_weights(block):
@@ -263,8 +253,6 @@ def _triton_moe_infer(self, x, topk_ids, topk_weight):
 def _pack_block(block):
     if getattr(block, "_llada_moe_expert_patched", False):
         return True
-    if not _TRITON_AVAILABLE or not torch.cuda.is_available():
-        return False
     if not hasattr(block, "experts") or not hasattr(block, "moe_infer"):
         return False
 

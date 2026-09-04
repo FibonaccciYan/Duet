@@ -1,14 +1,9 @@
 """Sparse attention and prefix-cache operations shared by LLaDA and SDAR."""
 
 import math
-import os
 
 import torch
-
-try:
-    import faster_hadamard_transform
-except (ImportError, OSError):  # pragma: no cover - optional CUDA extension
-    faster_hadamard_transform = None
+import faster_hadamard_transform
 
 from .core import _legacy_prefix_cache
 from .triton_kernels import adamas_distances, attention_output_lse, losa_query_delta
@@ -43,22 +38,15 @@ def _losa_key_energy(prefix_key, num_key_value_groups, sample_count):
     return energy.repeat_interleave(num_key_value_groups, dim=1)[0]
 
 
-def _attention_output_lse(
-    query,
-    key,
-    value,
-    attention_mask,
-    num_key_value_groups,
-    use_triton=True,
+def _attention_output_lse(query, key, value, attention_mask, _groups=None):
+    """Run the canonical Triton prefix-attention implementation."""
+    return attention_output_lse(query, key, value, attention_mask)
+
+
+def _block_attention_output_lse(
+    query, key, value, attention_mask, num_key_value_groups
 ):
-    """Attention returning the normalized output and row-wise LSE."""
-    triton_result = (
-        attention_output_lse(query, key, value, attention_mask)
-        if use_triton
-        else None
-    )
-    if triton_result is not None:
-        return triton_result
+    """Compute exact short-block attention; this is not a prefix fallback."""
     key = _repeat_kv(key, num_key_value_groups)
     value = _repeat_kv(value, num_key_value_groups)
     scores = torch.matmul(query, key.transpose(-2, -1))
@@ -133,17 +121,16 @@ def _losa_active_indices(
 ):
     positions = query_positions.to(device=query.device, dtype=torch.long)
     weights = state.get("key_energy") if score_mode.startswith("key_diag") else None
-    if state.get("fully_valid", False) and state.get("use_triton_delta", True):
+    if state.get("fully_valid", False):
         delta = losa_query_delta(
             query, state["previous_query"], positions, weights=weights
         )
-        if delta is not None:
-            active = torch.topk(
-                delta, k=min(int(active_topk), positions.numel())
-            ).indices
-            if return_metadata:
-                return active, state["valid"].index_select(1, positions)[0], delta
-            return active
+        active = torch.topk(
+            delta, k=min(int(active_topk), positions.numel())
+        ).indices
+        if return_metadata:
+            return active, state["valid"].index_select(1, positions)[0], delta
+        return active
     valid = state["valid"].index_select(1, positions)[0]
     missing = torch.where(~valid)[0]
     if missing.numel() == positions.numel():
@@ -159,14 +146,12 @@ def _losa_active_indices(
     stable_delta = None
     if remaining or return_metadata:
         stable = torch.where(valid)[0]
-        previous = state["previous_query"].index_select(2, positions[stable])
-        difference = query[:, :, stable, :].float() - previous.float()
-        if score_mode.startswith("key_diag") and weights is not None:
-            stable_delta = difference.square().mul(weights[None, :, None, :]).mean(
-                dim=(1, 3)
-            )[0]
-        else:
-            stable_delta = difference.square().mean(dim=(1, 3))[0]
+        stable_delta = losa_query_delta(
+            query.index_select(2, stable),
+            state["previous_query"],
+            positions.index_select(0, stable),
+            weights=weights,
+        )
         if remaining:
             active.extend(
                 stable[torch.topk(stable_delta, k=remaining).indices].tolist()
@@ -197,24 +182,11 @@ def _hadamard_transform(x):
     size = x.shape[-1]
     if size <= 0 or size & (size - 1):
         raise ValueError(f"Adamas requires a power-of-two head dimension, got {size}")
-    if (
-        faster_hadamard_transform is not None
-        and x.is_cuda
-        and os.environ.get("SPARSE_DLM_FASTER_HADAMARD", "true").lower()
-        not in {"0", "false", "no", "n"}
-    ):
-        return faster_hadamard_transform.hadamard_transform(
-            x.contiguous(), inplace=False
-        )
-    leading_shape = x.shape[:-1]
-    output = x
-    width = 1
-    while width < size:
-        output = output.reshape(*leading_shape, -1, 2, width)
-        left, right = output.unbind(dim=-2)
-        output = torch.cat((left + right, left - right), dim=-1)
-        width *= 2
-    return output.reshape_as(x) / math.sqrt(size)
+    if not x.is_cuda:
+        raise ValueError("Faster Hadamard requires a CUDA tensor")
+    return faster_hadamard_transform.hadamard_transform(
+        x.contiguous(), inplace=False
+    )
 
 
 def _adamas_prefix_indices(
@@ -222,7 +194,6 @@ def _adamas_prefix_indices(
     key,
     token_budget,
     chunk_size=256,
-    use_triton=True,
     bucket_thresholds=None,
 ):
     """Select a shared prefix KV set from the union of query candidates."""
@@ -247,28 +218,13 @@ def _adamas_prefix_indices(
     key_heads = key_code.shape[1]
     if batch_size != 1 or query_heads % key_heads:
         raise ValueError("Adamas prefix selection requires batch_size=1 and valid GQA heads")
-    query_groups = query_code.reshape(
-        batch_size,
-        key_heads,
-        query_heads // key_heads,
-        query_length,
-        head_dim,
-    )
-
     local_budget = max(1, math.ceil(budget / (query_heads * query_length)))
     query_distances = query_indices = None
     scores = []
     for start in range(0, prefix_length, chunk_size):
         chunk = key_code[:, :, start : start + chunk_size]
-        flat_distances = adamas_distances(query_code, chunk) if use_triton else None
-        if flat_distances is None:
-            distances = (
-                query_groups[..., None, :] - chunk[:, :, None, None, :, :]
-            ).abs().sum(dim=-1)
-            flat_distances = distances[0].reshape(-1, chunk.shape[-2])
-            scores.append(distances.amin(dim=(1, 2, 3)))
-        else:
-            scores.append(flat_distances.amin(dim=0, keepdim=True))
+        flat_distances = adamas_distances(query_code, chunk)
+        scores.append(flat_distances.amin(dim=0, keepdim=True))
         chunk_length = chunk.shape[-2]
         chunk_distances = flat_distances
         chunk_indices = torch.arange(
@@ -302,7 +258,6 @@ def _compact_prefix_cache(
     block_position_ids,
     token_budget,
     chunk_size,
-    use_triton_adamas=True,
 ):
     prefix_cache = _legacy_prefix_cache(cache, prefix_length)
     if not prefix_cache:
@@ -322,7 +277,6 @@ def _compact_prefix_cache(
         key,
         token_budget,
         chunk_size,
-        use_triton=use_triton_adamas,
         bucket_thresholds=ADAMAS_BUCKET_THRESHOLDS.get(model.config.model_type),
     )
     compact_cache = tuple(

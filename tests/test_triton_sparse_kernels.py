@@ -3,17 +3,13 @@ import unittest
 import torch
 
 from src.sparse.triton_kernels import (
-    TRITON_AVAILABLE,
     adamas_distances,
     attention_output_lse,
     losa_query_delta,
 )
 
 
-@unittest.skipUnless(
-    torch.cuda.is_available() and TRITON_AVAILABLE,
-    "requires CUDA and Triton",
-)
+@unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
 class TritonSparseKernelsTest(unittest.TestCase):
     def test_adamas_distances_match_broadcast_reference(self):
         torch.manual_seed(0)
