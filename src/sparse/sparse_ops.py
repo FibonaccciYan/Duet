@@ -300,6 +300,18 @@ def _adamas_prefix_indices(
         flat_distances = adamas_distances(query_code, chunk)
         scores.append(flat_distances.amin(dim=0, keepdim=True))
         chunk_length = chunk.shape[-2]
+        if local_budget == 1:
+            chunk_distances, chunk_indices = flat_distances.min(dim=1, keepdim=True)
+            chunk_indices.add_(start)
+            if query_distances is None:
+                query_distances, query_indices = chunk_distances, chunk_indices
+            else:
+                replace = chunk_distances < query_distances
+                query_distances = torch.where(
+                    replace, chunk_distances, query_distances
+                )
+                query_indices = torch.where(replace, chunk_indices, query_indices)
+            continue
         chunk_distances = flat_distances
         chunk_indices = torch.arange(
             start, start + chunk_length, device=key.device
