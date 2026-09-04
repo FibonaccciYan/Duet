@@ -211,7 +211,8 @@ work. Representative SDAR 32K runs on GPU 3 are:
 These timings include the complete prefill/decode path; checksums and actual
 generated-token counts are emitted by `scripts/bench_long_context.py`.
 
-Latest LLaDA compact-prefill results (GPU 5, matched Triton MoE backend):
+LLaDA compact-prefill results (GPU 5, matched Triton MoE backend, 32x128x128
+MoE tiles):
 
 | Generation/configuration | 8K | 16K | 32K |
 | --- | ---: | ---: | ---: |
@@ -227,7 +228,11 @@ block. Peak memory is 34--36 GiB; the former quadratic-mask path used about
 The routed-MoE kernels use a 32-row tile; compared with the former 16-row tile,
 32K Query+Prefix generation fell from 11.37s to 8.34s at gen=256 and from
 18.36s to 14.46s at gen=768, with identical output checksums. A 64-row tile
-exceeds the GPU shared-memory limit. The lower speedup ratio at longer context
+exceeds the GPU shared-memory limit. Reducing the K tile from 128 to 64 and
+using eight warps for the down projection then
+reduced isolated 32K sparse runs to 7.69--8.28s at gen=256 and 13.70s at
+gen=768; the 1K/gen=768 short-context case fell from 5.46s to 4.87s. All
+checksums remained identical. The lower speedup ratio at longer context
 comes from prefix selection/Adamas work growing with prefix length while dense
 large GEMMs become more efficient; sparse absolute latency still grows much
 more slowly than dense attention would without the shared prefill cache.

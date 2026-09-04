@@ -7,7 +7,7 @@ import triton.language as tl
 
 _MOE_BLOCK_M = 32
 _MOE_BLOCK_N = 128
-_MOE_BLOCK_K = 128
+_MOE_BLOCK_K = 64
 
 
 @triton.jit
@@ -864,6 +864,7 @@ def _triton_moe_infer(self, x, topk_ids, topk_weight):
         BLOCK_M=_MOE_BLOCK_M,
         BLOCK_N=_MOE_BLOCK_N,
         BLOCK_K=_MOE_BLOCK_K,
+        num_warps=8,
     )
 
     restored = torch.empty_like(routed_out)
