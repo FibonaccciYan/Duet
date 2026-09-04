@@ -211,6 +211,18 @@ work. Representative SDAR 32K runs on GPU 3 are:
 These timings include the complete prefill/decode path; checksums and actual
 generated-token counts are emitted by `scripts/bench_long_context.py`.
 
+Latest LLaDA compact-prefill results (GPU 4, 32K total context):
+
+| Configuration | gen=256 | gen=768 |
+| --- | ---: | ---: |
+| Dense | 20.38s | 42.89s |
+| Query+Prefix-256 | 11.58s (1.76x) | 18.85s (2.28x) |
+
+The runtime stores block-causal structure as implicit metadata, caches the
+fixed prompt KV once, and only refreshes the generated suffix for each new
+block. Peak memory is 34--36 GiB; the former quadratic-mask path used about
+64 GiB at 32K and could not run the 32K/gen=768 dense case on an 80 GiB GPU.
+
 ## Supporting tools
 
 - `scripts/bench_sparse_ops.py`: kernel-level sparse operation benchmark.

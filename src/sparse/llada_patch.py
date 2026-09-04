@@ -1,5 +1,7 @@
 import math
 import types
+import weakref
+from types import SimpleNamespace
 
 import torch
 from transformers.cache_utils import DynamicCache
@@ -19,7 +21,100 @@ from .sparse_ops import (
     _new_losa_state,
     _queue_losa_active_update,
 )
-from .triton_kernels import _triton_moe_infer
+from .triton_kernels import _triton_moe_infer, block_causal_prefill
+
+
+def _prefill_attention_forward(
+    self,
+    hidden_states,
+    attention_mask=None,
+    position_ids=None,
+    past_key_value=None,
+    output_attentions=False,
+    use_cache=False,
+    position_embeddings=None,
+    **kwargs,
+):
+    """Exact block-causal attention without materializing the quadratic mask."""
+    model = self._llada_prefill_model_ref()
+    if not getattr(model, "_llada_triton_prefill", False):
+        return self._llada_prefill_dense_forward(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
+    batch_size, query_length, _ = hidden_states.shape
+    qkv = self.query_key_value(hidden_states).view(
+        batch_size,
+        query_length,
+        self.num_heads + 2 * self.num_key_value_heads,
+        self.head_dim,
+    )
+    query, key, value = qkv.split(
+        [self.num_heads, self.num_key_value_heads, self.num_key_value_heads], dim=-2
+    )
+    query, key, value = (
+        query.transpose(1, 2),
+        key.transpose(1, 2),
+        value.transpose(1, 2),
+    )
+    if self.config.use_qk_norm:
+        query, key = self.query_layernorm(query), self.key_layernorm(key)
+    cos, sin = position_embeddings
+    query, key = _apply_rotary(query, cos, sin), _apply_rotary(key, cos, sin)
+    if past_key_value is not None:
+        key, value = past_key_value.update(
+            key, value, self.layer_idx, {"sin": sin, "cos": cos}
+        )
+    output = block_causal_prefill(query, key, value)
+    output = output.transpose(1, 2).reshape(batch_size, query_length, -1)
+    return self.dense(output), None, past_key_value
+
+
+def _dense_block_prefill(model, input_ids, position_ids, cache=None):
+    """Run LLaDA's first block pass using implicit block-causal metadata."""
+    if not input_ids.is_cuda:
+        length = input_ids.shape[1]
+        blocks = torch.arange(length, device=input_ids.device) // 32
+        allowed = blocks[:, None] >= blocks[None, :]
+        dtype = next(model.parameters()).dtype
+        mask = torch.zeros((1, 1, length, length), dtype=dtype).masked_fill(
+            ~allowed, torch.finfo(dtype).min
+        )
+        return model._llada_block_cache_dense_forward(
+            input_ids,
+            attention_mask=mask,
+            position_ids=position_ids,
+            use_cache=True,
+            return_dict=True,
+        )
+    base = model.model
+    hidden_states = base.word_embeddings(input_ids)
+    position_embeddings = base.rotary_emb(hidden_states, position_ids)
+    cache = DynamicCache() if cache is None else cache
+    model._llada_triton_prefill = True
+    try:
+        for layer in base.layers:
+            hidden_states = layer(
+                hidden_states,
+                attention_mask=None,
+                position_ids=position_ids,
+                past_key_value=cache,
+                output_attentions=False,
+                output_router_logits=False,
+                use_cache=True,
+                position_embeddings=position_embeddings,
+            )[0]
+    finally:
+        model._llada_triton_prefill = False
+    return SimpleNamespace(
+        logits=model.lm_head(base.norm(hidden_states)), past_key_values=cache
+    )
 
 
 
@@ -409,8 +504,8 @@ def _layer_attention_mask(
         return cache[cache_key]
     result = attention_mask.new_zeros(
         (
-            attention_mask.shape[0],
-            attention_mask.shape[1],
+            1,
+            1,
             query_positions.numel(),
             prefix_positions.numel() + key_positions.numel(),
         )
@@ -447,6 +542,8 @@ def _cached_forward(
     sparse_cache = selection_state.get("sparse_cache")
     hidden_states = inputs_embeds
     selected_positions = None
+    selected_position_ids = None
+    selected_position_embeddings = None
     full_hidden_base = None
     compressed_hidden_states = False
     zero_attention_masks = {}
@@ -488,11 +585,8 @@ def _cached_forward(
                     if compressed_hidden_states
                     else hidden_states.index_select(1, selected_positions)
                 )
-                layer_position_ids = position_ids.index_select(1, selected_positions)
-                layer_position_embeddings = (
-                    position_embeddings[0].index_select(1, selected_positions),
-                    position_embeddings[1].index_select(1, selected_positions),
-                )
+                layer_position_ids = selected_position_ids
+                layer_position_embeddings = selected_position_embeddings
                 if sparse_cache is None:
                     raise RuntimeError("Sparse cache is missing after dense refresh.")
                 sparse_cache.set_positions(selected_positions)
@@ -552,6 +646,13 @@ def _cached_forward(
                 selection_state["positions"] = selected_positions
                 if selected_positions is not None:
                     full_hidden_base = hidden_states.clone()
+                    selected_position_ids = position_ids.index_select(
+                        1, selected_positions
+                    )
+                    selected_position_embeddings = (
+                        position_embeddings[0].index_select(1, selected_positions),
+                        position_embeddings[1].index_select(1, selected_positions),
+                    )
 
         if losa_context is not None:
             for layer_idx, positions, query in losa_context["pending_losa_queries"]:
@@ -621,19 +722,8 @@ def _block_cache_generate(self, *args, **kwargs):
     prompt_length = input_ids.shape[1]
     num_blocks = (prompt_length + gen_length + block_length - 1) // block_length
     total_length = num_blocks * block_length
-    block_mask = torch.tril(torch.ones(num_blocks, num_blocks, device=self.device, dtype=torch.bool))
-    allowed_attention = (
-        block_mask.repeat_interleave(block_length, dim=0)
-        .repeat_interleave(block_length, dim=1)
-        .unsqueeze(0)
-        .unsqueeze(0)
-    )
     mask_dtype = next(self.parameters()).dtype
-    full_attention_mask = torch.zeros(
-        allowed_attention.shape,
-        dtype=mask_dtype,
-        device=self.device,
-    ).masked_fill(~allowed_attention, torch.finfo(mask_dtype).min)
+    mask_template = torch.empty((), dtype=mask_dtype, device=self.device)
     position_ids = torch.arange(total_length, device=self.device).unsqueeze(0)
     x = torch.full((1, total_length), mask_id, dtype=torch.long, device=self.device)
     x[:, :prompt_length] = input_ids
@@ -647,15 +737,26 @@ def _block_cache_generate(self, *args, **kwargs):
     prefix_sparse = self.config.llada_prefix_sparse
     prefix_token_budget = self.config.llada_prefix_token_budget
     prefix_chunk_size = self.config.llada_prefix_chunk_size
-    dense_forward = self._llada_block_cache_dense_forward
     prefill_blocks = prompt_length // block_length
+    fixed_prefix_length = prefill_blocks * block_length
+    fixed_prefix_cache = None
+    if input_ids.is_cuda and fixed_prefix_length:
+        fixed_prefix_cache = DynamicCache()
+        prefill_chunk = 8192
+        for start in range(0, fixed_prefix_length, prefill_chunk):
+            end = min(start + prefill_chunk, fixed_prefix_length)
+            _dense_block_prefill(
+                self,
+                x[:, start:end],
+                position_ids[:, start:end],
+                fixed_prefix_cache,
+            )
 
     for block_idx in range(prefill_blocks, num_blocks):
         block_start = block_idx * block_length
         block_end = min((block_idx + 1) * block_length, total_length)
         current_window_end = block_end
         cur_x = x[:, :current_window_end]
-        cur_mask = full_attention_mask[:, :, :current_window_end, :current_window_end]
         cur_positions = position_ids[:, :current_window_end]
         old_block_tokens = cur_x[:, -block_length:].clone()
         active_block_mask = cur_x[:, -block_length:] == mask_id
@@ -665,15 +766,25 @@ def _block_cache_generate(self, *args, **kwargs):
 
         captured_queries = handles = None
         if prefix_sparse and block_start:
-            captured_queries, handles = _capture_block_queries(self, block_start)
-        try:
-            dense_outputs = dense_forward(
-                cur_x,
-                attention_mask=cur_mask,
-                position_ids=cur_positions,
-                use_cache=True,
-                return_dict=True,
+            capture_start = (
+                block_start - fixed_prefix_length
+                if fixed_prefix_cache is not None
+                else block_start
             )
+            captured_queries, handles = _capture_block_queries(self, capture_start)
+        try:
+            if fixed_prefix_cache is None:
+                dense_outputs = _dense_block_prefill(self, cur_x, cur_positions)
+            else:
+                refresh_cache = DynamicCache.from_legacy_cache(
+                    fixed_prefix_cache.to_legacy_cache()
+                )
+                dense_outputs = _dense_block_prefill(
+                    self,
+                    cur_x[:, fixed_prefix_length:],
+                    cur_positions[:, fixed_prefix_length:],
+                    refresh_cache,
+                )
         finally:
             if handles is not None:
                 for handle in handles:
@@ -734,7 +845,7 @@ def _block_cache_generate(self, *args, **kwargs):
                 if post_steps > max_post_steps:
                     break
             block_input = x[:, block_start:block_end]
-            step_mask = full_attention_mask[:, :, block_start:block_end, :block_end]
+            step_mask = mask_template
             step_positions = position_ids[:, block_start:block_end]
             collector = getattr(self, "_llada_query_losa_collector", None)
             if collector is not None:
@@ -864,6 +975,15 @@ def patch_llada_model(
     model.config.llada_query_losa_union = bool(query_losa_union)
     if not hasattr(model, "_llada_block_cache_dense_forward"):
         model._llada_block_cache_dense_forward = model.forward
+    for layer_idx, layer in enumerate(model.model.layers):
+        attention = layer.attention
+        if not hasattr(attention, "_llada_prefill_dense_forward"):
+            attention._llada_prefill_dense_forward = attention.forward
+            attention._llada_prefill_model_ref = weakref.ref(model)
+            attention.layer_idx = layer_idx
+            attention.forward = types.MethodType(
+                _prefill_attention_forward, attention
+            )
     if losa:
         for layer_idx, layer in enumerate(model.model.layers):
             attention = layer.attention
