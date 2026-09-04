@@ -84,8 +84,8 @@ if [[ -n "${SPARSE_DLM_SELECTION_INTERVAL:-}" ]]; then
   args+=(--sparse_dlm_selection_interval "${SPARSE_DLM_SELECTION_INTERVAL}")
 fi
 
-if [[ -n "${SPARSE_DLM_DENSE_FALLBACK_MASK_COUNT:-}" ]]; then
-  args+=(--sparse_dlm_dense_fallback_mask_count "${SPARSE_DLM_DENSE_FALLBACK_MASK_COUNT}")
+if [[ -n "${QUERY_DENSE_THRESHOLD:-}" ]]; then
+  args+=(--query_dense_threshold "${QUERY_DENSE_THRESHOLD}")
 fi
 
 if [[ -n "${MASK_ID:-}" ]]; then

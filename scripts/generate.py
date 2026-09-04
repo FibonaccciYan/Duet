@@ -76,7 +76,7 @@ def parse_args():
     parser.add_argument("--sparse_dlm_ratio", type=float, default=0.5)
     parser.add_argument("--sparse_dlm_top_k", type=int, default=64)
     parser.add_argument("--sparse_dlm_selection_interval", type=int, default=None)
-    parser.add_argument("--sparse_dlm_dense_fallback_mask_count", type=int, default=None)
+    parser.add_argument("--query_dense_threshold", type=int, default=None)
     parser.add_argument("--sparse_dlm_refresh_step", type=int, default=None)
     parser.add_argument(
         "--sparse_dlm_selection_layer",
@@ -140,8 +140,8 @@ def load_model_and_tokenizer(args):
     args.sparse_dlm_selection_interval = (
         args.sparse_dlm_selection_interval or (1 if is_sdar else 4)
     )
-    if args.sparse_dlm_dense_fallback_mask_count is None:
-        args.sparse_dlm_dense_fallback_mask_count = 0 if is_sdar else 4
+    if args.query_dense_threshold is None:
+        args.query_dense_threshold = 0 if is_sdar else 4
     args.prefix_sparse = (
         not is_sdar if args.prefix_sparse is None else args.prefix_sparse
     )
@@ -152,7 +152,7 @@ def load_model_and_tokenizer(args):
             ratio=args.sparse_dlm_ratio,
             top_k=args.sparse_dlm_top_k,
             selection_interval=args.sparse_dlm_selection_interval,
-            dense_fallback_mask_count=args.sparse_dlm_dense_fallback_mask_count,
+            query_dense_threshold=args.query_dense_threshold,
             refresh_step=args.sparse_dlm_refresh_step,
             selection_layer=args.sparse_dlm_selection_layer,
             deep_only_transfer=args.sparse_dlm_deep_only_transfer,

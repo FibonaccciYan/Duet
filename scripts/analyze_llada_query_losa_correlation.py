@@ -545,7 +545,7 @@ def main():
         ratio=args.query_ratio,
         top_k=64,
         selection_interval=args.selection_interval,
-        dense_fallback_mask_count=0,
+        query_dense_threshold=0,
         selection_layer=args.selection_layer,
         query_sparse=True,
         prefix_sparse=False,

@@ -12,13 +12,13 @@ from src.sparse.sparse_ops import (
     _new_losa_state,
 )
 from src.sparse.sdar_patch import (
-    _sample_with_confidence,
     _sdar_losa_attention_forward,
-    _select_transfer,
     _sparse_cached_forward,
-    patch_model,
+    entropy_from_logits,
+    patch_sdar_model as patch_model,
+    sample_with_temperature_topk_topp as _sample_with_confidence,
+    select_transfer as _select_transfer,
 )
-from src.sparse.sdar_generate import entropy_from_logits
 
 
 class _FakeSDAR(torch.nn.Module):
@@ -67,7 +67,11 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         model = types.SimpleNamespace(
             model=Base(),
             lm_head=torch.nn.Identity(),
-            config=types.SimpleNamespace(sdar_losa=False),
+            config=types.SimpleNamespace(
+                sdar_losa=False,
+                sdar_losa_active_topk=5,
+                sdar_query_selection_layer=5,
+            ),
         )
         prefix_cache = (
             (torch.zeros(1, 1, 2, 1), torch.zeros(1, 1, 2, 1)),
@@ -332,7 +336,10 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             config=types.SimpleNamespace(
                 sdar_sparse_dlm_ratio=0.5,
                 sdar_sparse_dlm_selection_interval=1,
-                sdar_sparse_dlm_dense_fallback_mask_count=0,
+                sdar_query_dense_threshold=0,
+                sdar_losa=False,
+                sdar_losa_active_topk=5,
+                sdar_query_selection_layer=5,
             ),
         )
         input_ids = torch.tensor([[1, 15]])
@@ -391,7 +398,10 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             config=types.SimpleNamespace(
                 sdar_sparse_dlm_ratio=0.5,
                 sdar_sparse_dlm_selection_interval=1,
-                sdar_sparse_dlm_dense_fallback_mask_count=0,
+                sdar_query_dense_threshold=0,
+                sdar_losa=False,
+                sdar_losa_active_topk=5,
+                sdar_query_selection_layer=5,
             ),
         )
         input_ids = torch.tensor([[1, 15, 15]])
@@ -476,7 +486,10 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             config=types.SimpleNamespace(
                 sdar_sparse_dlm_ratio=0.5,
                 sdar_sparse_dlm_selection_interval=1,
-                sdar_sparse_dlm_dense_fallback_mask_count=0,
+                sdar_query_dense_threshold=0,
+                sdar_losa=False,
+                sdar_losa_active_topk=5,
+                sdar_query_selection_layer=5,
             ),
         )
         with mock.patch(

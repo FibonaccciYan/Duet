@@ -6,41 +6,96 @@ late-layer query selector in this repository and leaves the model directory
 untouched.
 """
 
+import math
 import types
 import weakref
 
 import torch
+from torch.nn import functional as F
 from transformers.cache_utils import DynamicCache
 
-from .core import (
-    _BlockDualCache,
-    _dual_cache_from_dense,
-    _legacy_prefix_cache,
-    _select_positions,
-)
 from .sparse_ops import (
+    _BlockDualCache,
     _apply_rotary,
     _attention_output_lse,
     _block_attention_output_lse,
     _compact_prefix_cache,
+    _dual_cache_from_dense,
     _losa_active_indices,
     _losa_key_energy,
     _merge_attention_states,
     _new_losa_state,
     _queue_losa_active_update,
+    _prefix_from_dynamic_cache,
 )
-from .sdar_generate import (
-    block_diffusion_generate,
-    get_num_transfer_tokens as _transfer_counts,
-    sample_with_temperature_topk_topp as _sample_with_confidence,
-    select_transfer as _select_transfer,
-)
-
-
 # Zero-based decoder layer after which Query Sparse chooses mask candidates.
 # Layer 4 is too early for SDAR-b32: its candidate ranking diverges sharply
 # from the final-layer transfer positions.
 QUERY_SELECTION_LAYER = 5
+
+
+def _select_positions(
+    model,
+    hidden_states,
+    input_ids,
+    mask_id,
+    ratio,
+    top_k,
+    temperature=0.0,
+    top_p=None,
+    cached_positions=None,
+    selection_step=0,
+    selection_interval=1,
+    query_dense_threshold=0,
+    minimum_mask_candidates=1,
+    strategy="low_confidence_static",
+    threshold=1.0,
+    entropy_budget=None,
+):
+    mask = input_ids[0] == mask_id
+    mask_count = int(mask.sum().item())
+    if ratio >= 1.0 or mask_count <= query_dense_threshold:
+        return None
+
+    candidate_count = min(
+        max(int(minimum_mask_candidates), math.ceil(mask_count * ratio)),
+        mask_count,
+    )
+    decoded = torch.where(~mask)[0]
+    if (
+        cached_positions is not None
+        and selection_interval > 1
+        and selection_step % selection_interval != 0
+    ):
+        old_masks = cached_positions[mask[cached_positions]]
+        if old_masks.numel() >= candidate_count:
+            return torch.cat((decoded, old_masks))
+    mask_positions = torch.where(mask)[0]
+    if strategy == "sequential":
+        return torch.cat((decoded, mask_positions[:candidate_count]))
+
+    mask_logits = model.lm_head(hidden_states[:, mask_positions, :])
+    _, confidence = model._sample_with_temperature_topk_topp(
+        mask_logits,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+    )
+    entropy = (
+        entropy_from_logits(mask_logits, temperature, top_k, top_p)
+        if strategy == "entropy_bounded"
+        else None
+    )
+    selected = select_transfer(
+        torch.ones_like(confidence, dtype=torch.bool),
+        confidence,
+        candidate_count,
+        strategy,
+        threshold,
+        entropy=entropy,
+        entropy_budget=entropy_budget,
+    )
+    return torch.cat((decoded, mask_positions[torch.where(selected[0])[0]]))
 
 
 def _capture_sdar_block_queries(model):
@@ -276,14 +331,14 @@ def _sparse_cached_forward(
     sparse_position_ids = None
     sparse_position_embeddings = None
     selection_layer = min(
-        int(getattr(model.config, "sdar_query_selection_layer", QUERY_SELECTION_LAYER)),
+        model.config.sdar_query_selection_layer,
         len(base.layers) - 2,
     )
     losa_context = None
-    losa_active_topk = int(getattr(model.config, "sdar_losa_active_topk", 5))
+    losa_active_topk = model.config.sdar_losa_active_topk
     if (
         prefix_cache
-        and bool(getattr(model.config, "sdar_losa", False))
+        and model.config.sdar_losa
         and losa_active_topk < input_ids.shape[1]
     ):
         selection_state.setdefault("losa_states", {})
@@ -291,8 +346,8 @@ def _sparse_cached_forward(
             "selection_state": selection_state,
             "prefix_cache_length": 0,
             "active_topk": losa_active_topk,
-            "score_mode": getattr(model.config, "sdar_losa_score_mode", "query"),
-            "key_samples": int(getattr(model.config, "sdar_losa_key_samples", 32)),
+            "score_mode": model.config.sdar_losa_score_mode,
+            "key_samples": model.config.sdar_losa_key_samples,
             "pending_losa": [],
             "pending_losa_queries": [],
             "query_positions": None,
@@ -373,8 +428,8 @@ def _sparse_cached_forward(
                     cached_positions=selection_state.get("positions"),
                     selection_step=selection_state["step"],
                     selection_interval=model.config.sdar_sparse_dlm_selection_interval,
-                    dense_fallback_mask_count=(
-                        model.config.sdar_sparse_dlm_dense_fallback_mask_count
+                    query_dense_threshold=(
+                        model.config.sdar_query_dense_threshold
                     ),
                     minimum_mask_candidates=minimum_mask_candidates,
                     strategy=strategy,
@@ -440,22 +495,20 @@ def _sparse_cached_forward(
 
 @torch.no_grad()
 def _block_diffusion_generate(self, *args, **kwargs):
-    inputs = kwargs.pop("inputs", kwargs.pop("input_ids", args[0] if args else None))
+    inputs = kwargs.pop("inputs", args[0] if args else None)
     if inputs is None:
         raise ValueError("SDAR generation requires `inputs`")
     if inputs.shape[0] != 1:
         raise ValueError("SDAR runtime patch currently requires batch_size=1")
 
-    gen_length = int(kwargs.pop("gen_length", kwargs.pop("max_new_tokens", 128)))
+    gen_length = int(kwargs.pop("gen_length", 128))
     block_length = int(kwargs.pop("block_length", 32))
-    steps = int(kwargs.pop("denoising_steps", kwargs.pop("steps", block_length)))
+    steps = int(kwargs.pop("steps", block_length))
     temperature = float(kwargs.pop("temperature", 0.0))
     top_k = kwargs.pop("top_k", 0) or 0
     top_p = kwargs.pop("top_p", 1.0)
     strategy = kwargs.pop("remasking_strategy", "sequential")
-    threshold = float(
-        kwargs.pop("confidence_threshold", kwargs.pop("threshold", 0.85))
-    )
+    threshold = float(kwargs.pop("threshold", 0.85))
     eb_threshold = kwargs.pop("eb_threshold", None)
     mask_id = int(kwargs.pop("mask_id", 151669))
     eos_id = kwargs.pop("eos_id", None)
@@ -473,20 +526,16 @@ def _block_diffusion_generate(self, *args, **kwargs):
     input_ids = inputs.to(self.device)
     prompt_length = input_ids.shape[1]
     stop_ids = _stop_ids(self, eos_id)
-    query_sparse = bool(getattr(self.config, "sdar_query_sparse", False))
-    prefix_sparse = bool(getattr(self.config, "sdar_prefix_sparse", False))
-    losa = bool(getattr(self.config, "sdar_losa", False))
-    prefix_token_budget = int(
-        getattr(self.config, "sdar_prefix_token_budget", 256)
-    )
-    prefix_chunk_size = int(getattr(self.config, "sdar_prefix_chunk_size", 256))
-    losa_active_topk = int(getattr(self.config, "sdar_losa_active_topk", 5))
+    query_sparse = self.config.sdar_query_sparse
+    prefix_sparse = self.config.sdar_prefix_sparse
+    losa = self.config.sdar_losa
+    prefix_token_budget = self.config.sdar_prefix_token_budget
+    prefix_chunk_size = self.config.sdar_prefix_chunk_size
+    losa_active_topk = self.config.sdar_losa_active_topk
     active_losa = losa and losa_active_topk < block_length
-    selection_top_k = int(getattr(self.config, "sdar_sparse_dlm_top_k", 64))
-    refresh_step = int(getattr(self.config, "sdar_sparse_dlm_refresh_step", -1))
-    deep_only_transfer = bool(
-        getattr(self.config, "sdar_sparse_dlm_deep_only_transfer", False)
-    )
+    selection_top_k = self.config.sdar_sparse_dlm_top_k
+    refresh_step = self.config.sdar_sparse_dlm_refresh_step
+    deep_only_transfer = self.config.sdar_sparse_dlm_deep_only_transfer
     selection_state = {}
 
     def sparse_denoise(
@@ -531,7 +580,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
                     prefix_chunk_size,
                 )
             else:
-                prefix_cache = _legacy_prefix_cache(dense_cache, block_start)
+                prefix_cache = _prefix_from_dynamic_cache(dense_cache, block_start)
             selection_state.clear()
             selection_state.update(
                 positions=None,
@@ -612,7 +661,7 @@ def patch_sdar_model(
     ratio=0.5,
     top_k=64,
     selection_interval=1,
-    dense_fallback_mask_count=0,
+    query_dense_threshold=0,
     refresh_step=-1,
     selection_layer=QUERY_SELECTION_LAYER,
     deep_only_transfer=False,
@@ -646,8 +695,8 @@ def patch_sdar_model(
     model.config.sdar_sparse_dlm_ratio = min(max(float(ratio), 0.0), 1.0)
     model.config.sdar_sparse_dlm_top_k = int(top_k)
     model.config.sdar_sparse_dlm_selection_interval = int(selection_interval)
-    model.config.sdar_sparse_dlm_dense_fallback_mask_count = int(
-        dense_fallback_mask_count
+    model.config.sdar_query_dense_threshold = int(
+        query_dense_threshold
     )
     model.config.sdar_sparse_dlm_refresh_step = int(refresh_step)
     model.config.sdar_query_selection_layer = int(selection_layer)
@@ -672,7 +721,7 @@ def patch_sdar_model(
     if not hasattr(model, "_sample_with_temperature_topk_topp"):
         model._sample_with_temperature_topk_topp = types.MethodType(
             lambda _self, logits, temperature=0.0, top_k=0, top_p=1.0: (
-                _sample_with_confidence(logits, temperature, top_k, top_p)
+                sample_with_temperature_topk_topp(logits, temperature, top_k, top_p)
             ),
             model,
         )
@@ -682,5 +731,295 @@ def patch_sdar_model(
     return model
 
 
-# Backward-compatible model-local entry point; new callers use sparse.core.
-patch_model = patch_sdar_model
+
+
+def top_k_logits(logits, k):
+    if k is None or k <= 0:
+        return logits
+    else:
+        values, _ = torch.topk(logits, min(int(k), logits.shape[-1]))
+        min_values = values[..., -1, None]
+        return torch.where(logits < min_values, torch.full_like(logits, float('-inf')), logits)
+
+
+def top_p_logits(logits, p):
+    if p is None or p >= 1.0:
+        return logits
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+    sorted_mask = cumulative_probs > p
+    sorted_mask[..., 1:] = sorted_mask[..., :-1].clone()
+    sorted_mask[..., 0] = False
+    mask_indices = torch.scatter(torch.full_like(logits, False, dtype=torch.bool),
+                                 -1, sorted_indices, sorted_mask)
+    logits = logits.masked_fill(mask_indices, float('-inf'))
+    return logits
+
+
+def sample_with_temperature_topk_topp(logits, temperature=1.0, top_k=0, top_p=1.0):
+    orig_shape = logits.shape[:-1]    # [batch, block]
+    vocab_size = logits.shape[-1]
+
+    logits = logits.reshape(-1, vocab_size)  # [batch*block, vocab]
+
+    if temperature is None or temperature <= 0:
+        token = logits.argmax(dim=-1)
+        probs = F.softmax(logits, dim=-1)
+        token_prob = torch.gather(probs, -1, token.unsqueeze(-1)).squeeze(-1)
+        return token.view(*orig_shape), token_prob.view(*orig_shape)
+
+    if temperature != 1.0:
+        logits = logits / temperature
+    if top_k is not None and top_k > 0:
+        logits = top_k_logits(logits, top_k)
+    if top_p is not None and top_p < 1.0:
+        logits = top_p_logits(logits, top_p)
+    probs = F.softmax(logits, dim=-1)  # shape: [batch*block, vocab]
+    assert probs.dim() == 2
+    token = torch.multinomial(probs, num_samples=1)  # [batch*block, 1]
+    token_prob = torch.gather(probs, -1, token)     # [batch*block, 1]
+
+    return token.view(*orig_shape), token_prob.view(*orig_shape)
+
+
+def entropy_from_logits(logits, temperature=1.0, top_k=0, top_p=1.0):
+    """Return categorical entropy for every token position."""
+    logits = logits.float()
+    if temperature is not None and temperature > 0:
+        logits = logits / temperature
+        logits = top_k_logits(logits, top_k)
+        logits = top_p_logits(logits, top_p)
+    log_probs = F.log_softmax(logits, dim=-1)
+    terms = torch.where(
+        torch.isfinite(log_probs), log_probs.exp() * log_probs, 0.0
+    )
+    return -terms.sum(dim=-1)
+
+
+def get_num_transfer_tokens(block_length, steps):
+    if block_length <= 0 or steps <= 0 or steps > block_length:
+        raise ValueError("SDAR requires 1 <= denoising_steps <= block_length")
+    base = block_length // steps
+    remainder = block_length % steps
+    num_transfer_tokens = torch.zeros(steps, dtype=torch.int64) + base
+    num_transfer_tokens[:remainder] += 1
+    return num_transfer_tokens
+
+
+def select_transfer(
+    mask,
+    confidence,
+    minimum,
+    strategy,
+    threshold,
+    entropy=None,
+    entropy_budget=None,
+):
+    """Apply SDAR's transfer rule to positions with available predictions."""
+    if strategy == "entropy_bounded" and (
+        entropy is None or entropy_budget is None
+    ):
+        raise ValueError(
+            "entropy and entropy_budget are required for entropy_bounded"
+        )
+    transfer = torch.zeros_like(mask)
+    for batch_idx in range(mask.shape[0]):
+        available = torch.isfinite(
+            entropy[batch_idx] if strategy == "entropy_bounded" else confidence[batch_idx]
+        )
+        positions = torch.where(mask[batch_idx] & available)[0]
+        count = min(int(minimum), positions.numel())
+        if not count:
+            continue
+        if strategy == "entropy_bounded":
+            values, order = torch.sort(entropy[batch_idx, positions])
+            budget_count = int(
+                torch.searchsorted(
+                    torch.cumsum(values, dim=0),
+                    values.new_tensor(float(entropy_budget)),
+                    right=False,
+                ).item()
+            )
+            count = min(max(count, budget_count, 1), positions.numel())
+            selected = positions[order[:count]]
+        elif strategy == "sequential":
+            selected = positions[:count]
+        else:
+            scores = confidence[batch_idx, positions]
+            if strategy == "low_confidence_dynamic":
+                high = positions[scores > threshold]
+                selected = high if high.numel() >= count else positions[
+                    torch.topk(scores, count).indices
+                ]
+            elif strategy == "low_confidence_static":
+                selected = positions[torch.topk(scores, count).indices]
+            else:
+                raise ValueError(f"Unknown remasking strategy: {strategy}")
+        transfer[batch_idx, selected] = True
+    return transfer
+
+
+@torch.no_grad()
+def block_diffusion_generate(
+        model,
+        prompt,
+        mask_id,
+        gen_length=128,
+        block_length=32,
+        denoising_steps=32,
+        temperature=1.0,
+        top_k=0,
+        top_p=1.0,
+        remasking_strategy='sequential',
+        confidence_threshold=0.85,
+        eb_threshold=None,
+        stopping_criteria_idx=None,
+        denoise_fn=None,
+    ):
+
+    model.eval()
+    if remasking_strategy == "entropy_bounded" and eb_threshold is None:
+        raise ValueError("eb_threshold is required for entropy_bounded transfer")
+    input_ids = prompt['input_ids']
+    prompt_length = input_ids.shape[1]
+    past_key_values = DynamicCache()
+
+    num_blocks = (prompt_length + gen_length +
+                  block_length - 1) // block_length
+    total_length = num_blocks * block_length
+
+    block_mask = torch.tril(torch.ones(
+        num_blocks, num_blocks, device=model.device))
+    block_diffusion_attention_mask = block_mask.repeat_interleave(block_length, dim=0)\
+                                               .repeat_interleave(block_length, dim=1).unsqueeze(0)
+    position_ids = torch.arange(total_length, device=model.device).unsqueeze(0)
+
+    x = torch.full((1, total_length), mask_id,
+                   dtype=torch.long, device=model.device)
+    x[:, :prompt_length] = input_ids
+    prefill_blocks = prompt_length // block_length
+    prefill_length = prefill_blocks * block_length
+
+    # Prefill stage.  The block-causal mask lets aligned prompt chunks be
+    # written to the same KV cache independently.  Keeping the query side
+    # bounded avoids SDPA materializing an O(prompt_length**2) score tensor.
+    if prefill_length > 0:
+        prefill_chunk_length = (
+            prefill_length if prefill_length <= 256 * block_length
+            else 128 * block_length
+        )
+        for chunk_start in range(0, prefill_length, prefill_chunk_length):
+            chunk_end = min(chunk_start + prefill_chunk_length, prefill_length)
+            cur_x = x[:, chunk_start:chunk_end]
+            cur_attn_mask = block_diffusion_attention_mask[
+                :, chunk_start:chunk_end, :chunk_end
+            ]
+            cur_position_ids = position_ids[:, chunk_start:chunk_end]
+            model(cur_x,
+                  attention_mask=cur_attn_mask,
+                  position_ids=cur_position_ids,
+                  past_key_values=past_key_values,
+                  use_cache=True,
+                  store_kv=True)
+
+    num_transfer_tokens = get_num_transfer_tokens(
+        block_length, denoising_steps)
+
+    # Decode stage
+    for num_block in range(prefill_blocks, num_blocks):
+        cur_x = x[:, num_block*block_length:(num_block+1)*block_length].clone()
+        cur_attn_mask = block_diffusion_attention_mask[
+            :, num_block*block_length:(num_block+1)*block_length, :(num_block+1)*block_length
+        ]
+        cur_position_ids = position_ids[:, num_block *
+                                        block_length:(num_block+1)*block_length]
+        for step in range(denoising_steps + 1):
+            mask_index = (cur_x == mask_id)
+            if mask_index.sum() == 0:
+                # Store kv cache
+                model(cur_x,
+                      attention_mask=cur_attn_mask,
+                      position_ids=cur_position_ids,
+                      past_key_values=past_key_values,
+                      use_cache=True,
+                      store_kv=True)
+                break
+
+            if step == denoising_steps:
+                raise RuntimeError(
+                    f"SDAR block {num_block} still contains masks after "
+                    f"{denoising_steps} steps"
+                )
+
+            # Denosing
+            logit_positions = None
+            if denoise_fn is None:
+                logits = model(cur_x,
+                               attention_mask=cur_attn_mask,
+                               position_ids=cur_position_ids,
+                               past_key_values=past_key_values,
+                               use_cache=True,
+                               store_kv=False).logits
+            else:
+                logits, logit_positions = denoise_fn(
+                    model=model,
+                    block_tokens=cur_x,
+                    attention_mask=cur_attn_mask,
+                    position_ids=cur_position_ids,
+                    past_key_values=past_key_values,
+                    block_start=num_block * block_length,
+                    block_end=(num_block + 1) * block_length,
+                    step=step,
+                    minimum=int(num_transfer_tokens[step]),
+                )
+
+            # Sampling
+            x0, x0_p = sample_with_temperature_topk_topp(
+                logits,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p
+            )
+            x0_entropy = (
+                entropy_from_logits(logits, temperature, top_k, top_p)
+                if remasking_strategy == "entropy_bounded"
+                else None
+            )
+
+            if logit_positions is not None:
+                full_x0 = cur_x.clone()
+                full_x0.index_copy_(1, logit_positions, x0)
+                full_confidence = torch.full_like(
+                    cur_x, -torch.inf, dtype=x0_p.dtype
+                )
+                full_confidence.index_copy_(1, logit_positions, x0_p)
+                x0, x0_p = full_x0, full_confidence
+                if x0_entropy is not None:
+                    full_entropy = torch.full_like(
+                        cur_x, torch.inf, dtype=x0_entropy.dtype
+                    )
+                    full_entropy.index_copy_(1, logit_positions, x0_entropy)
+                    x0_entropy = full_entropy
+
+            # Sampling strategy
+            confidence = torch.where(mask_index, x0_p, -torch.inf)
+            transfer_index = select_transfer(
+                mask_index,
+                confidence,
+                num_transfer_tokens[step],
+                remasking_strategy,
+                confidence_threshold,
+                entropy=x0_entropy,
+                entropy_budget=eb_threshold,
+            )
+
+            cur_x[transfer_index] = x0[transfer_index]
+
+        x[:, num_block*block_length:(num_block+1)*block_length] = cur_x
+        if stopping_criteria_idx is not None and any(
+            torch.any(x[:, prompt_length:] == stop_idx)
+            for stop_idx in stopping_criteria_idx
+        ):
+            break
+
+    return x

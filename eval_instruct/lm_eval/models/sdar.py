@@ -22,7 +22,7 @@ class SDAR(LLaDA):
         eos_id: Optional[int] = None,
         prefix_sparse: bool = False,
         sparse_dlm_selection_interval: int = 1,
-        sparse_dlm_dense_fallback_mask_count: int = 0,
+        query_dense_threshold: int = 0,
         sparse_dlm_refresh_step: int = -1,
         sparse_dlm_selection_layer: int = 5,
         moe_expert_patch: bool = False,
@@ -37,8 +37,8 @@ class SDAR(LLaDA):
             eos_id=eos_id,
             prefix_sparse=prefix_sparse,
             sparse_dlm_selection_interval=sparse_dlm_selection_interval,
-            sparse_dlm_dense_fallback_mask_count=(
-                sparse_dlm_dense_fallback_mask_count
+            query_dense_threshold=(
+                query_dense_threshold
             ),
             sparse_dlm_refresh_step=sparse_dlm_refresh_step,
             sparse_dlm_selection_layer=sparse_dlm_selection_layer,

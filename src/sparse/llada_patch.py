@@ -4,13 +4,11 @@ import types
 import torch
 from transformers.cache_utils import DynamicCache
 
-from .core import (
+from .sparse_ops import (
     _BlockDualCache,
     _dual_cache_from_dense,
-    _legacy_prefix_cache,
+    _prefix_from_dynamic_cache,
     _sample_with_confidence,
-)
-from .sparse_ops import (
     _apply_rotary,
     _attention_output_lse,
     _block_attention_output_lse,
@@ -21,6 +19,7 @@ from .sparse_ops import (
     _new_losa_state,
     _queue_losa_active_update,
 )
+from .triton_kernels import _triton_moe_infer
 
 
 
@@ -247,14 +246,14 @@ def _select_positions(
     cached_positions=None,
     selection_step=0,
     selection_interval=1,
-    dense_fallback_mask_count=0,
+    query_dense_threshold=0,
     threshold=0.95,
 ):
     """Apply LLaDA's final confidence selector to shallow Query logits."""
     mask = input_ids[0] == mask_id
     mask_count = int(mask.sum().item())
     collector = getattr(model, "_llada_query_losa_collector", None)
-    if ratio >= 1.0 or mask_count <= dense_fallback_mask_count:
+    if ratio >= 1.0 or mask_count <= query_dense_threshold:
         if collector is not None:
             collector.record_query(None, None, "dense")
         return None
@@ -432,7 +431,7 @@ def _cached_forward(
     ratio,
     top_k,
     selection_interval,
-    dense_fallback_mask_count,
+    query_dense_threshold,
     temperature=0.0,
     top_p=None,
     query_sparse=True,
@@ -453,22 +452,20 @@ def _cached_forward(
     zero_attention_masks = {}
 
     losa_context = None
-    if bool(getattr(model.config, "llada_losa", False)):
+    if model.config.llada_losa:
         losa_states = selection_state.setdefault("losa_states", {})
         losa_context = {
             "selection_state": selection_state,
             "prefix_cache_length": prefix_cache[0][0].shape[-2] if prefix_cache else 0,
             "block_length": input_ids.shape[1],
-            "active_topk": int(getattr(model.config, "llada_losa_active_topk", 5)),
-            "score_mode": getattr(model.config, "llada_losa_score_mode", "query"),
-            "key_samples": int(getattr(model.config, "llada_losa_key_samples", 32)),
+            "active_topk": model.config.llada_losa_active_topk,
+            "score_mode": model.config.llada_losa_score_mode,
+            "key_samples": model.config.llada_losa_key_samples,
             "pending_losa": [],
             "pending_losa_queries": [],
             "query_positions": None,
             "selection_layer": selection_layer,
-            "unify_query_losa": bool(
-                getattr(model.config, "llada_query_losa_union", False)
-            ),
+            "unify_query_losa": model.config.llada_query_losa_union,
             "query_priority_positions": None,
         }
         model._llada_losa_context = losa_context
@@ -549,7 +546,7 @@ def _cached_forward(
                     cached_positions=selection_state.get("positions"),
                     selection_step=selection_state["step"],
                     selection_interval=selection_interval,
-                    dense_fallback_mask_count=dense_fallback_mask_count,
+                    query_dense_threshold=query_dense_threshold,
                     threshold=threshold,
                 )
                 selection_state["positions"] = selected_positions
@@ -641,15 +638,15 @@ def _block_cache_generate(self, *args, **kwargs):
     x = torch.full((1, total_length), mask_id, dtype=torch.long, device=self.device)
     x[:, :prompt_length] = input_ids
 
-    ratio = min(max(float(getattr(self.config, "llada_sparse_dlm_ratio", 0.5)), 0.0), 1.0)
-    selection_interval = max(1, int(getattr(self.config, "llada_sparse_dlm_selection_interval", 4)))
-    selection_top_k = int(getattr(self.config, "llada_sparse_dlm_top_k", 64))
-    selection_layer = int(getattr(self.config, "llada_query_selection_layer", 5))
-    fallback_count = int(getattr(self.config, "llada_sparse_dlm_dense_fallback_mask_count", 4))
-    query_sparse = bool(getattr(self.config, "llada_query_sparse", True))
-    prefix_sparse = bool(getattr(self.config, "llada_prefix_sparse", True))
-    prefix_token_budget = int(getattr(self.config, "llada_prefix_token_budget", 256))
-    prefix_chunk_size = int(getattr(self.config, "llada_prefix_chunk_size", 256))
+    ratio = self.config.llada_sparse_dlm_ratio
+    selection_interval = self.config.llada_sparse_dlm_selection_interval
+    selection_top_k = self.config.llada_sparse_dlm_top_k
+    selection_layer = self.config.llada_query_selection_layer
+    query_dense_threshold = self.config.llada_query_dense_threshold
+    query_sparse = self.config.llada_query_sparse
+    prefix_sparse = self.config.llada_prefix_sparse
+    prefix_token_budget = self.config.llada_prefix_token_budget
+    prefix_chunk_size = self.config.llada_prefix_chunk_size
     dense_forward = self._llada_block_cache_dense_forward
     prefill_blocks = prompt_length // block_length
 
@@ -712,7 +709,9 @@ def _block_cache_generate(self, *args, **kwargs):
                 prefix_chunk_size,
             )
         else:
-            prefix_cache = _legacy_prefix_cache(dense_outputs.past_key_values, block_start)
+            prefix_cache = _prefix_from_dynamic_cache(
+                dense_outputs.past_key_values, block_start
+            )
         sparse_cache = (
             _dual_cache_from_dense(
                 dense_outputs.past_key_values,
@@ -756,7 +755,7 @@ def _block_cache_generate(self, *args, **kwargs):
                 ratio,
                 selection_top_k,
                 selection_interval,
-                fallback_count,
+                query_dense_threshold,
                 temperature=temperature,
                 top_p=top_p,
                 query_sparse=query_sparse,
@@ -817,7 +816,7 @@ def patch_llada_model(
     ratio=0.5,
     top_k=64,
     selection_interval=4,
-    dense_fallback_mask_count=4,
+    query_dense_threshold=4,
     selection_layer=1,
     query_sparse=True,
     prefix_sparse=True,
@@ -848,10 +847,10 @@ def patch_llada_model(
         raise ValueError(
             "positive sparse parameters and 0 <= selection_layer < num_hidden_layers - 1 are required"
         )
-    model.config.llada_sparse_dlm_ratio = float(ratio)
+    model.config.llada_sparse_dlm_ratio = min(max(float(ratio), 0.0), 1.0)
     model.config.llada_sparse_dlm_top_k = int(top_k)
     model.config.llada_sparse_dlm_selection_interval = max(1, int(selection_interval))
-    model.config.llada_sparse_dlm_dense_fallback_mask_count = int(dense_fallback_mask_count)
+    model.config.llada_query_dense_threshold = int(query_dense_threshold)
     model.config.llada_query_selection_layer = int(selection_layer)
     model.config.llada_query_sparse = bool(query_sparse)
     model.config.llada_prefix_sparse = bool(prefix_sparse)
@@ -876,5 +875,60 @@ def patch_llada_model(
     return model
 
 
-# Backward-compatible model-local entry point; new callers use sparse.core.
-patch_model = patch_llada_model
+
+
+def _packed_weights(block):
+    experts = list(block.experts)
+    if not experts:
+        return None
+    projections = []
+    for name in ("gate_proj", "up_proj", "down_proj"):
+        weights = [getattr(expert, name).weight for expert in experts]
+        if any(weight is None for weight in weights):
+            return None
+        projections.append(
+            torch.stack([weight.detach() for weight in weights], dim=0).contiguous()
+        )
+    return tuple(projections)
+
+
+def _pack_block(block):
+    if getattr(block, "_llada_moe_expert_patched", False):
+        return True
+    if not hasattr(block, "experts") or not hasattr(block, "moe_infer"):
+        return False
+
+    weights = _packed_weights(block)
+    if weights is None:
+        return False
+    if any(weight.device.type != "cuda" for weight in weights):
+        return False
+    gate_weight, up_weight, down_weight = weights
+    if gate_weight.ndim != 3 or up_weight.shape != gate_weight.shape:
+        return False
+    if down_weight.ndim != 3 or down_weight.shape[0] != gate_weight.shape[0]:
+        return False
+
+    block.register_buffer("_llada_moe_gate_weight", gate_weight, persistent=False)
+    block.register_buffer("_llada_moe_up_weight", up_weight, persistent=False)
+    block.register_buffer("_llada_moe_down_weight", down_weight, persistent=False)
+
+    # The packed buffers replace the per-expert parameters in memory. The
+    # patched inference method is installed immediately after this point.
+    for expert in block.experts:
+        expert.gate_proj.weight = None
+        expert.up_proj.weight = None
+        expert.down_proj.weight = None
+    block.moe_infer = types.MethodType(_triton_moe_infer, block)
+    block._llada_moe_expert_patched = True
+    return True
+
+
+def patch_moe_experts(model):
+    """Patch all compatible routed MoE blocks in ``model`` in-place."""
+    patched = 0
+    for module in model.modules():
+        if _pack_block(module):
+            patched += 1
+    model._llada_moe_expert_patch_count = patched
+    return patched

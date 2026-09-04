@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 from src.sparse import patch_model, resolve_model_family
-from src.sparse.llada_moe_expert_patch import patch_moe_experts
+from src.sparse.llada_patch import patch_moe_experts
 
 
 eval_logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ class LLaDA(LM):
         sparse_dlm_ratio: float = 0.5,
         sparse_dlm_top_k: int = 64,
         sparse_dlm_selection_interval: int = 4,
-        sparse_dlm_dense_fallback_mask_count: int = 4,
+        query_dense_threshold: int = 4,
         sparse_dlm_refresh_step: int = 2,
         sparse_dlm_selection_layer: int = 5,
         sparse_dlm_deep_only_transfer: bool = False,
@@ -142,7 +142,7 @@ class LLaDA(LM):
                 ratio=float(sparse_dlm_ratio),
                 top_k=int(sparse_dlm_top_k),
                 selection_interval=int(sparse_dlm_selection_interval),
-                dense_fallback_mask_count=int(sparse_dlm_dense_fallback_mask_count),
+                query_dense_threshold=int(query_dense_threshold),
                 refresh_step=int(sparse_dlm_refresh_step),
                 selection_layer=int(sparse_dlm_selection_layer),
                 deep_only_transfer=_as_bool(sparse_dlm_deep_only_transfer),

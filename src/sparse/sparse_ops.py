@@ -5,14 +5,88 @@ import math
 import torch
 import faster_hadamard_transform
 
-from .core import _legacy_prefix_cache
-from .triton_kernels import adamas_distances, attention_output_lse, losa_query_delta
+from .triton_kernels import (
+    adamas_distances,
+    attention_output_lse,
+    fused_kv_index_copy_,
+    losa_query_delta,
+)
 
 
 ADAMAS_BUCKET_THRESHOLDS = {
     "llada2_moe": ((-1.73, 0.0, 1.72), (-2.74, 0.0, 2.69)),
     "sdar": ((-1.50, 0.0, 1.49), (-2.87, 0.0, 2.86)),
 }
+
+
+def _sample_with_confidence(model, logits, temperature, top_p, top_k):
+    return model._sample_with_temperature_topk_topp(
+        logits,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+    )
+
+
+def _prefix_from_dynamic_cache(cache, prefix_length):
+    return tuple(
+        (
+            key[:, :, :prefix_length, :].contiguous(),
+            value[:, :, :prefix_length, :].contiguous(),
+        )
+        for key, value in cache.to_legacy_cache()
+    )
+
+
+class _BlockDualCache:
+    """Keep dense current-block KV and overwrite sparse query positions."""
+
+    def __init__(self, key_values, prefix_lengths):
+        self.key_cache = [key_states for key_states, _ in key_values]
+        self.value_cache = [value_states for _, value_states in key_values]
+        self.prefix_lengths = prefix_lengths
+        self.positions = None
+
+    def set_positions(self, positions):
+        self.positions = positions.to(
+            device=self.key_cache[0].device,
+            dtype=torch.long,
+        ).contiguous()
+
+    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+        if self.positions is None:
+            raise RuntimeError("Sparse cache positions must be set before updating KV")
+        positions = self.positions
+        if key_states.shape[-2] != positions.numel():
+            raise ValueError("Sparse KV length does not match selected positions")
+        fused_kv_index_copy_(
+            self.key_cache[layer_idx],
+            self.value_cache[layer_idx],
+            positions,
+            key_states,
+            value_states,
+            self.prefix_lengths[layer_idx],
+        )
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+
+def _dual_cache_from_dense(dense_cache, prefix_cache, block_start, block_end):
+    legacy_cache = dense_cache.to_legacy_cache()
+    if len(legacy_cache) != len(prefix_cache):
+        raise ValueError("Dense and prefix caches must have the same layer count")
+    key_values = []
+    prefix_lengths = []
+    for (dense_key, dense_value), (prefix_key, prefix_value) in zip(
+        legacy_cache, prefix_cache
+    ):
+        key_values.append(
+            (
+                torch.cat((prefix_key, dense_key[:, :, block_start:block_end]), dim=2),
+                torch.cat((prefix_value, dense_value[:, :, block_start:block_end]), dim=2),
+            )
+        )
+        prefix_lengths.append(prefix_key.shape[-2])
+    return _BlockDualCache(key_values, prefix_lengths)
 
 
 def _repeat_kv(hidden_states, num_key_value_groups):
@@ -259,7 +333,7 @@ def _compact_prefix_cache(
     token_budget,
     chunk_size,
 ):
-    prefix_cache = _legacy_prefix_cache(cache, prefix_length)
+    prefix_cache = _prefix_from_dynamic_cache(cache, prefix_length)
     if not prefix_cache:
         return prefix_cache, ()
     if prefix_length <= token_budget:

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch as mock_patch
 
 import torch
+from torch import nn
 from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.cache_utils import DynamicCache
 
@@ -16,13 +17,13 @@ from src.sparse.llada_patch import (
     _cached_forward,
     _select_positions,
     _transfer_tokens,
-    patch_model,
+    patch_llada_model as patch_model,
+    patch_moe_experts,
 )
-from src.sparse.core import (
+from src.sparse.sparse_ops import (
     _BlockDualCache,
     _dual_cache_from_dense,
-    _fused_kv_index_copy_,
-    _legacy_prefix_cache,
+    _prefix_from_dynamic_cache,
 )
 from src.sparse.sparse_ops import (
     _adamas_prefix_indices,
@@ -32,6 +33,7 @@ from src.sparse.sparse_ops import (
     _merge_attention_states,
     _new_losa_state,
 )
+from src.sparse.triton_kernels import fused_kv_index_copy_
 
 
 MODEL_PATH = "/data0/ysy/models/LLaDA2.1-mini"
@@ -57,6 +59,7 @@ def _tiny_model(layers=6):
         "max_position_embeddings": 64,
         "use_qk_norm": False,
         "use_cache": True,
+        "llada_losa": False,
     }
     for name, value in values.items():
         setattr(config, name, value)
@@ -265,7 +268,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(transferred.tolist(), [[True, True, False, True]])
         self.assertEqual(tokens.tolist(), [[10, 11, 127, 13]])
 
-    @mock_patch("src.sparse.core._fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_dual_cache_overwrites_only_selected_current_kv(self, _copy):
         prefix = torch.randn(1, 2, 2, 3)
         current = torch.randn(1, 2, 4, 3)
@@ -302,7 +305,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         expected_key.index_copy_(2, positions + 2, key_states)
         expected_value.index_copy_(2, positions + 2, value_states)
-        _fused_kv_index_copy_(
+        fused_kv_index_copy_(
             actual_key,
             actual_value,
             positions,
@@ -372,7 +375,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 use_cache=True,
                 return_dict=True,
             )
-            prefix_cache = _legacy_prefix_cache(dense.past_key_values, 4)
+            prefix_cache = _prefix_from_dynamic_cache(dense.past_key_values, 4)
             cached_logits, selected, logit_positions = _cached_forward(
                 model,
                 tokens[:, 4:],
@@ -384,7 +387,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 ratio=1.0,
                 top_k=8,
                 selection_interval=2,
-                dense_fallback_mask_count=0,
+                query_dense_threshold=0,
                 query_sparse=False,
             )
 
@@ -392,7 +395,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    @mock_patch("src.sparse.core._fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_query_sparse_returns_logits_only_for_selected_masks(self, _copy):
         model = _tiny_model()
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
@@ -407,7 +410,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 use_cache=True,
                 return_dict=True,
             )
-            prefix_cache = _legacy_prefix_cache(dense.past_key_values, 4)
+            prefix_cache = _prefix_from_dynamic_cache(dense.past_key_values, 4)
             selection_state = {
                 "positions": None,
                 "step": 0,
@@ -426,7 +429,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 ratio=0.5,
                 top_k=8,
                 selection_interval=1,
-                dense_fallback_mask_count=0,
+                query_dense_threshold=0,
                 query_sparse=True,
                 original_prefix_length=4,
             )
@@ -471,13 +474,13 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                         tokens[:, 4:],
                         attention_mask[:, :, 4:, :],
                         positions[:, 4:],
-                        _legacy_prefix_cache(dense.past_key_values, 4),
+                        _prefix_from_dynamic_cache(dense.past_key_values, 4),
                         {"positions": None, "step": 0},
                         mask_id=127,
                         ratio=0.5,
                         top_k=8,
                         selection_interval=1,
-                        dense_fallback_mask_count=0,
+                        query_dense_threshold=0,
                         query_sparse=True,
                         selection_layer=3,
                         original_prefix_length=4,
@@ -527,13 +530,13 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 tokens[:, 4:],
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
-                _legacy_prefix_cache(dense.past_key_values, 4),
+                _prefix_from_dynamic_cache(dense.past_key_values, 4),
                 selection_state,
                 mask_id=127,
                 ratio=1.0,
                 top_k=8,
                 selection_interval=2,
-                dense_fallback_mask_count=0,
+                query_dense_threshold=0,
                 query_sparse=False,
                 original_prefix_length=4,
             )
@@ -591,13 +594,13 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 tokens[:, 4:],
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
-                _legacy_prefix_cache(dense.past_key_values, 4),
+                _prefix_from_dynamic_cache(dense.past_key_values, 4),
                 selection_state,
                 mask_id=127,
                 ratio=1.0,
                 top_k=8,
                 selection_interval=2,
-                dense_fallback_mask_count=0,
+                query_dense_threshold=0,
                 query_sparse=False,
                 original_prefix_length=4,
             )
@@ -607,13 +610,13 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 tokens[:, 4:],
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
-                _legacy_prefix_cache(dense.past_key_values, 4),
+                _prefix_from_dynamic_cache(dense.past_key_values, 4),
                 selection_state,
                 mask_id=127,
                 ratio=1.0,
                 top_k=8,
                 selection_interval=2,
-                dense_fallback_mask_count=0,
+                query_dense_threshold=0,
                 query_sparse=False,
                 original_prefix_length=4,
             )
@@ -659,7 +662,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 ratio=0.5,
                 top_k=8,
                 selection_interval=2,
-                dense_fallback_mask_count=0,
+                query_dense_threshold=0,
                 query_sparse=False,
                 prefix_indices=tuple(prefix_indices for _ in prefix_cache),
                 original_prefix_length=4,
@@ -669,7 +672,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    @mock_patch("src.sparse.core._fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_sparse_multiblock_generation_uses_llada_selector(self, _copy):
         model = _tiny_model()
         patch_model(
@@ -677,7 +680,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             ratio=0.5,
             top_k=8,
             selection_interval=3,
-            dense_fallback_mask_count=0,
+            query_dense_threshold=0,
             query_sparse=True,
             prefix_sparse=False,
             prefix_token_budget=2,
@@ -709,6 +712,71 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 inputs=torch.tensor([[1, 2, 3, 4]]),
                 remasking_strategy="sequential",
             )
+
+
+
+class _TinyExpert(nn.Module):
+    def __init__(self, hidden_size, intermediate_size):
+        super().__init__()
+        self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
+
+
+class _TinyMoE(nn.Module):
+    def __init__(self, num_experts=4, hidden_size=32, intermediate_size=16):
+        super().__init__()
+        self.experts = nn.ModuleList(
+            [_TinyExpert(hidden_size, intermediate_size) for _ in range(num_experts)]
+        )
+        self.moe_infer = self._reference_moe_infer
+
+    def _reference_moe_infer(self, x, topk_ids, topk_weight):
+        topk_ids = topk_ids.reshape(-1, topk_ids.shape[-1])
+        topk_weight = topk_weight.reshape_as(topk_ids)
+        result = torch.zeros_like(x)
+        flat_ids = topk_ids.flatten()
+        flat_weights = topk_weight.flatten()
+        token_ids = torch.arange(x.shape[0], device=x.device).repeat_interleave(topk_ids.shape[1])
+        for expert_id, expert in enumerate(self.experts):
+            selected = flat_ids == expert_id
+            if not selected.any():
+                continue
+            token_x = x.index_select(0, token_ids[selected])
+            gate = expert.gate_proj(token_x)
+            up = expert.up_proj(token_x)
+            expert_out = expert.down_proj(torch.nn.functional.silu(gate) * up)
+            result.index_add_(
+                0,
+                token_ids[selected],
+                expert_out * flat_weights[selected].to(expert_out.dtype).unsqueeze(-1),
+            )
+        return result
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+class MoEExpertPatchTest(unittest.TestCase):
+    def test_packed_kernel_matches_reference(self):
+        torch.manual_seed(0)
+        model = _TinyMoE().cuda().to(dtype=torch.bfloat16).eval()
+        x = torch.randn(7, 32, device="cuda", dtype=torch.bfloat16)
+        topk_ids = torch.tensor(
+            [[0, 1], [0, 3], [2, 1], [3, 0], [2, 3], [1, 2], [0, 3]],
+            device="cuda",
+        )
+        topk_weight = torch.tensor(
+            [[0.6, 0.4], [0.7, 0.3], [0.2, 0.8], [0.5, 0.5],
+             [0.4, 0.6], [0.9, 0.1], [0.3, 0.7]],
+            device="cuda",
+            dtype=torch.float32,
+        )
+
+        with torch.inference_mode():
+            expected = model.moe_infer(x, topk_ids, topk_weight)
+            self.assertEqual(patch_moe_experts(model), 1)
+            actual = model.moe_infer(x, topk_ids, topk_weight)
+
+        torch.testing.assert_close(actual, expected, rtol=5e-2, atol=2e-3)
 
 
 if __name__ == "__main__":

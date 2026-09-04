@@ -98,7 +98,7 @@ def load(args):
         ratio=0.5 if is_sdar else 0.7,
         top_k=64,
         selection_interval=1 if is_sdar else 4,
-        dense_fallback_mask_count=0 if is_sdar else 4,
+        query_dense_threshold=0 if is_sdar else 4,
         refresh_step=-1 if is_sdar else 2,
         selection_layer=5 if is_sdar else 1,
         deep_only_transfer=False,

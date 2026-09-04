@@ -22,7 +22,8 @@ from scripts.test_sdar_layer_overlap import (
     positions,
     summarize,
 )
-from src.sparse.llada_patch import _sample_with_confidence, _transfer_tokens
+from src.sparse.llada_patch import _transfer_tokens
+from src.sparse.sparse_ops import _sample_with_confidence
 
 
 def block_attention_mask(total_length, block_length, dtype, device):
