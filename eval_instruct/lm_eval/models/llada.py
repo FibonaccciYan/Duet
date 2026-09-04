@@ -69,13 +69,13 @@ class LLaDA(LM):
         mask_id: int = 156895,
         eos_id: int = 156892,
         sparse_dlm: bool = True,
-        sparse_dlm_ratio: float = 0.5,
-        sparse_dlm_top_k: int = 64,
+        sparse_dlm_ratio: Optional[float] = None,
+        sparse_dlm_top_k: Optional[int] = None,
         sparse_dlm_selection_interval: int = 4,
         query_dense_threshold: int = 4,
         sparse_dlm_refresh_step: int = 2,
-        sparse_dlm_selection_layer: int = 5,
-        sparse_dlm_deep_only_transfer: bool = False,
+        sparse_dlm_selection_layer: Optional[int] = None,
+        sparse_dlm_deep_only_transfer: Optional[bool] = None,
         sparse_dlm_block_length: Optional[int] = None,
         query_sparse: bool = True,
         prefix_sparse: Optional[bool] = None,
@@ -139,12 +139,26 @@ class LLaDA(LM):
             patch_model(
                 self.model,
                 model_name=self.MODEL_NAME,
-                ratio=float(sparse_dlm_ratio),
-                top_k=int(sparse_dlm_top_k),
-                selection_interval=int(sparse_dlm_selection_interval),
-                query_dense_threshold=int(query_dense_threshold),
-                refresh_step=int(sparse_dlm_refresh_step),
-                selection_layer=int(sparse_dlm_selection_layer),
+                ratio=None if sparse_dlm_ratio is None else float(sparse_dlm_ratio),
+                top_k=None if sparse_dlm_top_k is None else int(sparse_dlm_top_k),
+                selection_interval=(
+                    None
+                    if sparse_dlm_selection_interval is None
+                    else int(sparse_dlm_selection_interval)
+                ),
+                query_dense_threshold=(
+                    None if query_dense_threshold is None else int(query_dense_threshold)
+                ),
+                refresh_step=(
+                    None
+                    if sparse_dlm_refresh_step is None
+                    else int(sparse_dlm_refresh_step)
+                ),
+                selection_layer=(
+                    None
+                    if sparse_dlm_selection_layer is None
+                    else int(sparse_dlm_selection_layer)
+                ),
                 deep_only_transfer=_as_bool(sparse_dlm_deep_only_transfer),
                 query_sparse=sparse_enabled and _as_bool(query_sparse),
                 prefix_sparse=prefix_sparse_enabled,

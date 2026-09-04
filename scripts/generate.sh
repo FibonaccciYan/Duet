@@ -12,12 +12,23 @@ case "${model_type}" in
   llada)
     default_model_path=/data0/ysy/models/LLaDA2.1-mini
     default_python=/home/ysy/anaconda3/envs/llada/bin/python
+    default_ratio=0.7
+    default_selection_interval=4
+    default_query_dense_threshold=4
+    default_selection_layer=1
+    default_refresh_step=2
+    default_prefix_chunk_size=256
     ;;
   sdar)
     default_model_path=/data0/ysy/models/SDAR-8B-Chat-b32
     default_python=/home/ysy/anaconda3/envs/dream/bin/python
     default_refresh_step=-1
     default_moe_expert_patch=false
+    default_ratio=0.5
+    default_selection_interval=1
+    default_query_dense_threshold=0
+    default_selection_layer=5
+    default_prefix_chunk_size=1024
     ;;
   *)
     echo "Unsupported MODEL_TYPE: ${model_type} (expected llada or sdar)" >&2
@@ -46,17 +57,19 @@ args=(
   --temperature "${TEMPERATURE:-0.0}"
   --editing_threshold "${EDITING_THRESHOLD:-0.0}"
   --num_to_transfer "${NUM_TO_TRANSFER:-1}"
-  --sparse_dlm_ratio "${SPARSE_DLM_RATIO:-0.5}"
+  --sparse_dlm_ratio "${SPARSE_DLM_RATIO:-${default_ratio}}"
   --sparse_dlm_top_k "${SPARSE_DLM_TOP_K:-64}"
+  --sparse_dlm_selection_interval "${SPARSE_DLM_SELECTION_INTERVAL:-${default_selection_interval}}"
+  --query_dense_threshold "${QUERY_DENSE_THRESHOLD:-${default_query_dense_threshold}}"
   --block_length "${BLOCK_LENGTH:-32}"
   --steps "${STEPS:-32}"
   --sparse_dlm_refresh_step "${SPARSE_DLM_REFRESH_STEP:-${default_refresh_step}}"
-  --sparse_dlm_selection_layer "${SPARSE_DLM_SELECTION_LAYER:-5}"
+  --sparse_dlm_selection_layer "${SPARSE_DLM_SELECTION_LAYER:-${default_selection_layer}}"
   --sparse_dlm_deep_only_transfer "${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false}"
   --query_sparse "${QUERY_SPARSE:-true}"
   --query_losa_union "${QUERY_LOSA_UNION:-false}"
   --prefix_token_budget "${PREFIX_TOKEN_BUDGET:-256}"
-  --prefix_chunk_size "${PREFIX_CHUNK_SIZE:-256}"
+  --prefix_chunk_size "${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}}"
   --losa "${LOSA:-false}"
   --losa_active_topk "${LOSA_ACTIVE_TOPK:-5}"
   --losa_score_mode "${LOSA_SCORE_MODE:-query}"

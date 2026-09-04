@@ -2,6 +2,7 @@
 
 from .llada_patch import patch_llada_model, patch_moe_experts
 from .sdar_patch import patch_sdar_model
+from .config import LLaDASparseConfig, SDARSparseConfig, apply_overrides, save_to_model_config
 
 
 MODEL_TYPES = {
@@ -29,72 +30,72 @@ def resolve_model_family(model, model_name="auto"):
 def patch_model(
     model,
     model_name="auto",
-    ratio=0.5,
-    top_k=64,
+    ratio=None,
+    top_k=None,
     selection_interval=None,
     query_dense_threshold=None,
-    refresh_step=-1,
-    selection_layer=5,
-    deep_only_transfer=False,
-    query_sparse=False,
-    prefix_sparse=False,
-    prefix_token_budget=256,
+    refresh_step=None,
+    selection_layer=None,
+    deep_only_transfer=None,
+    query_sparse=None,
+    prefix_sparse=None,
+    prefix_token_budget=None,
     prefix_chunk_size=None,
-    losa=False,
-    losa_active_topk=5,
-    losa_score_mode="query",
-    losa_key_samples=32,
+    losa=None,
+    losa_active_topk=None,
+    losa_score_mode=None,
+    losa_key_samples=None,
     query_losa_union=False,
-    moe_expert_patch=True,
+    moe_expert_patch=None,
+    sparse_config=None,
 ):
     """Enable requested sparse features through the matching model patch."""
     family = resolve_model_family(model, model_name)
-    prefix_chunk_size = (
-        1024 if family == "sdar" else 256
-    ) if prefix_chunk_size is None else prefix_chunk_size
+    config_type = LLaDASparseConfig if family == "llada" else SDARSparseConfig
+    if sparse_config is None:
+        sparse_config = config_type()
+    elif not isinstance(sparse_config, config_type):
+        raise TypeError(f"sparse_config must be {config_type.__name__}")
+    sparse_config = apply_overrides(
+        sparse_config,
+        {
+            "ratio": ratio,
+            "top_k": top_k,
+            "selection_interval": selection_interval,
+            "query_dense_threshold": query_dense_threshold,
+            "refresh_step": refresh_step,
+            "selection_layer": selection_layer,
+            "deep_only_transfer": deep_only_transfer,
+            "query_sparse": query_sparse,
+            "prefix_sparse": prefix_sparse,
+            "prefix_token_budget": prefix_token_budget,
+            "prefix_chunk_size": prefix_chunk_size,
+            "losa": losa,
+            "losa_active_topk": losa_active_topk,
+            "losa_score_mode": losa_score_mode,
+            "losa_key_samples": losa_key_samples,
+            "query_losa_union": query_losa_union,
+            "moe_expert_patch": moe_expert_patch,
+        },
+    )
+    save_to_model_config(model, sparse_config)
+    values = sparse_config.__dict__
     if family == "llada":
         patch_llada_model(
             model,
-            ratio=ratio,
-            top_k=top_k,
-            selection_interval=selection_interval or 4,
-            query_dense_threshold=(
-                4 if query_dense_threshold is None else query_dense_threshold
-            ),
-            selection_layer=selection_layer,
-            query_sparse=query_sparse,
-            prefix_sparse=prefix_sparse,
-            prefix_token_budget=prefix_token_budget,
-            prefix_chunk_size=prefix_chunk_size,
-            losa=losa,
-            losa_active_topk=losa_active_topk,
-            losa_score_mode=losa_score_mode,
-            losa_key_samples=losa_key_samples,
-            query_losa_union=query_losa_union,
+            **{
+                key: value
+                for key, value in values.items()
+                if key != "moe_expert_patch"
+            },
         )
 
-        if moe_expert_patch:
+        if values["moe_expert_patch"]:
             patch_moe_experts(model)
     else:
         patch_sdar_model(
             model,
-            ratio=ratio,
-            top_k=top_k,
-            selection_interval=selection_interval or 1,
-            query_dense_threshold=(
-                0 if query_dense_threshold is None else query_dense_threshold
-            ),
-            refresh_step=refresh_step,
-            selection_layer=selection_layer,
-            deep_only_transfer=deep_only_transfer,
-            query_sparse=query_sparse,
-            prefix_sparse=prefix_sparse,
-            prefix_token_budget=prefix_token_budget,
-            prefix_chunk_size=prefix_chunk_size,
-            losa=losa,
-            losa_active_topk=losa_active_topk,
-            losa_score_mode=losa_score_mode,
-            losa_key_samples=losa_key_samples,
+            **values,
         )
 
     model._sparse_patch_family = family

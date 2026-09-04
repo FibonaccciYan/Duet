@@ -118,6 +118,10 @@ and LLaDA MoE execution use the canonical Triton kernels.
 ## Evaluation defaults
 
 `eval_instruct/eval.sh` is the source of truth for evaluation configuration.
+The runtime also persists the complete family-specific snapshot as
+`model.config.llada_sparse_config` or `model.config.sdar_sparse_config`.
+These are independent configurations; a parameter omitted by the caller uses
+the default for the detected model family.
 
 | Setting | LLaDA | SDAR |
 | --- | ---: | ---: |
@@ -127,6 +131,7 @@ and LLaDA MoE execution use the canonical Triton kernels.
 | selection interval | 4 | 1 |
 | query dense threshold | 4 | 0 |
 | selection layer | 1 | 5 |
+| Prefix chunk size | 256 | 1024 |
 | Prefix Sparse default | enabled | disabled |
 | LoSA default | disabled | disabled |
 | MoE patch | enabled | disabled |
@@ -182,6 +187,17 @@ Full HumanEval for the Prefix-256 speed profile:
 
 - LLaDA: 71/164 official and 128/164 indentation-normalized.
 - SDAR: 127/164 official and 129/164 indentation-normalized.
+
+Latest SDAR prefill/Adamas optimization (GPU 2/3, generation length 64):
+
+| Configuration | 8K | 16K | 32K |
+| --- | ---: | ---: | ---: |
+| Dense, Triton prefill | 3.77s | 5.70s | 8.79s |
+| Query+Prefix-256, Adamas chunk 1024 | — | — | 7.93s |
+
+The SDAR Query+Prefix-256 configuration scored 129/164 official and 131/164
+indentation-normalized on HumanEval. The original SDAR dense prefill baseline
+at 32K was 35.76s; the current dense Triton path is approximately 4.1x faster.
 
 ## Supporting tools
 

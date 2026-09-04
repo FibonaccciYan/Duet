@@ -73,18 +73,18 @@ def parse_args():
     parser.add_argument("--num_to_transfer", type=int, default=1)
     parser.add_argument("--mask_id", type=int, default=None)
     parser.add_argument("--eos_id", type=int, default=None)
-    parser.add_argument("--sparse_dlm_ratio", type=float, default=0.5)
-    parser.add_argument("--sparse_dlm_top_k", type=int, default=64)
+    parser.add_argument("--sparse_dlm_ratio", type=float, default=None)
+    parser.add_argument("--sparse_dlm_top_k", type=int, default=None)
     parser.add_argument("--sparse_dlm_selection_interval", type=int, default=None)
     parser.add_argument("--query_dense_threshold", type=int, default=None)
     parser.add_argument("--sparse_dlm_refresh_step", type=int, default=None)
     parser.add_argument(
         "--sparse_dlm_selection_layer",
         type=int,
-        default=5,
+        default=None,
         help="zero-based decoder layer after which Query positions are selected",
     )
-    parser.add_argument("--sparse_dlm_deep_only_transfer", type=parse_bool, default=False)
+    parser.add_argument("--sparse_dlm_deep_only_transfer", type=parse_bool, default=None)
     parser.add_argument("--query_sparse", type=parse_bool, default=True)
     parser.add_argument("--query_losa_union", type=parse_bool, default=False)
     parser.add_argument("--prefix_sparse", type=parse_bool, default=None)
