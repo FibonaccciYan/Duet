@@ -60,6 +60,7 @@ def parse_args():
     )
     parser.add_argument("--losa-key-samples", type=int, default=32)
     parser.add_argument("--prefix-token-budget", type=int, default=256)
+    parser.add_argument("--prefix-chunk-size", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
@@ -104,7 +105,7 @@ def load(args):
         query_sparse=query_sparse,
         prefix_sparse=prefix_sparse,
         prefix_token_budget=args.prefix_token_budget,
-        prefix_chunk_size=1024 if is_sdar else 256,
+        prefix_chunk_size=(args.prefix_chunk_size or (1024 if is_sdar else 256)),
         losa=args.mode in {"losa", "combined"},
         losa_active_topk=args.losa_active_topk,
         losa_score_mode=args.losa_score_mode,

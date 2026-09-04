@@ -199,6 +199,18 @@ The SDAR Query+Prefix-256 configuration scored 129/164 official and 131/164
 indentation-normalized on HumanEval. The original SDAR dense prefill baseline
 at 32K was 35.76s; the current dense Triton path is approximately 4.1x faster.
 
+For end-to-end generation, the benchmark uses a fixed output length
+(`eos_early_stop=False`) so sparse and dense runs perform the same amount of
+work. Representative SDAR 32K runs on GPU 3 are:
+
+| Configuration | gen=256 | gen=768 |
+| --- | ---: | ---: |
+| Dense | 19.04s | 46.75s |
+| Query+Prefix-256 (Adamas chunk 1024) | 15.57s (1.22x) | 36.37s (1.29x) |
+
+These timings include the complete prefill/decode path; checksums and actual
+generated-token counts are emitted by `scripts/bench_long_context.py`.
+
 ## Supporting tools
 
 - `scripts/bench_sparse_ops.py`: kernel-level sparse operation benchmark.

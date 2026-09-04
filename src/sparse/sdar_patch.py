@@ -692,7 +692,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
         ),
     )
     generated = tokens[:, prompt_length : prompt_length + gen_length]
-    if stop_ids:
+    if eos_early_stop and stop_ids:
         stop_positions = torch.cat(
             [(generated[0] == token_id).nonzero() for token_id in stop_ids]
         )
