@@ -27,6 +27,8 @@ class _FakeSDAR(torch.nn.Module):
         self.anchor = torch.nn.Parameter(torch.zeros(1))
         self.config = types.SimpleNamespace(model_type="sdar")
         self.generation_config = types.SimpleNamespace(eos_token_id=[14, 15])
+        self.model = torch.nn.Module()
+        self.model.layers = torch.nn.ModuleList()
         self.generate = lambda *args, **kwargs: None
         self.store_calls = 0
 

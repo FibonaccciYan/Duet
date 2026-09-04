@@ -118,6 +118,51 @@ def _capture_sdar_block_queries(model):
     return captured, handles
 
 
+def _sdar_prefill_attention_forward(
+    self,
+    hidden_states,
+    position_embeddings,
+    attention_mask,
+    past_key_value=None,
+    **kwargs,
+):
+    """Run exact block-causal prefill with streaming Triton attention."""
+    model = self._sdar_prefill_model_ref()
+    if not getattr(model, "_sdar_triton_prefill", False):
+        return self._sdar_prefill_dense_forward(
+            hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            past_key_value=past_key_value,
+            **kwargs,
+        )
+
+    batch_size, query_length, _ = hidden_states.shape
+    query = self.q_norm(
+        self.q_proj(hidden_states).view(
+            batch_size, query_length, self.num_attention_heads, self.head_dim
+        )
+    ).transpose(1, 2)
+    key = self.k_norm(
+        self.k_proj(hidden_states).view(
+            batch_size, query_length, self.num_key_value_heads, self.head_dim
+        )
+    ).transpose(1, 2)
+    value = self.v_proj(hidden_states).view(
+        batch_size, query_length, self.num_key_value_heads, self.head_dim
+    ).transpose(1, 2)
+    cos, sin = position_embeddings
+    query = _apply_rotary(query, cos, sin)
+    key = _apply_rotary(key, cos, sin)
+    if past_key_value is not None and kwargs.get("store_kv", False):
+        key, value = past_key_value.update(key, value, self.layer_idx)
+
+    mask = attention_mask.unsqueeze(1) if attention_mask.ndim == 3 else attention_mask
+    output, _ = _attention_output_lse(query, key, value, mask)
+    output = output.transpose(1, 2).reshape(batch_size, query_length, -1)
+    return self.o_proj(output.contiguous()), None
+
+
 def _sdar_losa_attention_forward(
     self,
     hidden_states,
@@ -709,6 +754,14 @@ def patch_sdar_model(
     model.config.sdar_losa_active_topk = int(losa_active_topk)
     model.config.sdar_losa_score_mode = losa_score_mode
     model.config.sdar_losa_key_samples = int(losa_key_samples)
+    for layer in model.model.layers:
+        attention = layer.self_attn
+        if not hasattr(attention, "_sdar_prefill_dense_forward"):
+            attention._sdar_prefill_dense_forward = attention.forward
+            attention._sdar_prefill_model_ref = weakref.ref(model)
+            attention.forward = types.MethodType(
+                _sdar_prefill_attention_forward, attention
+            )
     if losa:
         for layer in model.model.layers:
             attention = layer.self_attn
@@ -888,10 +941,6 @@ def block_diffusion_generate(
                   block_length - 1) // block_length
     total_length = num_blocks * block_length
 
-    block_mask = torch.tril(torch.ones(
-        num_blocks, num_blocks, device=model.device))
-    block_diffusion_attention_mask = block_mask.repeat_interleave(block_length, dim=0)\
-                                               .repeat_interleave(block_length, dim=1).unsqueeze(0)
     position_ids = torch.arange(total_length, device=model.device).unsqueeze(0)
 
     x = torch.full((1, total_length), mask_id,
@@ -908,19 +957,27 @@ def block_diffusion_generate(
             prefill_length if prefill_length <= 256 * block_length
             else 128 * block_length
         )
-        for chunk_start in range(0, prefill_length, prefill_chunk_length):
-            chunk_end = min(chunk_start + prefill_chunk_length, prefill_length)
-            cur_x = x[:, chunk_start:chunk_end]
-            cur_attn_mask = block_diffusion_attention_mask[
-                :, chunk_start:chunk_end, :chunk_end
-            ]
-            cur_position_ids = position_ids[:, chunk_start:chunk_end]
-            model(cur_x,
-                  attention_mask=cur_attn_mask,
-                  position_ids=cur_position_ids,
-                  past_key_values=past_key_values,
-                  use_cache=True,
-                  store_kv=True)
+        model._sdar_triton_prefill = True
+        try:
+            for chunk_start in range(0, prefill_length, prefill_chunk_length):
+                chunk_end = min(chunk_start + prefill_chunk_length, prefill_length)
+                cur_x = x[:, chunk_start:chunk_end]
+                query_blocks = torch.arange(
+                    chunk_start, chunk_end, device=model.device
+                ).div(block_length, rounding_mode="floor")
+                key_blocks = torch.arange(chunk_end, device=model.device).div(
+                    block_length, rounding_mode="floor"
+                )
+                cur_attn_mask = (key_blocks <= query_blocks[:, None]).unsqueeze(0)
+                cur_position_ids = position_ids[:, chunk_start:chunk_end]
+                model(cur_x,
+                      attention_mask=cur_attn_mask,
+                      position_ids=cur_position_ids,
+                      past_key_values=past_key_values,
+                      use_cache=True,
+                      store_kv=True)
+        finally:
+            model._sdar_triton_prefill = False
 
     num_transfer_tokens = get_num_transfer_tokens(
         block_length, denoising_steps)
@@ -928,9 +985,13 @@ def block_diffusion_generate(
     # Decode stage
     for num_block in range(prefill_blocks, num_blocks):
         cur_x = x[:, num_block*block_length:(num_block+1)*block_length].clone()
-        cur_attn_mask = block_diffusion_attention_mask[
-            :, num_block*block_length:(num_block+1)*block_length, :(num_block+1)*block_length
-        ]
+        cur_attn_mask = torch.ones(
+            1,
+            block_length,
+            (num_block + 1) * block_length,
+            dtype=torch.bool,
+            device=model.device,
+        )
         cur_position_ids = position_ids[:, num_block *
                                         block_length:(num_block+1)*block_length]
         for step in range(denoising_steps + 1):
