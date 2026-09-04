@@ -86,7 +86,7 @@ def _torch_kv_copy(key_cache, value_cache, positions, key, value, prefix_length)
 
 
 class BlockCacheSparsePatchTest(unittest.TestCase):
-    def test_prefix_compaction_selects_once_and_shares_indices(self):
+    def test_prefix_compaction_selects_indices_per_layer(self):
         cache = DynamicCache.from_legacy_cache(
             tuple(
                 (torch.randn(1, 1, 4, 2), torch.randn(1, 1, 4, 2))
@@ -106,19 +106,53 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         queries = [torch.randn(1, 1, 2, 2) for _ in range(2)]
         with mock_patch(
             "src.sparse.sparse_ops._adamas_prefix_indices",
-            return_value=torch.tensor([1, 3]),
+            side_effect=(torch.tensor([1, 3]), torch.tensor([0, 2])),
         ) as selector:
             compact, indices = _compact_prefix_cache(
                 model, cache, 4, queries, torch.arange(2).unsqueeze(0), 2, 2
             )
 
-        selector.assert_called_once()
-        self.assertEqual(
-            selector.call_args.kwargs["bucket_thresholds"],
-            ((-1.73, 0.0, 1.72), (-2.74, 0.0, 2.69)),
-        )
-        self.assertTrue(all(value.tolist() == [1, 3] for value in indices))
+        self.assertEqual(selector.call_count, 2)
+        for call in selector.call_args_list:
+            self.assertEqual(
+                call.kwargs["bucket_thresholds"],
+                ((-1.35, 0.0, 1.35), (-2.26, 0.0, 2.26)),
+            )
+        self.assertEqual([value.tolist() for value in indices], [[1, 3], [0, 2]])
         self.assertTrue(all(key.shape[-2] == 2 for key, _ in compact))
+
+    def test_sdar_prefix_compaction_shares_indices_per_layer_pair(self):
+        cache = DynamicCache.from_legacy_cache(
+            tuple(
+                (torch.randn(1, 1, 4, 2), torch.randn(1, 1, 4, 2))
+                for _ in range(4)
+            )
+        )
+        model = SimpleNamespace(
+            config=SimpleNamespace(model_type="sdar"),
+            model=SimpleNamespace(
+                rotary_emb=lambda query, positions: (
+                    torch.ones(1, positions.shape[-1], query.shape[-1]),
+                    torch.zeros(1, positions.shape[-1], query.shape[-1]),
+                ),
+            ),
+        )
+        queries = [torch.randn(1, 1, 2, 2) for _ in range(4)]
+        with mock_patch(
+            "src.sparse.sparse_ops._adamas_prefix_indices",
+            side_effect=(torch.tensor([1, 3]), torch.tensor([0, 2])),
+        ) as selector:
+            _, indices = _compact_prefix_cache(
+                model, cache, 4, queries, torch.arange(2).unsqueeze(0), 2, 2
+            )
+
+        self.assertEqual(selector.call_count, 2)
+        torch.testing.assert_close(selector.call_args_list[0].args[0], queries[1])
+        torch.testing.assert_close(selector.call_args_list[1].args[0], queries[3])
+        self.assertEqual(
+            [value.tolist() for value in indices],
+            [[1, 3], [1, 3], [0, 2], [0, 2]],
+        )
 
     def test_losa_online_merge_matches_concatenated_attention(self):
         torch.manual_seed(1)

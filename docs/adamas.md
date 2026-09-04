@@ -10,9 +10,11 @@ Baseline commit: `0624110 perf: share prefix selection across layers`
 - Added `scripts/collect_adamas_hqhk.py`, following `qk_distribute`'s GPU
   histogram/empirical-quantile method.
 - Collected 8K, 16K, and 32K Hq/Hk statistics under `results/hqhk_*.json`.
-- Added model-specific empirical bucket thresholds:
-  - LLaDA Hq `[-1.73, 0, 1.72]`, Hk `[-2.74, 0, 2.69]`.
-  - SDAR Hq `[-1.50, 0, 1.49]`, Hk `[-2.87, 0, 2.86]`.
+- Collected model-specific empirical bucket thresholds. SDAR uses its measured
+  Hq `[-1.50, 0, 1.49]`, Hk `[-2.87, 0, 2.86]`; LLaDA keeps the v1.2 Hq
+  `[-1.35, 0, 1.35]`, Hk `[-2.26, 0, 2.26]` because full HumanEval A/B at
+  Prefix-256 reached 71/164 official and 128/164 normalized, versus 64/164 and
+  127/164 with the empirical thresholds.
 - Changed Triton Adamas distance output from int64 to int32. The maximum
   distance is `3 * head_dim = 384` for both checkpoints.
 

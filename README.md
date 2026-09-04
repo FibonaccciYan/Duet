@@ -80,22 +80,25 @@ LLaDA uses its native confidence selector. SDAR uses the same configured
 
 ### Prefix Sparse
 
-Prefix Sparse runs one dense refresh at the beginning of a block, captures the
-final layer's real RoPE query, and selects shared historical token positions
-with Adamas. Every layer gathers its own K/V values using those shared positions.
-The complete current block is always retained.
+Prefix Sparse runs one dense refresh at the beginning of a block and captures
+every layer's real RoPE query. LLaDA selects historical positions independently
+for every layer; SDAR shares one Adamas selection within each adjacent layer
+pair. Every layer gathers its own K/V values, and the complete current block is
+always retained.
 
 Validated deployment budgets are:
 
 - LLaDA: `prefix_token_budget=1024`
 - SDAR: `prefix_token_budget=512`
 
-The model-specific four-bin boundaries measured from the real 8K/16K/32K path
-are:
+The v1.2-compatible speed profile uses `prefix_token_budget=256`. With Prefix
+only, it reaches 128/164 normalized HumanEval for LLaDA and 129/164 for SDAR.
+
+The runtime four-bin boundaries are:
 
 | Model | Hq boundaries | Hk boundaries |
 | --- | --- | --- |
-| LLaDA | `[-1.73, 0, 1.72]` | `[-2.74, 0, 2.69]` |
+| LLaDA | `[-1.35, 0, 1.35]` | `[-2.26, 0, 2.26]` |
 | SDAR | `[-1.50, 0, 1.49]` | `[-2.87, 0, 2.86]` |
 
 ### LoSA
@@ -161,10 +164,24 @@ Matched steady measurements from the calibrated Prefix configurations:
 | SDAR dense | 6.456s | 12.489s | 35.621s |
 | SDAR Prefix-512 | 6.228s (1.04x) | 12.209s (1.02x) | 34.669s (1.03x) |
 
-Full HumanEval validation for the same Prefix configurations:
+Matched GPU 2 measurements for the v1.2-compatible Prefix-256 profile:
+
+| Model/config | 8K | 16K | 32K |
+| --- | ---: | ---: | ---: |
+| LLaDA dense | 9.033s | 14.839s | 28.676s |
+| LLaDA Prefix-256 | 7.869s (1.15x) | 13.981s (1.06x) | 26.689s (1.07x) |
+| SDAR dense | 6.361s | 12.719s | 35.763s |
+| SDAR Prefix-256 | 6.408s (0.99x) | 12.559s (1.01x) | 34.735s (1.03x) |
+
+Full HumanEval validation for the calibrated quality configurations:
 
 - LLaDA: 74/164 official, 137/164 indentation-normalized, matching dense.
 - SDAR: 129/164 official and 129/164 normalized; dense is 129/164 and 130/164.
+
+Full HumanEval for the Prefix-256 speed profile:
+
+- LLaDA: 71/164 official and 128/164 indentation-normalized.
+- SDAR: 127/164 official and 129/164 indentation-normalized.
 
 ## Supporting tools
 

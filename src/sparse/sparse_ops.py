@@ -14,7 +14,7 @@ from .triton_kernels import (
 
 
 ADAMAS_BUCKET_THRESHOLDS = {
-    "llada2_moe": ((-1.73, 0.0, 1.72), (-2.74, 0.0, 2.69)),
+    "llada2_moe": ((-1.35, 0.0, 1.35), (-2.26, 0.0, 2.26)),
     "sdar": ((-1.50, 0.0, 1.49), (-2.87, 0.0, 2.86)),
 }
 
@@ -341,23 +341,29 @@ def _compact_prefix_cache(
         return prefix_cache, tuple(indices for _ in prefix_cache)
 
     cos, sin = model.model.rotary_emb(captured_queries[0], block_position_ids)
-    selection_layer = len(prefix_cache) - 1
-    query = captured_queries[selection_layer]
-    if query is None:
-        raise RuntimeError("Failed to capture a layer query during dense refresh")
-    key = prefix_cache[selection_layer][0]
-    indices = _adamas_prefix_indices(
-        _apply_rotary(query, cos, sin),
-        key,
-        token_budget,
-        chunk_size,
-        bucket_thresholds=ADAMAS_BUCKET_THRESHOLDS.get(model.config.model_type),
-    )
-    compact_cache = tuple(
-        (
-            key.index_select(2, indices).contiguous(),
-            value.index_select(2, indices).contiguous(),
+    compact_cache = []
+    prefix_indices = []
+    thresholds = ADAMAS_BUCKET_THRESHOLDS.get(model.config.model_type)
+    group_size = 2 if model.config.model_type == "sdar" else 1
+    for start in range(0, len(prefix_cache), group_size):
+        representative = min(start + group_size, len(prefix_cache)) - 1
+        query = captured_queries[representative]
+        if query is None:
+            raise RuntimeError("Failed to capture a layer query during dense refresh")
+        key = prefix_cache[representative][0]
+        indices = _adamas_prefix_indices(
+            _apply_rotary(query, cos, sin),
+            key,
+            token_budget,
+            chunk_size,
+            bucket_thresholds=thresholds,
         )
-        for key, value in prefix_cache
-    )
-    return compact_cache, tuple(indices for _ in prefix_cache)
+        for key, value in prefix_cache[start : start + group_size]:
+            compact_cache.append(
+                (
+                    key.index_select(2, indices).contiguous(),
+                    value.index_select(2, indices).contiguous(),
+                )
+            )
+            prefix_indices.append(indices)
+    return tuple(compact_cache), tuple(prefix_indices)
