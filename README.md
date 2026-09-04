@@ -276,10 +276,12 @@ layer continues to gather its own KV values. Steady fixed-work results are:
 
 | Model/config | 8K | 16K | 32K |
 | --- | ---: | ---: | ---: |
-| LLaDA dense | 6.740s | 12.577s | 26.707s |
-| LLaDA Prefix-1024 shared | 6.403s (1.05x) | 12.323s (1.02x) | 25.426s (1.05x) |
-| SDAR dense | 6.280s | 12.268s | 35.418s |
-| SDAR Prefix-512 shared | 5.846s (1.07x) | 11.958s (1.03x) | 34.600s (1.02x) |
+| LLaDA dense | 6.725s | 12.440s | 26.584s |
+| LLaDA Prefix-1024 shared | 6.403s (1.05x) | 12.323s (1.01x) | 25.426s (1.05x) |
+| LLaDA Prefix-1024 calibrated + FHT | 6.244s (1.08x) | 12.290s (1.01x) | 25.427s (1.05x) |
+| SDAR dense | 6.456s | 12.489s | 35.621s |
+| SDAR Prefix-512 shared | 5.846s (1.10x) | 11.958s (1.04x) | 34.600s (1.03x) |
+| SDAR Prefix-512 calibrated + FHT | 6.228s (1.04x) | 12.209s (1.02x) | 34.669s (1.03x) |
 
 The full HumanEval results also stay within run-level variance. LLaDA shared
 Prefix-1024 scored 74/164 official and 137/164 normalized, exactly matching
@@ -287,6 +289,36 @@ dense. SDAR shared Prefix-512 scored 129/164 official and 129/164 normalized,
 versus dense 129/164 and 130/164; it also improves over the earlier per-layer
 Prefix result of 127/164 official and 129/164 normalized. The deployment
 candidates are therefore Prefix-1024 for LLaDA and Prefix-512 for SDAR.
+The calibrated Faster-Hadamard configurations reproduced the same full scores:
+74/164 official and 137/164 normalized for LLaDA, and 129/164 for both metrics
+on SDAR.
+
+The shared Adamas selector can optionally use Adamas' Faster Hadamard CUDA
+extension. If `faster_hadamard_transform` is unavailable, or if
+`SPARSE_DLM_FASTER_HADAMARD=false`, it automatically uses the portable PyTorch
+implementation. Measurements from the real final-layer selection path at
+8K/16K/32K give the following static four-bin boundaries:
+
+| Model | Hq boundaries | Hk boundaries |
+| --- | --- | --- |
+| LLaDA | `[-1.73, 0, 1.72]` | `[-2.74, 0, 2.69]` |
+| SDAR | `[-1.50, 0, 1.49]` | `[-2.87, 0, 2.86]` |
+
+These replace the Llama-derived defaults only for the two known model types;
+unknown models retain the old values. At 32K the Faster Hadamard transform
+reduced selector latency from 12.22ms to 10.90ms on LLaDA and from 16.55ms to
+14.23ms on SDAR. Returning the bounded distance tensor as int32 further reduced
+it to 10.71ms and 13.06ms. Representative 32K E2E measurements were 25.25--25.43s
+for LLaDA Prefix-1024 and 34.54--34.67s for SDAR Prefix-512. Distribution collection
+is reproducible with `scripts/collect_adamas_hqhk.py`; the captured summaries
+are under `results/hqhk_*.json`.
+
+A lookup table is not used for the current unpacked 0--3 codes: it replaces a
+single integer subtract/absolute-value operation with an extra indexed load.
+It becomes worthwhile to revisit only with a packed two-bit XOR/popcount
+kernel. Likewise, reducing GQA query groups by taking their first or mean query
+did not improve LLaDA 32K E2E time and changes selected positions, so the exact
+all-query reduction remains the default.
 
 For the attention-aware estimator on GPU 5, fixed-work LLaDA LoSA-only wall
 time was 9.964s/15.198s/28.770s at 8K/16K/32K. The corresponding query-score

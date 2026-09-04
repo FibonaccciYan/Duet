@@ -1,8 +1,14 @@
 import math
+import os
 import types
 
 import torch
 from transformers.cache_utils import DynamicCache
+
+try:
+    import faster_hadamard_transform
+except (ImportError, OSError):  # pragma: no cover - optional CUDA extension
+    faster_hadamard_transform = None
 
 from .core import (
     _BlockDualCache,
@@ -15,6 +21,12 @@ from .triton_kernels import (
     attention_output_lse,
     losa_query_delta,
 )
+
+
+ADAMAS_BUCKET_THRESHOLDS = {
+    "llada2_moe": ((-1.73, 0.0, 1.72), (-2.74, 0.0, 2.69)),
+    "sdar": ((-1.50, 0.0, 1.49), (-2.87, 0.0, 2.86)),
+}
 
 
 def _repeat_kv(hidden_states, num_key_value_groups):
@@ -542,6 +554,15 @@ def _hadamard_transform(x):
     size = x.shape[-1]
     if size <= 0 or size & (size - 1):
         raise ValueError(f"Adamas requires a power-of-two head dimension, got {size}")
+    if (
+        faster_hadamard_transform is not None
+        and x.is_cuda
+        and os.environ.get("SPARSE_DLM_FASTER_HADAMARD", "true").lower()
+        not in {"0", "false", "no", "n"}
+    ):
+        return faster_hadamard_transform.hadamard_transform(
+            x.contiguous(), inplace=False
+        )
     leading_shape = x.shape[:-1]
     output = x
     width = 1
@@ -554,7 +575,12 @@ def _hadamard_transform(x):
 
 
 def _adamas_prefix_indices(
-    query, key, token_budget, chunk_size=256, use_triton=True
+    query,
+    key,
+    token_budget,
+    chunk_size=256,
+    use_triton=True,
+    bucket_thresholds=None,
 ):
     """Select a shared prefix KV set from the union of query candidates."""
     prefix_length = key.shape[-2]
@@ -564,8 +590,12 @@ def _adamas_prefix_indices(
     if budget <= 0:
         return torch.empty(0, dtype=torch.long, device=key.device)
 
-    query_thresholds = query.new_tensor([-1.35, 0.0, 1.35])
-    key_thresholds = key.new_tensor([-2.26, 0.0, 2.26])
+    query_edges, key_edges = bucket_thresholds or (
+        (-1.35, 0.0, 1.35),
+        (-2.26, 0.0, 2.26),
+    )
+    query_thresholds = query.new_tensor(query_edges)
+    key_thresholds = key.new_tensor(key_edges)
     query_code = torch.bucketize(
         _hadamard_transform(query), query_thresholds, out_int32=True
     )
@@ -674,12 +704,16 @@ def _compact_prefix_cache(
     query = captured_queries[selection_layer]
     if query is None:
         raise RuntimeError("Failed to capture a layer query during dense refresh")
+    key = prefix_cache[selection_layer][0]
     indices = _adamas_prefix_indices(
         _apply_rotary(query, cos, sin),
-        prefix_cache[selection_layer][0],
+        key,
         token_budget,
         chunk_size,
         use_triton=use_triton_adamas,
+        bucket_thresholds=ADAMAS_BUCKET_THRESHOLDS.get(
+            getattr(getattr(model, "config", None), "model_type", None)
+        ),
     )
     compact_cache = []
     for key, value in prefix_cache:

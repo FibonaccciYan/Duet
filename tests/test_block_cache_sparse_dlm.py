@@ -81,6 +81,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             )
         )
         model = SimpleNamespace(
+            config=SimpleNamespace(model_type="llada2_moe"),
             model=SimpleNamespace(
                 layers=[None, None],
                 rotary_emb=lambda query, positions: (
@@ -99,6 +100,10 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             )
 
         selector.assert_called_once()
+        self.assertEqual(
+            selector.call_args.kwargs["bucket_thresholds"],
+            ((-1.73, 0.0, 1.72), (-2.74, 0.0, 2.69)),
+        )
         self.assertTrue(all(value.tolist() == [1, 3] for value in indices))
         self.assertTrue(all(key.shape[-2] == 2 for key, _ in compact))
 

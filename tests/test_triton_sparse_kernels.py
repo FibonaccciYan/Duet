@@ -25,13 +25,14 @@ class TritonSparseKernelsTest(unittest.TestCase):
         )
         key = full_key[:, :, 3:20]
         actual = adamas_distances(query, key)
+        self.assertEqual(actual.dtype, torch.int32)
         groups = query.shape[1] // key.shape[1]
         expected = (
             query.reshape(1, key.shape[1], groups, query.shape[2], 128)[
                 ..., None, :
             ]
             - key[:, :, None, None]
-        ).abs().sum(dim=-1)[0].reshape(-1, key.shape[2])
+        ).abs().sum(dim=-1)[0].reshape(-1, key.shape[2]).to(torch.int32)
         torch.testing.assert_close(actual, expected)
 
     def test_losa_query_delta_matches_mse_reference(self):
