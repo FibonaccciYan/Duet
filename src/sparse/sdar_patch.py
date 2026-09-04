@@ -18,7 +18,7 @@ from .core import (
     _legacy_prefix_cache,
     _select_positions,
 )
-from .block_cache_sparse_dlm_patch import (
+from .llada_patch import (
     _apply_rotary,
     _attention_output_lse,
     _compact_prefix_cache,

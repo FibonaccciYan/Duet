@@ -11,15 +11,15 @@ parent `sparse/` directory; set `OUTPUT_ROOT` to override it.
 
 - `src/sparse/core.py`: public `patch_model(...)` entry point. It validates the
   model family and enables query sparse, prefix sparse, LoSA, and the MoE patch.
-- `src/sparse/block_cache_sparse_dlm_patch.py`: LLaDA generation/attention patch.
-- `src/sparse/sdar_block_diffusion_patch.py`: SDAR generation/KV-cache patch.
+- `src/sparse/llada_patch.py`: LLaDA generation/attention patch.
+- `src/sparse/sdar_patch.py`: SDAR generation/KV-cache patch.
 - `src/sparse/llada_moe_expert_patch.py`: LLaDA MoE kernel used by the core.
   It packs
   routed expert weights and dispatches the SiLU MLP through Triton grouped
   kernels without modifying the model directory. It is a no-op when CUDA or
   Triton is unavailable.
-- `scripts/test.py`: single-prompt inference entry point, following Dream's test script structure.
-- `scripts/test.sh`: environment-variable wrapper for the main inference path.
+- `scripts/generate.py`: single-prompt inference entry point, following Dream's test script structure.
+- `scripts/generate.sh`: environment-variable wrapper for the main inference path.
 - `eval_instruct/`: lm-eval harness with separate `llada` and `sdar` adapters.
 - `tests/`: small CPU regression tests built from the LLaDA remote-code class.
 - `experiments/legacy/`: earlier sparse-attention, trace, ratio-sweep, plots, and throughput work.
@@ -27,15 +27,15 @@ parent `sparse/` directory; set `OUTPUT_ROOT` to override it.
 ## Run
 
 ```bash
-bash scripts/test.sh
+bash scripts/generate.sh
 ```
 
 Select the model explicitly with `MODEL_TYPE`; the checkpoint path is optional
 when using the repository defaults:
 
 ```bash
-MODEL_TYPE=llada bash scripts/test.sh
-MODEL_TYPE=sdar bash scripts/test.sh
+MODEL_TYPE=llada bash scripts/generate.sh
+MODEL_TYPE=sdar bash scripts/generate.sh
 ```
 
 Common overrides:
@@ -43,7 +43,7 @@ Common overrides:
 ```bash
 GEN_LENGTH=128 BLOCK_LENGTH=32 STEPS=32 \
 SPARSE_DLM_RATIO=0.5 SPARSE_DLM_SELECTION_INTERVAL=4 \
-bash scripts/test.sh
+bash scripts/generate.sh
 ```
 
 The current-block query optimization and Adamas prefix selection are
@@ -70,7 +70,7 @@ layer index.
 
 ```bash
 QUERY_SPARSE=false PREFIX_SPARSE=true PREFIX_TOKEN_BUDGET=256 \
-bash scripts/test.sh
+bash scripts/generate.sh
 ```
 
 Set `PREFIX_SPARSE=false` to retain the full prefix cache. `PREFIX_CHUNK_SIZE`
@@ -82,7 +82,7 @@ current-block attention using online-softmax state:
 
 ```bash
 LOSA=true LOSA_ACTIVE_TOPK=5 QUERY_SPARSE=false PREFIX_SPARSE=false \
-bash scripts/test.sh
+bash scripts/generate.sh
 ```
 
 This remains a correctness/reference path even though its stable CUDA hotspots
@@ -100,7 +100,7 @@ MoE expert patch. Query sparsity is enabled by default; use
 
 ```bash
 MODEL_TYPE=sdar MODEL_PATH=/data0/ysy/models/SDAR-8B-Chat-b32 \
-PROMPT="Explain diffusion models briefly." bash scripts/test.sh
+PROMPT="Explain diffusion models briefly." bash scripts/generate.sh
 ```
 
 SDAR keeps Adamas and LoSA disabled by default. Enable them independently with
@@ -109,11 +109,11 @@ the same switches as LLaDA; for the block-32 checkpoint, for example:
 ```bash
 MODEL_TYPE=sdar MODEL_PATH=/data0/ysy/models/SDAR-8B-Chat-b32 \
 BLOCK_LENGTH=32 STEPS=32 QUERY_SPARSE=false \
-PREFIX_SPARSE=true PREFIX_TOKEN_BUDGET=256 bash scripts/test.sh
+PREFIX_SPARSE=true PREFIX_TOKEN_BUDGET=256 bash scripts/generate.sh
 
 MODEL_TYPE=sdar MODEL_PATH=/data0/ysy/models/SDAR-8B-Chat-b32 \
 BLOCK_LENGTH=32 STEPS=32 QUERY_SPARSE=false PREFIX_SPARSE=false \
-LOSA=true LOSA_ACTIVE_TOPK=5 bash scripts/test.sh
+LOSA=true LOSA_ACTIVE_TOPK=5 bash scripts/generate.sh
 ```
 
 Adamas selects each layer's historical prefix KV after the first dense denoise
@@ -367,7 +367,7 @@ CUDA_VISIBLE_DEVICES=2 SPARSE_DLM_TRITON=true \
   current-block denoise、完成 block 后写入 KV cache 的主循环。Dense 与 Query
   Sparse 经过同一个 transfer 循环，Sparse 只通过 `denoise_fn` 替换单步 forward，
   避免两套生成逻辑继续漂移。
-- `src/sparse/sdar_block_diffusion_patch.py` 在运行时 patch `model.generate`。
+- `src/sparse/sdar_patch.py` 在运行时 patch `model.generate`。
   每个 block 的第一个 denoise step 保持 dense，用于建立完整 current-block KV；
   后续 step 默认在 `layers[5]` 后执行 `norm -> lm_head -> sampling` 选位，
   从 `layers[6]` 开始只计算所有已解码位置和配置比例的 mask 位置。选位层已暴露为
@@ -401,7 +401,7 @@ CUDA_VISIBLE_DEVICES=2 SPARSE_DLM_TRITON=true \
   仓库的答案抽取/等价判断，并恢复了 SDAR GSM8K 所需的长生成上限；此前直接用
   `gsm8k`/`gsm8k_cot` 的 prompt、短生成和普通抽取只得到约 13%，并非模型真实
   GSM8K 能力。
-- `eval_instruct/eval.sh` 和 `scripts/test.sh` 当前都默认使用
+- `eval_instruct/eval.sh` 和 `scripts/generate.sh` 当前都默认使用
   `/data0/ysy/models/SDAR-8B-Chat-b32`、block/steps 32/32。
 - SDAR remote code 需要 `/home/ysy/anaconda3/envs/dream/bin/python`
   （Transformers 4.53.3）。`llada` 环境的 Transformers 4.57.1 在本机缺少
@@ -423,7 +423,7 @@ CUDA_VISIBLE_DEVICES=2 SPARSE_DLM_TRITON=true \
 6. 修正 `entropy_bounded` 为逐位置、沿词表维求 entropy，并把策略和
    `EB_THRESHOLD` 暴露到直接推理、lm-eval 和 layer-overlap 脚本。
 7. 修正 `SPARSE_DLM_TOP_K=64` 只写 config、不进入 SDAR Query 采样路径的问题。
-8. 增加 `scripts/test_sdar_layer_overlap.py` 和
+8. 增加 `scripts/analyze_sdar_layer_overlap.py` 和
    `scripts/run_sdar_layer_overlap_all_strategies.sh`，可比较所有 decoder layer 和
    四种 transfer strategy。相关 CPU 单测以及 dense/query GPU 冒烟测试已通过。
 9. 隔离 LLaDA 与 SDAR 的 token transfer：SDAR 保留四种
@@ -557,7 +557,7 @@ dynamic transfer/denoise forward。
 paired quality 为准；单纯缓存旧分数、固定 interval 或量化 full-vocab head 都不能
 安全解决当前 wall-time 差距。
 
-`scripts/test.py` 现在支持默认关闭的 `--profile_output`、`--profile_trace` 和
+`scripts/generate.py` 现在支持默认关闭的 `--profile_output`、`--profile_trace` 和
 `--warmup_runs`。聚合报告在 `/tmp/sdar_profile/dense_t1.txt` 与
 `/tmp/sdar_profile/query_t1.txt`、`/tmp/sdar_profile/query_opt_t1.txt`；Chrome trace 仅在显式设置
 `--profile_trace true` 时导出，避免默认产生约 0.7 GB/次的文件。
@@ -680,7 +680,7 @@ CUDA_VISIBLE_DEVICES=5 bash scripts/run_sdar_layer_overlap_all_strategies.sh
 
 # CPU 回归
 PYTHONPATH=. /home/ysy/anaconda3/envs/llada/bin/python \
-  -m unittest tests.test_sdar_block_diffusion_patch tests.test_sdar_layer_overlap -v
+  -m unittest tests.test_sdar_patch tests.test_sdar_layer_overlap -v
 ```
 
 ## Instruct Evaluation

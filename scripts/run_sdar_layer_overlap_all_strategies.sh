@@ -11,7 +11,7 @@ for strategy in \
   entropy_bounded
 do
   echo "Running ${strategy}"
-  CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-5}" "${python_bin}" scripts/test_sdar_layer_overlap.py \
+  CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-5}" "${python_bin}" scripts/analyze_sdar_layer_overlap.py \
     --block_length 32 \
     --steps 32 \
     --gen_length 32 \

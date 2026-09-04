@@ -11,7 +11,7 @@ class SparseCoreTest(unittest.TestCase):
             config=types.SimpleNamespace(model_type="llada2_moe")
         )
         with patch(
-            "src.sparse.block_cache_sparse_dlm_patch.patch_llada_model"
+            "src.sparse.llada_patch.patch_llada_model"
         ) as patch_llada, patch(
             "src.sparse.core.patch_moe_experts"
         ) as patch_moe:
@@ -41,7 +41,7 @@ class SparseCoreTest(unittest.TestCase):
     def test_core_routes_prefix_sparse_and_losa_to_sdar(self):
         model = types.SimpleNamespace(config=types.SimpleNamespace(model_type="sdar"))
         with patch(
-            "src.sparse.sdar_block_diffusion_patch.patch_sdar_model"
+            "src.sparse.sdar_patch.patch_sdar_model"
         ) as patch_sdar, patch("src.sparse.core.patch_moe_experts") as patch_moe:
             patch_model(
                 model,

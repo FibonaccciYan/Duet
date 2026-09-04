@@ -37,7 +37,7 @@ fi
 pattern="${PATTERN:-patch}"
 
 args=(
-  scripts/test.py
+  scripts/generate.py
   --model "${model_type}"
   --pattern "${pattern}"
   --model_path "${model_path}"

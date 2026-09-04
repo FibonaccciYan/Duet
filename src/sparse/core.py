@@ -333,7 +333,7 @@ def patch_model(
     """Enable requested sparse features through the matching model patch."""
     family = resolve_model_family(model, model_name)
     if family == "llada":
-        from .block_cache_sparse_dlm_patch import patch_llada_model
+        from .llada_patch import patch_llada_model
 
         patch_llada_model(
             model,
@@ -358,7 +358,7 @@ def patch_model(
         if moe_expert_patch:
             patch_moe_experts(model)
     else:
-        from .sdar_block_diffusion_patch import patch_sdar_model
+        from .sdar_patch import patch_sdar_model
 
         patch_sdar_model(
             model,

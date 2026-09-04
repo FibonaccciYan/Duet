@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.sparse.block_cache_sparse_dlm_patch import (
+from src.sparse.llada_patch import (
     _BlockDualCache,
     _adamas_prefix_indices,
     _attention_output_lse,
@@ -92,7 +92,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         )
         queries = [torch.randn(1, 1, 2, 2) for _ in range(2)]
         with mock_patch(
-            "src.sparse.block_cache_sparse_dlm_patch._adamas_prefix_indices",
+            "src.sparse.llada_patch._adamas_prefix_indices",
             return_value=torch.tensor([1, 3]),
         ) as selector:
             compact, indices = _compact_prefix_cache(
@@ -441,7 +441,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 )
                 completed_layers.clear()
                 with mock_patch(
-                    "src.sparse.block_cache_sparse_dlm_patch._select_positions",
+                    "src.sparse.llada_patch._select_positions",
                     side_effect=lambda *args, **kwargs: observed_layers.append(
                         completed_layers.copy()
                     ),
