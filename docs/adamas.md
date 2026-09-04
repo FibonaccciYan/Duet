@@ -6,8 +6,7 @@ Baseline commit: `0624110 perf: share prefix selection across layers`
 
 ## Completed in the current worktree
 
-- Added optional `faster_hadamard_transform` use with the existing PyTorch
-  fallback. Disable it with `SPARSE_DLM_FASTER_HADAMARD=false`.
+- Made `faster_hadamard_transform` the required Hadamard implementation.
 - Added `scripts/collect_adamas_hqhk.py`, following `qk_distribute`'s GPU
   histogram/empirical-quantile method.
 - Collected 8K, 16K, and 32K Hq/Hk statistics under `results/hqhk_*.json`.
@@ -45,9 +44,8 @@ The output checksums changed, so HumanEval is used to validate the new defaults.
    6.244s/12.290s/25.427s and SDAR 6.228s/12.209s/34.669s.
    Matched dense repeats were LLaDA 6.725s/12.440s/26.584s and SDAR
    6.456s/12.489s/35.621s.
-2. Faster Hadamard is registered in both runtime envs using the existing
-   editable import hook and imports successfully. A clean environment still
-   needs to build/install the extension; runtime retains the PyTorch fallback.
+2. Faster Hadamard is registered in both runtime environments using the
+   existing import hook. A clean environment must build/install the extension.
 
 3. Distance lookup-table experiment: rejected for the current unpacked Triton
    representation. Adamas' CUDA code contains a 256-entry

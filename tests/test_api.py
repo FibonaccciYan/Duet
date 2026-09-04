@@ -5,8 +5,8 @@ from unittest.mock import patch
 from src.sparse import patch_model, resolve_model_family
 
 
-class SparseCoreTest(unittest.TestCase):
-    def test_core_routes_all_feature_switches_to_llada(self):
+class SparseApiTest(unittest.TestCase):
+    def test_api_routes_all_feature_switches_to_llada(self):
         model = types.SimpleNamespace(
             config=types.SimpleNamespace(model_type="llada2_moe")
         )
@@ -38,7 +38,7 @@ class SparseCoreTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checkpoint model_type"):
             resolve_model_family(model, "llada")
 
-    def test_core_routes_prefix_sparse_and_losa_to_sdar(self):
+    def test_api_routes_prefix_sparse_and_losa_to_sdar(self):
         model = types.SimpleNamespace(config=types.SimpleNamespace(model_type="sdar"))
         with patch(
             "src.sparse.api.patch_sdar_model"

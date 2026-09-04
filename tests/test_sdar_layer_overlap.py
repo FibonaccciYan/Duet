@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from scripts.test_sdar_layer_overlap import candidate_mask, overlap_metrics
+from scripts.analyze_sdar_layer_overlap import candidate_mask, overlap_metrics
 
 
 class SDARLayerOverlapTest(unittest.TestCase):

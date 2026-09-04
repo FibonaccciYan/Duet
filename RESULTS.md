@@ -157,7 +157,7 @@ prefix 稀疏配置使用每层 `token_budget=256`。四组 HumanEval 均对保�
 
 ## 回归测试
 
-`tests/test_block_cache_sparse_dlm.py` 当前包含并通过 8 项 CPU 测试：
+`tests/test_llada_patch.py` 包含 LLaDA patch 与共享稀疏操作测试：
 
 1. query confidence selection 使用真实 decode confidence。
 2. dual cache 只覆盖选中的 current-block KV。

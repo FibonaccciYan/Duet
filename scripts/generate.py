@@ -42,7 +42,7 @@ def parse_args():
     parser.add_argument("--attn_implementation", choices=("eager", "sdpa"), default="sdpa")
     parser.add_argument(
         "--pattern",
-        choices=("patch", "default", "block_cache_sparse_dlm", "sdar_block_diffusion"),
+        choices=("patch", "default"),
         default="patch",
     )
     parser.add_argument("--gen_length", type=int, default=512)

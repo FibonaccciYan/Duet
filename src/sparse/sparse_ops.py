@@ -120,7 +120,7 @@ def _attention_output_lse(query, key, value, attention_mask, _groups=None):
 def _block_attention_output_lse(
     query, key, value, attention_mask, num_key_value_groups
 ):
-    """Compute exact short-block attention; this is not a prefix fallback."""
+    """Compute exact attention for the short current block."""
     key = _repeat_kv(key, num_key_value_groups)
     value = _repeat_kv(value, num_key_value_groups)
     scores = torch.matmul(query, key.transpose(-2, -1))

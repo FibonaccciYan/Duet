@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""End-to-end A/B benchmark for long-context sparse generation.
+"""End-to-end long-context benchmark for sparse generation.
 
-Run this script in two processes with SPARSE_DLM_TRITON=false/true.  Context
-length means the complete prompt + generated-token window, so the 32K case
-stays within checkpoints whose configured maximum is 32768 tokens.
+Context length means the complete prompt + generated-token window, so the 32K
+case stays within checkpoints whose configured maximum is 32768 tokens.
 """
 
 import argparse
@@ -204,14 +203,12 @@ def main():
     model.generate(**generation_kwargs(warmup_args, tokenizer, warmup_ids))
     torch.cuda.synchronize()
 
-    triton_env = os.getenv("SPARSE_DLM_TRITON", "auto")
     results = []
     print(
         json.dumps(
             {
                 "model": args.model,
                 "mode": args.mode,
-                "triton": triton_env,
                 "losa_score_mode": args.losa_score_mode,
             },
             sort_keys=True,
@@ -226,7 +223,6 @@ def main():
     report = {
         "model": args.model,
         "mode": args.mode,
-        "triton": triton_env,
         "dtype": "float16" if args.model == "sdar" else "bfloat16",
         "gen_length": args.gen_length,
         "losa_active_topk": args.losa_active_topk,

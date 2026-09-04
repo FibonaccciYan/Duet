@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.test_sdar_layer_overlap import (
+from scripts.analyze_sdar_layer_overlap import (
     candidate_mask,
     overlap_metrics,
     plot_results,
@@ -46,8 +46,8 @@ def prediction_scores(model, logits, args):
 
 def layer_logits(model, outputs, layer, num_layers):
     hidden_states = outputs.hidden_states[layer]
-    # if layer < num_layers:
-    #     hidden_states = model.model.norm(hidden_states)
+    if layer < num_layers:
+        hidden_states = model.model.norm(hidden_states)
     return model.lm_head(hidden_states).float()
 
 
