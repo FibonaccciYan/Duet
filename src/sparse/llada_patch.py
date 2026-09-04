@@ -805,9 +805,10 @@ def _block_cache_generate(self, *args, **kwargs):
                 break
 
     generated = x[:, prompt_length : prompt_length + gen_length]
-    eos_positions = (generated[0] == eos_id).nonzero(as_tuple=True)[0]
-    if len(eos_positions):
-        generated = generated[:, : eos_positions[0].item() + 1]
+    if eos_early_stop:
+        eos_positions = (generated[0] == eos_id).nonzero(as_tuple=True)[0]
+        if len(eos_positions):
+            generated = generated[:, : eos_positions[0].item() + 1]
     return generated
 
 
