@@ -13,6 +13,7 @@ from src.sparse.sparse_ops import (
 )
 from src.sparse.sdar_patch import (
     _sdar_losa_attention_forward,
+    _select_positions,
     _sparse_cached_forward,
     entropy_from_logits,
     patch_sdar_model as patch_model,
@@ -49,16 +50,40 @@ class _FakeSDAR(torch.nn.Module):
 
 
 class SDARBlockDiffusionPatchTest(unittest.TestCase):
+    def test_sequential_selector_reuses_known_decoded_prefix(self):
+        selected = _select_positions(
+            types.SimpleNamespace(),
+            torch.empty(1, 6, 1),
+            torch.tensor([[1, 2, 15, 15, 15, 15]]),
+            mask_id=15,
+            ratio=0.5,
+            top_k=0,
+            strategy="sequential",
+            decoded_count=2,
+        )
+
+        self.assertEqual(selected.tolist(), [0, 1, 2, 3])
+
     def test_prefix_sparse_accepts_per_layer_compact_lengths(self):
         seen_key_lengths = []
 
         class RecordLayer(torch.nn.Module):
-            def forward(self, hidden_states, attention_mask, **kwargs):
-                seen_key_lengths.append(attention_mask.shape[-1])
+            def __init__(self, layer_idx):
+                super().__init__()
+                self.layer_idx = layer_idx
+
+            def forward(
+                self, hidden_states, attention_mask, past_key_value, **kwargs
+            ):
+                assert attention_mask is None
+                seen_key_lengths.append(
+                    past_key_value.to_legacy_cache()[self.layer_idx][0].shape[-2]
+                    + hidden_states.shape[1]
+                )
                 return (hidden_states,)
 
         class Base:
-            layers = [RecordLayer(), RecordLayer()]
+            layers = [RecordLayer(0), RecordLayer(1)]
             norm = staticmethod(lambda hidden_states: hidden_states)
             embed_tokens = staticmethod(
                 lambda input_ids: input_ids.float().unsqueeze(-1)
@@ -358,7 +383,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
                 input_ids,
                 torch.arange(2).unsqueeze(0),
                 (),
-                {"sparse_cache": None, "step": 0},
+                {"sparse_cache": mock.Mock(), "step": 0},
                 mask_id=15,
                 temperature=0.7,
                 top_k=7,
@@ -469,6 +494,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
                         id(position_embeddings[0]),
                         id(position_embeddings[1]),
                         id(attention_mask),
+                        id(kwargs["past_key_value"]),
                     )
                 )
                 return (hidden_states + 1,)
@@ -517,6 +543,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         self.assertEqual([entry[0] for entry in seen], [3] * 6 + [2] * 3)
         self.assertEqual(len({entry[1:] for entry in seen[:6]}), 1)
         self.assertEqual(len({entry[1:] for entry in seen[6:]}), 1)
+        self.assertEqual(len({entry[-1] for entry in seen}), 1)
 
     def test_transfer_ignores_masks_without_logits(self):
         transfer = _select_transfer(

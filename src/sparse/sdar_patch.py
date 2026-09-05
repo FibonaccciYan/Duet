@@ -13,6 +13,7 @@ import weakref
 import torch
 from torch.nn import functional as F
 from transformers.cache_utils import DynamicCache
+from flash_attn import flash_attn_func
 
 from .sparse_ops import (
     _BlockDualCache,
@@ -52,7 +53,27 @@ def _select_positions(
     strategy="low_confidence_static",
     threshold=1.0,
     entropy_budget=None,
+    decoded_count=None,
 ):
+    if strategy == "sequential" and decoded_count is not None:
+        mask_count = input_ids.shape[1] - decoded_count
+        if ratio >= 1.0 or mask_count <= query_dense_threshold:
+            return None
+        candidate_count = min(
+            max(int(minimum_mask_candidates), math.ceil(mask_count * ratio)),
+            mask_count,
+        )
+        if (
+            cached_positions is not None
+            and selection_interval > 1
+            and selection_step % selection_interval != 0
+            and cached_positions.numel() - decoded_count >= candidate_count
+        ):
+            return torch.arange(cached_positions.numel(), device=input_ids.device)
+        return torch.arange(
+            decoded_count + candidate_count, device=input_ids.device
+        )
+
     mask = input_ids[0] == mask_id
     mask_count = int(mask.sum().item())
     if ratio >= 1.0 or mask_count <= query_dense_threshold:
@@ -119,7 +140,7 @@ def _capture_sdar_block_queries(model):
     return captured, handles
 
 
-def _sdar_prefill_attention_forward(
+def _sdar_attention_forward(
     self,
     hidden_states,
     position_embeddings,
@@ -127,9 +148,11 @@ def _sdar_prefill_attention_forward(
     past_key_value=None,
     **kwargs,
 ):
-    """Run exact block-causal prefill with streaming Triton attention."""
+    """Run block prefill and known-unmasked decode without mask inspection."""
     model = self._sdar_prefill_model_ref()
-    if not getattr(model, "_sdar_triton_prefill", False):
+    prefill = getattr(model, "_sdar_triton_prefill", False)
+    decode = getattr(model, "_sdar_decode_attention", False)
+    if not prefill and not decode:
         return self._sdar_prefill_dense_forward(
             hidden_states,
             position_embeddings=position_embeddings,
@@ -158,7 +181,16 @@ def _sdar_prefill_attention_forward(
     if past_key_value is not None and kwargs.get("store_kv", False):
         key, value = past_key_value.update(key, value, self.layer_idx)
 
-    output = block_causal_prefill(query, key, value)
+    if prefill:
+        output = block_causal_prefill(query, key, value)
+    else:
+        output = flash_attn_func(
+            query.transpose(1, 2),
+            key.transpose(1, 2),
+            value.transpose(1, 2),
+            causal=False,
+            softmax_scale=self.scaling,
+        ).transpose(1, 2)
     output = output.transpose(1, 2).reshape(batch_size, query_length, -1)
     return self.o_proj(output.contiguous()), None
 
@@ -365,8 +397,13 @@ def _sparse_cached_forward(
     base = model.model
     hidden_states = base.embed_tokens(input_ids)
     position_embeddings = base.rotary_emb(hidden_states, position_ids)
-    full_cache = DynamicCache.from_legacy_cache(prefix_cache)
     sparse_cache = selection_state.get("sparse_cache")
+    if query_sparse and sparse_cache is None:
+        raise RuntimeError("Query Sparse requires an initialized block cache")
+    full_cache = (
+        None if query_sparse else DynamicCache.from_legacy_cache(prefix_cache)
+    )
+    all_positions = torch.arange(input_ids.shape[1], device=input_ids.device)
     selected_positions = None
     full_hidden_base = None
     compressed = False
@@ -410,10 +447,12 @@ def _sparse_cached_forward(
                 layer_hidden = hidden_states
                 layer_positions = position_ids
                 layer_position_embeddings = position_embeddings
-                layer_cache = full_cache
-                layer_query_positions = torch.arange(
-                    input_ids.shape[1], device=input_ids.device
-                )
+                if query_sparse:
+                    sparse_cache.set_positions(all_positions)
+                    layer_cache = sparse_cache
+                else:
+                    layer_cache = full_cache
+                layer_query_positions = all_positions
             else:
                 layer_hidden = (
                     hidden_states
@@ -428,17 +467,19 @@ def _sparse_cached_forward(
             layer_prefix_length = (
                 prefix_lengths[layer_idx] if prefix_lengths else 0
             )
-            mask_key = (layer_hidden.shape[1], layer_prefix_length)
-            layer_attention = attention_masks.get(mask_key)
-            if layer_attention is None:
-                layer_attention = torch.ones(
-                    input_ids.shape[0],
-                    layer_hidden.shape[1],
-                    layer_prefix_length + input_ids.shape[1],
-                    dtype=torch.bool,
-                    device=input_ids.device,
-                )
-                attention_masks[mask_key] = layer_attention
+            layer_attention = None
+            if losa_context is not None:
+                mask_key = (layer_hidden.shape[1], layer_prefix_length)
+                layer_attention = attention_masks.get(mask_key)
+                if layer_attention is None:
+                    layer_attention = torch.ones(
+                        input_ids.shape[0],
+                        layer_hidden.shape[1],
+                        layer_prefix_length + input_ids.shape[1],
+                        dtype=torch.bool,
+                        device=input_ids.device,
+                    )
+                    attention_masks[mask_key] = layer_attention
             if losa_context is not None:
                 losa_context["prefix_cache_length"] = layer_prefix_length
                 losa_context["query_positions"] = layer_query_positions
@@ -480,6 +521,7 @@ def _sparse_cached_forward(
                     strategy=strategy,
                     threshold=threshold,
                     entropy_budget=entropy_budget,
+                    decoded_count=selection_state.get("sequential_decoded"),
                 )
                 selection_state["positions"] = selected_positions
                 if selected_positions is not None:
@@ -514,10 +556,6 @@ def _sparse_cached_forward(
         if losa_context is not None:
             model._sdar_losa_context = None
 
-    if query_sparse and refresh_late_kv:
-        selection_state["sparse_cache"] = _BlockDualCache(
-            full_cache.to_legacy_cache(), prefix_lengths
-        )
     if selected_positions is not None:
         selected_hidden = (
             hidden_states.index_select(1, selected_positions)
@@ -534,7 +572,14 @@ def _sparse_cached_forward(
             input_ids[0].index_select(0, selected_positions) == mask_id
         ]
     else:
-        mask_positions = torch.where(input_ids[0] == mask_id)[0]
+        if strategy == "sequential" and "sequential_decoded" in selection_state:
+            mask_positions = torch.arange(
+                selection_state["sequential_decoded"],
+                input_ids.shape[1],
+                device=input_ids.device,
+            )
+        else:
+            mask_positions = torch.where(input_ids[0] == mask_id)[0]
     return model.lm_head(hidden_states.index_select(1, mask_positions)), mask_positions
 
 
@@ -630,6 +675,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
             selection_state.update(
                 positions=None,
                 step=step,
+                sequential_decoded=(minimum if strategy == "sequential" else None),
                 sparse_cache=(
                     _dual_cache_from_dense(
                         dense_cache, prefix_cache, block_start, block_end
@@ -671,26 +717,34 @@ def _block_diffusion_generate(self, *args, **kwargs):
             query_sparse=query_sparse,
         )
         selection_state["step"] = step
+        if strategy == "sequential":
+            selection_state["sequential_decoded"] += minimum
         return logits, logit_positions
 
-    tokens = block_diffusion_generate(
-        self,
-        prompt={"input_ids": input_ids},
-        mask_id=mask_id,
-        gen_length=gen_length,
-        block_length=block_length,
-        denoising_steps=steps,
-        temperature=temperature,
-        top_k=top_k,
-        top_p=top_p,
-        remasking_strategy=strategy,
-        confidence_threshold=threshold,
-        eb_threshold=eb_threshold,
-        stopping_criteria_idx=(stop_ids if eos_early_stop else None),
-        denoise_fn=(
-            sparse_denoise if query_sparse or prefix_sparse or active_losa else None
-        ),
-    )
+    self._sdar_decode_attention = True
+    try:
+        tokens = block_diffusion_generate(
+            self,
+            prompt={"input_ids": input_ids},
+            mask_id=mask_id,
+            gen_length=gen_length,
+            block_length=block_length,
+            denoising_steps=steps,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            remasking_strategy=strategy,
+            confidence_threshold=threshold,
+            eb_threshold=eb_threshold,
+            stopping_criteria_idx=(stop_ids if eos_early_stop else None),
+            denoise_fn=(
+                sparse_denoise
+                if query_sparse or prefix_sparse or active_losa
+                else None
+            ),
+        )
+    finally:
+        self._sdar_decode_attention = False
     generated = tokens[:, prompt_length : prompt_length + gen_length]
     if eos_early_stop and stop_ids:
         stop_positions = torch.cat(
@@ -760,7 +814,7 @@ def patch_sdar_model(
             attention._sdar_prefill_dense_forward = attention.forward
             attention._sdar_prefill_model_ref = weakref.ref(model)
             attention.forward = types.MethodType(
-                _sdar_prefill_attention_forward, attention
+                _sdar_attention_forward, attention
             )
     if losa:
         for layer in model.model.layers:

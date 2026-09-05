@@ -61,6 +61,21 @@ def parse_args():
     parser.add_argument("--losa-key-samples", type=int, default=32)
     parser.add_argument("--prefix-token-budget", type=int, default=256)
     parser.add_argument("--prefix-chunk-size", type=int, default=None)
+    parser.add_argument("--query-ratio", type=float, default=None)
+    parser.add_argument("--query-dense-threshold", type=int, default=None)
+    parser.add_argument(
+        "--deep-only-transfer", action=argparse.BooleanOptionalAction, default=False
+    )
+    parser.add_argument(
+        "--remasking-strategy",
+        choices=(
+            "sequential",
+            "low_confidence_static",
+            "low_confidence_dynamic",
+            "entropy_bounded",
+        ),
+        default="sequential",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
@@ -95,13 +110,21 @@ def load(args):
     patch_model(
         model,
         model_name=args.model,
-        ratio=0.5 if is_sdar else 0.7,
+        ratio=(
+            args.query_ratio
+            if args.query_ratio is not None
+            else (0.5 if is_sdar else 0.7)
+        ),
         top_k=64,
         selection_interval=1 if is_sdar else 4,
-        query_dense_threshold=0 if is_sdar else 4,
+        query_dense_threshold=(
+            args.query_dense_threshold
+            if args.query_dense_threshold is not None
+            else (0 if is_sdar else 4)
+        ),
         refresh_step=-1 if is_sdar else 2,
         selection_layer=5 if is_sdar else 1,
-        deep_only_transfer=False,
+        deep_only_transfer=args.deep_only_transfer,
         query_sparse=query_sparse,
         prefix_sparse=prefix_sparse,
         prefix_token_budget=args.prefix_token_budget,
@@ -157,7 +180,7 @@ def generation_kwargs(args, tokenizer, input_ids):
         "eos_id": None if is_sdar else 156892,
     }
     if is_sdar:
-        kwargs.update(remasking_strategy="sequential", eb_threshold=0.35)
+        kwargs.update(remasking_strategy=args.remasking_strategy, eb_threshold=0.35)
     else:
         kwargs.update(editing_threshold=0.0, num_to_transfer=1)
     return kwargs
