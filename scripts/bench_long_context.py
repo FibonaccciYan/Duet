@@ -77,6 +77,7 @@ def parse_args():
         default="sequential",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
 
@@ -239,10 +240,12 @@ def main():
         ),
         flush=True,
     )
-    for context_length in args.contexts:
-        result = run_once(args, model, tokenizer, context_length)
-        results.append(result)
-        print(json.dumps(result, sort_keys=True), flush=True)
+    for repeat in range(args.repeats):
+        for context_length in args.contexts:
+            result = run_once(args, model, tokenizer, context_length)
+            result["repeat"] = repeat
+            results.append(result)
+            print(json.dumps(result, sort_keys=True), flush=True)
 
     report = {
         "model": args.model,
@@ -253,6 +256,8 @@ def main():
         "losa_score_mode": args.losa_score_mode,
         "losa_key_samples": args.losa_key_samples,
         "prefix_token_budget": args.prefix_token_budget,
+        "sparse_config": getattr(model.config, f"{args.model}_sparse_config"),
+        "remasking_strategy": args.remasking_strategy,
         "results": results,
     }
     if args.output:

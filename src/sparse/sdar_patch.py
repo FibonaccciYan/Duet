@@ -13,7 +13,6 @@ import weakref
 import torch
 from torch.nn import functional as F
 from transformers.cache_utils import DynamicCache
-from flash_attn import flash_attn_func
 
 from .sparse_ops import (
     _BlockDualCache,
@@ -71,7 +70,8 @@ def _select_positions(
         ):
             return torch.arange(cached_positions.numel(), device=input_ids.device)
         return torch.arange(
-            decoded_count + candidate_count, device=input_ids.device
+            decoded_count + candidate_count,
+            device=input_ids.device,
         )
 
     mask = input_ids[0] == mask_id
@@ -188,13 +188,9 @@ def _sdar_attention_forward(
     if prefill:
         output = block_causal_prefill(query, key, value)
     else:
-        output = flash_attn_func(
-            query.transpose(1, 2),
-            key.transpose(1, 2),
-            value.transpose(1, 2),
-            causal=False,
-            softmax_scale=self.scaling,
-        ).transpose(1, 2)
+        output = F.scaled_dot_product_attention(
+            query, key, value, scale=self.scaling, enable_gqa=True
+        )
     output = output.transpose(1, 2).reshape(batch_size, query_length, -1)
     return self.o_proj(output.contiguous()), None
 

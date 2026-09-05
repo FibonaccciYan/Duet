@@ -7,11 +7,22 @@ from src.sparse.triton_kernels import (
     attention_output_lse,
     block_causal_prefill,
     losa_query_delta,
+    rotary_embedding,
 )
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
 class TritonSparseKernelsTest(unittest.TestCase):
+    def test_rotary_preserves_rounding_and_strides(self):
+        for dtype in (torch.float16, torch.bfloat16):
+            x = torch.randn(1, 7, 4, 128, device="cuda", dtype=dtype).transpose(1, 2)
+            cos = torch.randn(1, 7, 64, device="cuda", dtype=dtype)
+            sin = torch.randn_like(cos)
+            a = x[..., :64]
+            rotated = torch.cat((-a[..., 32:], a[..., :32]), -1)
+            expected = torch.cat((a*cos[:, None] + rotated*sin[:, None], x[..., 64:]), -1)
+            torch.testing.assert_close(rotary_embedding(x, cos, sin), expected, rtol=0, atol=0)
+
     def test_adamas_distances_match_broadcast_reference(self):
         torch.manual_seed(0)
         query = torch.randint(

@@ -10,6 +10,7 @@ from .triton_kernels import (
     attention_output_lse,
     fused_kv_index_copy_,
     losa_query_delta,
+    rotary_embedding,
 )
 
 
@@ -244,6 +245,8 @@ def _rotate_half(x):
 
 
 def _apply_rotary(query, cos, sin):
+    if query.is_cuda:
+        return rotary_embedding(query, cos, sin)
     cos = cos.unsqueeze(1)
     sin = sin.unsqueeze(1)
     rotary_dim = cos.shape[-1]
@@ -345,7 +348,12 @@ def _compact_prefix_cache(
     token_budget,
     chunk_size,
 ):
-    prefix_cache = _prefix_from_dynamic_cache(cache, prefix_length)
+    # Selection only reads the prefix; gather directly from strided views.
+    # Copying the entire history here duplicates KV before discarding most of it.
+    prefix_cache = tuple(
+        (key[:, :, :prefix_length], value[:, :, :prefix_length])
+        for key, value in cache.to_legacy_cache()
+    )
     if not prefix_cache:
         return prefix_cache, ()
     if prefix_length <= token_budget:

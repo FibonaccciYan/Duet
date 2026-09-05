@@ -11,6 +11,39 @@ _MOE_BLOCK_K = 64
 
 
 @triton.jit
+def _rotary_kernel(X, C, S, Y, s0, s1, s2, s3,
+                   c0, c1, c2, t0, t1, t2,
+                   H: tl.constexpr, L, D: tl.constexpr,
+                   R: tl.constexpr, N, BLOCK: tl.constexpr):
+    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    d = i % D
+    pos = i // D % L
+    h = i // (D * L) % H
+    b = i // (D * L * H)
+    x = tl.load(X + b*s0 + h*s1 + pos*s2 + d*s3, i < N, other=0)
+    partner = tl.where(d < R//2, d + R//2, d - R//2)
+    v = tl.load(X + b*s0 + h*s1 + pos*s2 + partner*s3,
+                (i < N) & (d < R), other=0)
+    v = tl.where(d < R//2, -v, v)
+    c = tl.load(C + b*c0 + pos*c1 + d*c2, (i < N) & (d < R), other=0)
+    s = tl.load(S + b*t0 + pos*t1 + d*t2, (i < N) & (d < R), other=0)
+    a = (x.to(tl.float32)*c.to(tl.float32)).to(x.dtype)
+    z = (v.to(tl.float32)*s.to(tl.float32)).to(x.dtype)
+    y = (a.to(tl.float32) + z.to(tl.float32)).to(x.dtype)
+    tl.store(Y + i, tl.where(d < R, y, x), i < N)
+
+
+def rotary_embedding(x, cos, sin):
+    output = torch.empty(x.shape, device=x.device, dtype=x.dtype)
+    _rotary_kernel[(triton.cdiv(x.numel(), 256),)](
+        x, cos, sin, output, *x.stride(), *cos.stride(), *sin.stride(),
+        H=x.shape[1], L=x.shape[2], D=x.shape[3], R=cos.shape[-1],
+        N=x.numel(), BLOCK=256, enable_fp_fusion=False,
+    )
+    return output
+
+
+@triton.jit
 def _adamas_distance_kernel(
     query,
     key,

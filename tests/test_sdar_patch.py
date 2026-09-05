@@ -65,15 +65,15 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         cache = DynamicCache.from_legacy_cache(((prefix, prefix),))
         hidden = torch.zeros(1, 2, 2)
         with mock.patch(
-            "src.sparse.sdar_patch.flash_attn_func",
+            "src.sparse.sdar_patch.F.scaled_dot_product_attention",
             side_effect=lambda q, k, v, **kw: torch.zeros_like(q),
-        ) as flash:
+        ) as sdpa:
             _sdar_attention_forward(
                 attention, hidden, (torch.ones_like(hidden), torch.zeros_like(hidden)),
                 None, past_key_value=cache, store_kv=False,
             )
-        self.assertEqual(flash.call_args.args[1].shape[1], 5)
-        torch.testing.assert_close(flash.call_args.args[1][:, :3], prefix.transpose(1, 2))
+        self.assertEqual(sdpa.call_args.args[1].shape[-2], 5)
+        torch.testing.assert_close(sdpa.call_args.args[1][:, :, :3], prefix)
         self.assertEqual(cache.get_seq_length(), 3)
 
     def test_sequential_selector_reuses_known_decoded_prefix(self):
