@@ -53,6 +53,7 @@ def _select_positions(
     threshold=1.0,
     entropy_budget=None,
     decoded_count=None,
+    block_positions=None,
 ):
     if strategy == "sequential" and decoded_count is not None:
         mask_count = input_ids.shape[1] - decoded_count
@@ -69,10 +70,10 @@ def _select_positions(
             and cached_positions.numel() - decoded_count >= candidate_count
         ):
             return torch.arange(cached_positions.numel(), device=input_ids.device)
-        return torch.arange(
-            decoded_count + candidate_count,
-            device=input_ids.device,
-        )
+        selected_count = decoded_count + candidate_count
+        if block_positions is not None:
+            return block_positions[:selected_count]
+        return torch.arange(selected_count, device=input_ids.device)
 
     mask = input_ids[0] == mask_id
     mask_count = int(mask.sum().item())
@@ -388,10 +389,16 @@ def _sparse_cached_forward(
     full_cache = (
         None if query_sparse else DynamicCache.from_legacy_cache(prefix_cache)
     )
-    all_positions = torch.arange(input_ids.shape[1], device=input_ids.device)
+    all_positions = selection_state.get("block_positions")
+    if all_positions is None:
+        all_positions = torch.arange(input_ids.shape[1], device=input_ids.device)
     selected_positions = None
     full_hidden_base = None
     compressed = False
+    contiguous_selection = (
+        strategy == "sequential"
+        and selection_state.get("sequential_decoded") is not None
+    )
     prefix_lengths = [key.shape[-2] for key, _ in prefix_cache]
     prefix_length = prefix_lengths[0] if prefix_lengths else 0
     attention_masks = {}
@@ -420,7 +427,6 @@ def _sparse_cached_forward(
             "query_positions": None,
         }
         model._sdar_losa_context = losa_context
-
     try:
         for layer_idx, decoder_layer in enumerate(base.layers):
             if (
@@ -442,7 +448,11 @@ def _sparse_cached_forward(
                 layer_hidden = (
                     hidden_states
                     if compressed
-                    else hidden_states.index_select(1, selected_positions)
+                    else (
+                        hidden_states[:, : selected_positions.numel()]
+                        if contiguous_selection
+                        else hidden_states.index_select(1, selected_positions)
+                    )
                 )
                 layer_positions = sparse_position_ids
                 layer_position_embeddings = sparse_position_embeddings
@@ -507,17 +517,26 @@ def _sparse_cached_forward(
                     threshold=threshold,
                     entropy_budget=entropy_budget,
                     decoded_count=selection_state.get("sequential_decoded"),
+                    block_positions=all_positions,
                 )
                 selection_state["positions"] = selected_positions
                 if selected_positions is not None:
                     full_hidden_base = hidden_states.clone()
-                    sparse_position_ids = position_ids.index_select(
-                        1, selected_positions
-                    )
-                    sparse_position_embeddings = (
-                        position_embeddings[0].index_select(1, selected_positions),
-                        position_embeddings[1].index_select(1, selected_positions),
-                    )
+                    if contiguous_selection:
+                        selected_count = selected_positions.numel()
+                        sparse_position_ids = position_ids[:, :selected_count]
+                        sparse_position_embeddings = (
+                            position_embeddings[0][:, :selected_count],
+                            position_embeddings[1][:, :selected_count],
+                        )
+                    else:
+                        sparse_position_ids = position_ids.index_select(
+                            1, selected_positions
+                        )
+                        sparse_position_embeddings = (
+                            position_embeddings[0].index_select(1, selected_positions),
+                            position_embeddings[1].index_select(1, selected_positions),
+                        )
                     sparse_cache.set_positions(selected_positions)
 
         if losa_context is not None:
@@ -543,11 +562,16 @@ def _sparse_cached_forward(
 
     if selected_positions is not None:
         selected_hidden = (
-            hidden_states.index_select(1, selected_positions)
+            hidden_states[:, : selected_positions.numel()]
+            if refresh_late_kv and contiguous_selection
+            else hidden_states.index_select(1, selected_positions)
             if refresh_late_kv
             else hidden_states
         )
-        full_hidden_base[:, selected_positions] = selected_hidden
+        if contiguous_selection:
+            full_hidden_base[:, : selected_positions.numel()] = selected_hidden
+        else:
+            full_hidden_base[:, selected_positions] = selected_hidden
         hidden_states = full_hidden_base
     hidden_states = base.norm(hidden_states)
     if selected_positions is None:
@@ -558,13 +582,10 @@ def _sparse_cached_forward(
         ]
     else:
         if strategy == "sequential" and "sequential_decoded" in selection_state:
-            mask_positions = torch.arange(
-                selection_state["sequential_decoded"],
-                input_ids.shape[1],
-                device=input_ids.device,
-            )
-        else:
-            mask_positions = torch.where(input_ids[0] == mask_id)[0]
+            decoded = selection_state["sequential_decoded"]
+            mask_positions = all_positions[decoded:]
+            return model.lm_head(hidden_states[:, decoded:]), mask_positions
+        mask_positions = torch.where(input_ids[0] == mask_id)[0]
     return model.lm_head(hidden_states.index_select(1, mask_positions)), mask_positions
 
 
@@ -677,6 +698,9 @@ def _block_diffusion_generate(self, *args, **kwargs):
                 ),
                 prefix_cache=prefix_cache,
                 losa_states={},
+                block_positions=torch.arange(
+                    block_tokens.shape[1], device=block_tokens.device
+                ),
             )
             return outputs.logits, None
 

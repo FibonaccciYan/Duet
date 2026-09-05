@@ -88,6 +88,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         self.assertEqual(cache.get_seq_length(), 3)
 
     def test_sequential_selector_reuses_known_decoded_prefix(self):
+        block_positions = torch.arange(6)
         selected = _select_positions(
             types.SimpleNamespace(),
             torch.empty(1, 6, 1),
@@ -97,9 +98,11 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             top_k=0,
             strategy="sequential",
             decoded_count=2,
+            block_positions=block_positions,
         )
 
         self.assertEqual(selected.tolist(), [0, 1, 2, 3])
+        self.assertEqual(selected.data_ptr(), block_positions.data_ptr())
 
     def test_prefix_sparse_accepts_per_layer_compact_lengths(self):
         seen_key_lengths = []
