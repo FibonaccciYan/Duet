@@ -14,6 +14,7 @@ from src.sparse.sparse_ops import (
 from src.sparse.sdar_patch import (
     _sdar_attention_forward,
     _sdar_losa_attention_forward,
+    _project_qkv,
     _select_positions,
     _sparse_cached_forward,
     entropy_from_logits,
@@ -61,6 +62,20 @@ class _FakeSDAR(torch.nn.Module):
 
 
 class SDARBlockDiffusionPatchTest(unittest.TestCase):
+    def test_qkv_capture_keeps_only_prefix_representative_layers(self):
+        model = types.SimpleNamespace(_sdar_captured_queries=[None, None])
+        attention = types.SimpleNamespace(
+            _sdar_qkv_weight=torch.eye(2).repeat(3, 1),
+            q_norm=torch.nn.Identity(), k_norm=torch.nn.Identity(),
+            num_attention_heads=1, num_key_value_heads=1, head_dim=2,
+        )
+        for layer_idx in range(2):
+            attention.layer_idx = layer_idx
+            _project_qkv(attention, torch.ones(1, 2, 2), model)
+
+        self.assertIsNone(model._sdar_captured_queries[0])
+        self.assertIsNotNone(model._sdar_captured_queries[1])
+
     def test_decode_reads_prefix_without_mutating_cache(self):
         model = types.SimpleNamespace(_sdar_decode_attention=True)
         attention = types.SimpleNamespace(

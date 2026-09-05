@@ -139,7 +139,7 @@ def _project_qkv(attention, hidden_states, model):
         batch_size, query_length, attention.num_attention_heads, attention.head_dim
     ))
     captured = getattr(model, "_sdar_captured_queries", None)
-    if captured is not None:
+    if captured is not None and attention.layer_idx % 2:
         captured[attention.layer_idx] = query.transpose(1, 2).contiguous()
     key = attention.k_norm(key.view(
         batch_size, query_length, attention.num_key_value_heads, attention.head_dim

@@ -363,11 +363,13 @@ def _compact_prefix_cache(
         indices = torch.arange(prefix_length, device=prefix_cache[0][0].device)
         return prefix_cache, tuple(indices for _ in prefix_cache)
 
-    cos, sin = model.model.rotary_emb(captured_queries[0], block_position_ids)
+    group_size = 2 if model.config.model_type == "sdar" else 1
+    cos, sin = model.model.rotary_emb(
+        captured_queries[group_size - 1], block_position_ids
+    )
     compact_cache = []
     prefix_indices = []
     thresholds = ADAMAS_BUCKET_THRESHOLDS.get(model.config.model_type)
-    group_size = 2 if model.config.model_type == "sdar" else 1
     for start in range(0, len(prefix_cache), group_size):
         representative = min(start + group_size, len(prefix_cache)) - 1
         query = captured_queries[representative]
