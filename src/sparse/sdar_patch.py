@@ -1050,9 +1050,22 @@ def block_diffusion_generate(
         )
         cur_position_ids = position_ids[:, num_block *
                                         block_length:(num_block+1)*block_length]
+        fixed_sequential_steps = (
+            remasking_strategy == "sequential"
+            and num_block * block_length >= prompt_length
+        )
         for step in range(denoising_steps + 1):
             mask_index = (cur_x == mask_id)
-            if mask_index.sum() == 0:
+            finished = step == denoising_steps
+            if not fixed_sequential_steps:
+                has_masks = bool(mask_index.any())
+                if finished and has_masks:
+                    raise RuntimeError(
+                        f"SDAR block {num_block} still contains masks after "
+                        f"{denoising_steps} steps"
+                    )
+                finished = not has_masks
+            if finished:
                 # Store kv cache
                 model.model(cur_x,
                             attention_mask=cur_attn_mask,
@@ -1061,12 +1074,6 @@ def block_diffusion_generate(
                             use_cache=True,
                             store_kv=True)
                 break
-
-            if step == denoising_steps:
-                raise RuntimeError(
-                    f"SDAR block {num_block} still contains masks after "
-                    f"{denoising_steps} steps"
-                )
 
             # Denosing
             logit_positions = None
