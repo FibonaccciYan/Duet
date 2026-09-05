@@ -68,6 +68,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             q_norm=torch.nn.Identity(), k_norm=torch.nn.Identity(),
             q_proj=torch.nn.Identity(), k_proj=torch.nn.Identity(),
             v_proj=torch.nn.Identity(), o_proj=torch.nn.Identity(),
+            _sdar_qkv_weight=torch.eye(2).repeat(3, 1),
             num_attention_heads=1, num_key_value_heads=1,
             head_dim=2, layer_idx=0, scaling=2**-0.5,
         )
@@ -174,6 +175,10 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
 
     def test_losa_patch_does_not_register_parent_as_attention_child(self):
         class Attention(torch.nn.Module):
+            q_proj = types.SimpleNamespace(weight=torch.ones(1, 1))
+            k_proj = types.SimpleNamespace(weight=torch.ones(1, 1))
+            v_proj = types.SimpleNamespace(weight=torch.ones(1, 1))
+
             def forward(self, *args, **kwargs):
                 return None
 
@@ -221,6 +226,9 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
                     self.o_proj,
                 ):
                     projection.weight.data.copy_(torch.eye(2))
+                self._sdar_qkv_weight = torch.cat(
+                    (self.q_proj.weight, self.k_proj.weight, self.v_proj.weight)
+                )
 
             def dense(
                 self,

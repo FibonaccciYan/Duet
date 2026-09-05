@@ -123,21 +123,30 @@ def _select_positions(
 def _capture_sdar_block_queries(model):
     """Capture unrotated, normalized queries from SDAR's dense first step."""
     captured = [None] * len(model.model.layers)
-    handles = []
-    for layer_idx, layer in enumerate(model.model.layers):
-        attention = layer.self_attn
+    model._sdar_captured_queries = captured
+    return captured
 
-        def capture(_module, _inputs, output, idx=layer_idx, attn=attention):
-            query = output.view(
-                output.shape[0],
-                output.shape[1],
-                attn.num_attention_heads,
-                attn.head_dim,
-            )
-            captured[idx] = attn.q_norm(query).transpose(1, 2).contiguous()
 
-        handles.append(attention.q_proj.register_forward_hook(capture))
-    return captured, handles
+def _project_qkv(attention, hidden_states, model):
+    batch_size, query_length, _ = hidden_states.shape
+    query_size = attention.num_attention_heads * attention.head_dim
+    kv_size = attention.num_key_value_heads * attention.head_dim
+    query, key, value = F.linear(
+        hidden_states, attention._sdar_qkv_weight
+    ).split((query_size, kv_size, kv_size), dim=-1)
+    query = attention.q_norm(query.view(
+        batch_size, query_length, attention.num_attention_heads, attention.head_dim
+    ))
+    captured = getattr(model, "_sdar_captured_queries", None)
+    if captured is not None:
+        captured[attention.layer_idx] = query.transpose(1, 2).contiguous()
+    key = attention.k_norm(key.view(
+        batch_size, query_length, attention.num_key_value_heads, attention.head_dim
+    ))
+    value = value.view(
+        batch_size, query_length, attention.num_key_value_heads, attention.head_dim
+    )
+    return query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
 
 
 def _sdar_attention_forward(
@@ -162,19 +171,7 @@ def _sdar_attention_forward(
         )
 
     batch_size, query_length, _ = hidden_states.shape
-    query = self.q_norm(
-        self.q_proj(hidden_states).view(
-            batch_size, query_length, self.num_attention_heads, self.head_dim
-        )
-    ).transpose(1, 2)
-    key = self.k_norm(
-        self.k_proj(hidden_states).view(
-            batch_size, query_length, self.num_key_value_heads, self.head_dim
-        )
-    ).transpose(1, 2)
-    value = self.v_proj(hidden_states).view(
-        batch_size, query_length, self.num_key_value_heads, self.head_dim
-    ).transpose(1, 2)
+    query, key, value = _project_qkv(self, hidden_states, model)
     cos, sin = position_embeddings
     query = _apply_rotary(query, cos, sin)
     key = _apply_rotary(key, cos, sin)
@@ -216,19 +213,7 @@ def _sdar_losa_attention_forward(
         )
 
     batch_size, query_length, _ = hidden_states.shape
-    query = self.q_norm(
-        self.q_proj(hidden_states).view(
-            batch_size, query_length, self.num_attention_heads, self.head_dim
-        )
-    ).transpose(1, 2)
-    key = self.k_norm(
-        self.k_proj(hidden_states).view(
-            batch_size, query_length, self.num_key_value_heads, self.head_dim
-        )
-    ).transpose(1, 2)
-    value = self.v_proj(hidden_states).view(
-        batch_size, query_length, self.num_key_value_heads, self.head_dim
-    ).transpose(1, 2)
+    query, key, value = _project_qkv(self, hidden_states, model)
     cos, sin = position_embeddings
     query = _apply_rotary(query, cos, sin)
     key = _apply_rotary(key, cos, sin)
@@ -646,9 +631,9 @@ def _block_diffusion_generate(self, *args, **kwargs):
             dense_cache = DynamicCache.from_legacy_cache(
                 past_key_values.to_legacy_cache()
             )
-            captured_queries = handles = None
+            captured_queries = None
             if prefix_sparse and block_start:
-                captured_queries, handles = _capture_sdar_block_queries(model)
+                captured_queries = _capture_sdar_block_queries(model)
             try:
                 outputs = model(
                     block_tokens,
@@ -659,9 +644,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
                     store_kv=True,
                 )
             finally:
-                if handles is not None:
-                    for handle in handles:
-                        handle.remove()
+                model._sdar_captured_queries = None
             if prefix_sparse and block_start:
                 prefix_cache, previous_prefix_indices = _compact_prefix_cache(
                     model,
@@ -822,6 +805,22 @@ def patch_sdar_model(
         if not hasattr(attention, "_sdar_prefill_dense_forward"):
             attention._sdar_prefill_dense_forward = attention.forward
             attention._sdar_prefill_model_ref = weakref.ref(model)
+            attention._sdar_qkv_weight = torch.cat(
+                (attention.q_proj.weight, attention.k_proj.weight, attention.v_proj.weight)
+            ).detach()
+            query_size = attention.q_proj.weight.shape[0]
+            key_size = attention.k_proj.weight.shape[0]
+            attention.q_proj.weight = torch.nn.Parameter(
+                attention._sdar_qkv_weight[:query_size], requires_grad=False
+            )
+            attention.k_proj.weight = torch.nn.Parameter(
+                attention._sdar_qkv_weight[query_size:query_size + key_size],
+                requires_grad=False,
+            )
+            attention.v_proj.weight = torch.nn.Parameter(
+                attention._sdar_qkv_weight[query_size + key_size:],
+                requires_grad=False,
+            )
             attention.forward = types.MethodType(
                 _sdar_attention_forward, attention
             )
