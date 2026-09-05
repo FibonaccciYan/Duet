@@ -209,7 +209,9 @@ def _sdar_attention_forward(
         value = torch.cat((prefix_value, value), dim=2)
 
     if prefill:
-        output = block_causal_prefill(query, key, value)
+        output = block_causal_prefill(
+            query, key, value, getattr(model, "_sdar_block_length", 32)
+        )
     else:
         output = F.scaled_dot_product_attention(
             query, key, value, scale=self.scaling, enable_gqa=True
@@ -763,6 +765,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
         return logits, logit_positions
 
     self._sdar_decode_attention = True
+    self._sdar_block_length = block_length
     try:
         tokens = block_diffusion_generate(
             self,

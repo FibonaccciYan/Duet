@@ -359,6 +359,7 @@ def _block_causal_prefill_kernel(
     query_heads: tl.constexpr,
     key_heads: tl.constexpr,
     head_dim: tl.constexpr,
+    block_length: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_D: tl.constexpr,
@@ -385,7 +386,11 @@ def _block_causal_prefill_kernel(
     running_max = tl.full((BLOCK_M,), -float("inf"), tl.float32)
     running_sum = tl.zeros((BLOCK_M,), tl.float32)
     accumulator = tl.zeros((BLOCK_M, BLOCK_D), dtype=tl.float32)
-    visible_length = prefix_length - query_length + (query_block + 1) * BLOCK_M
+    visible_length = (
+        prefix_length
+        - query_length
+        + (offsets_m // block_length + 1) * block_length
+    )
 
     for start_n in range(0, prefix_length, BLOCK_N):
         offsets_n = start_n + tl.arange(0, BLOCK_N)
@@ -404,7 +409,7 @@ def _block_causal_prefill_kernel(
         valid = (
             (offsets_m[:, None] < query_length)
             & valid_n[None, :]
-            & (offsets_n[None, :] < visible_length)
+            & (offsets_n[None, :] < visible_length[:, None])
         )
         scores = tl.where(valid, scores, -float("inf"))
 
@@ -604,11 +609,11 @@ def block_causal_prefill(query, key, value, block_length=32):
     batch, query_heads, query_length, head_dim = query.shape
     key_heads, prefix_length = key.shape[1:3]
     if (
-        block_length != 32
+        block_length <= 0
         or query_length % block_length
         or (prefix_length - query_length) % block_length
     ):
-        raise ValueError("prefill attention requires aligned 32-token blocks")
+        raise ValueError("prefill attention requires aligned blocks")
     output = torch.empty_like(query)
     block_m = 32
     _block_causal_prefill_kernel[
@@ -628,6 +633,7 @@ def block_causal_prefill(query, key, value, block_length=32):
         query_heads=query_heads,
         key_heads=key_heads,
         head_dim=head_dim,
+        block_length=block_length,
         BLOCK_M=block_m,
         BLOCK_N=64,
         BLOCK_D=triton.next_power_of_2(head_dim),

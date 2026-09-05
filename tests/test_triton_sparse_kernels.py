@@ -127,14 +127,15 @@ class TritonSparseKernelsTest(unittest.TestCase):
         query = torch.randn(1, 8, 64, 128, device="cuda", dtype=torch.float16)
         key = torch.randn(1, 2, 128, 128, device="cuda", dtype=torch.float16)
         value = torch.randn_like(key)
-        query_blocks = torch.arange(64, 128, device="cuda") // 32
-        key_blocks = torch.arange(128, device="cuda") // 32
-        mask = (key_blocks[None, :] <= query_blocks[:, None])[None, None]
+        for block_length in (4, 32):
+            query_blocks = torch.arange(64, 128, device="cuda") // block_length
+            key_blocks = torch.arange(128, device="cuda") // block_length
+            mask = (key_blocks[None, :] <= query_blocks[:, None])[None, None]
 
-        expected, _ = attention_output_lse(query, key, value, mask)
-        actual = block_causal_prefill(query, key, value)
+            expected, _ = attention_output_lse(query, key, value, mask)
+            actual = block_causal_prefill(query, key, value, block_length)
 
-        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     def test_bfloat16_attention_matches_reference(self):
         query = torch.randn(1, 4, 3, 128, device="cuda", dtype=torch.bfloat16)
