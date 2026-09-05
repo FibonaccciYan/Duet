@@ -195,18 +195,24 @@ Latest SDAR prefill/Adamas optimization (GPU 2/3, generation length 64):
 | Dense, Triton prefill | 3.77s | 5.70s | 8.79s |
 | Query+Prefix-256, Adamas chunk 1024 | — | — | 7.93s |
 
-The SDAR Query+Prefix-256 configuration scored 129/164 official and 131/164
-indentation-normalized on HumanEval. The original SDAR dense prefill baseline
-at 32K was 35.76s; the current dense Triton path is approximately 4.1x faster.
+The original SDAR dense prefill baseline at 32K was 35.76s; the current dense
+Triton path is approximately 4.1x faster.
 
 For end-to-end generation, the benchmark uses a fixed output length
 (`eos_early_stop=False`) so sparse and dense runs perform the same amount of
-work. Representative SDAR 32K runs on GPU 3 are:
+work. Paired SDAR-b32 medians from three alternating runs on GPU 4 are:
 
-| Configuration | gen=256 | gen=768 |
-| --- | ---: | ---: |
-| Dense | 19.04s | 46.75s |
-| Query+Prefix-256 (Adamas chunk 1024) | 15.57s (1.22x) | 36.37s (1.29x) |
+| Generation/configuration | 8K | 16K | 32K |
+| --- | ---: | ---: | ---: |
+| gen=256 dense | 8.32s | 9.25s | 13.71s |
+| gen=256 Query+Prefix-256 | 6.04s (1.38x) | 6.96s (1.33x) | 10.19s (1.35x) |
+| gen=768 dense | 23.38s | 24.33s | 31.78s |
+| gen=768 Query+Prefix-256 | 16.55s (1.41x) | 17.46s (1.39x) | 20.92s (1.52x) |
+
+The corresponding full HumanEval result is 127/164 official and 129/164
+indentation-normalized. SDAR-b4 Query+Prefix-256 at gen=256 reaches 0.92x,
+1.05x, and 1.17x at 8K, 16K, and 32K respectively, so b32 remains the primary
+optimization target.
 
 These timings include the complete prefill/decode path; checksums and actual
 generated-token counts are emitted by `scripts/bench_long_context.py`.
