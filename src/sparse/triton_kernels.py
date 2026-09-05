@@ -743,6 +743,48 @@ def fused_kv_index_copy_(
 
 
 @triton.jit
+def _rms_norm_kernel(
+    x,
+    weight,
+    output,
+    width: tl.constexpr,
+    eps: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row = tl.program_id(0)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < width
+    values = tl.load(
+        x + row * width + offsets, mask=mask, other=0.0
+    ).to(tl.float32)
+    variance = tl.sum(
+        tl.where(mask, values * values, 0.0), axis=0
+    ) / width
+    weights = tl.load(weight + offsets, mask=mask, other=0.0).to(tl.float32)
+    tl.store(
+        output + row * width + offsets,
+        values * tl.rsqrt(variance + eps) * weights,
+        mask=mask,
+    )
+
+
+def rms_norm(hidden_states, weight, eps):
+    hidden_states = hidden_states.contiguous()
+    width = hidden_states.shape[-1]
+    output = torch.empty_like(hidden_states)
+    _rms_norm_kernel[(hidden_states.numel() // width,)](
+        hidden_states,
+        weight,
+        output,
+        width=width,
+        eps=eps,
+        BLOCK_SIZE=triton.next_power_of_2(width),
+        num_warps=8 if width >= 2048 else 4,
+    )
+    return output
+
+
+@triton.jit
 def _fused_swiglu_kernel(
     x,
     gate_weight,

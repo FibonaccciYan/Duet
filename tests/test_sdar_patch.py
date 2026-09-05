@@ -14,6 +14,7 @@ from src.sparse.sparse_ops import (
 from src.sparse.sdar_patch import (
     _sdar_attention_forward,
     _sdar_losa_attention_forward,
+    _sdar_rms_norm_forward,
     _project_qkv,
     _select_positions,
     _sparse_cached_forward,
@@ -62,6 +63,23 @@ class _FakeSDAR(torch.nn.Module):
 
 
 class SDARBlockDiffusionPatchTest(unittest.TestCase):
+    @mock.patch("src.sparse.sdar_patch.rms_norm", side_effect=lambda x, *_: x + 1)
+    def test_short_query_uses_triton_rms_norm(self, triton_norm):
+        model = types.SimpleNamespace(_sdar_decode_attention=True)
+        norm = types.SimpleNamespace(
+            _sdar_model_ref=lambda: model,
+            _sdar_dense_forward=lambda x: x + 2,
+            weight=torch.ones(4),
+            variance_epsilon=1e-6,
+        )
+
+        short = _sdar_rms_norm_forward(norm, torch.zeros(1, 31, 4))
+        full = _sdar_rms_norm_forward(norm, torch.zeros(1, 32, 4))
+
+        self.assertTrue(torch.equal(short, torch.ones_like(short)))
+        self.assertTrue(torch.equal(full, torch.full_like(full, 2)))
+        triton_norm.assert_called_once()
+
     def test_qkv_capture_keeps_only_prefix_representative_layers(self):
         model = types.SimpleNamespace(_sdar_captured_queries=[None, None])
         attention = types.SimpleNamespace(

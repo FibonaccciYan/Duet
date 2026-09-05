@@ -9,12 +9,26 @@ from src.sparse.triton_kernels import (
     block_causal_prefill,
     fused_swiglu,
     losa_query_delta,
+    rms_norm,
     rotary_embedding,
 )
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
 class TritonSparseKernelsTest(unittest.TestCase):
+    def test_rms_norm_matches_reference(self):
+        torch.manual_seed(5)
+        hidden = torch.randn(
+            1, 7, 4096, device="cuda", dtype=torch.float16
+        )
+        weight = torch.randn(4096, device="cuda", dtype=torch.float16)
+        actual = rms_norm(hidden, weight, 1e-6)
+        expected = torch.nn.functional.rms_norm(
+            hidden, (hidden.shape[-1],), weight, 1e-6
+        )
+
+        torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-3)
+
     def test_fused_swiglu_matches_linear_reference(self):
         torch.manual_seed(4)
         hidden = torch.randn(1, 7, 64, device="cuda", dtype=torch.float16) * 0.1

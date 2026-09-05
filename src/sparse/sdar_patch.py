@@ -28,7 +28,7 @@ from .sparse_ops import (
     _queue_losa_active_update,
     _prefix_from_dynamic_cache,
 )
-from .triton_kernels import block_causal_prefill, fused_swiglu
+from .triton_kernels import block_causal_prefill, fused_swiglu, rms_norm
 # Zero-based decoder layer after which Query Sparse chooses mask candidates.
 # Layer 4 is too early for SDAR-b32: its candidate ranking diverges sharply
 # from the final-layer transfer positions.
@@ -160,6 +160,18 @@ def _sdar_mlp_forward(self, hidden_states):
                 self.up_proj.weight,
             )
         )
+    return self._sdar_dense_forward(hidden_states)
+
+
+def _sdar_rms_norm_forward(self, hidden_states):
+    model = self._sdar_model_ref()
+    query_length = (
+        hidden_states.shape[1]
+        if hidden_states.ndim == 4
+        else hidden_states.shape[-2]
+    )
+    if getattr(model, "_sdar_decode_attention", False) and query_length < 32:
+        return rms_norm(hidden_states, self.weight, self.variance_epsilon)
     return self._sdar_dense_forward(hidden_states)
 
 
@@ -866,6 +878,18 @@ def patch_sdar_model(
             mlp._sdar_dense_forward = mlp.forward
             mlp._sdar_model_ref = weakref.ref(model)
             mlp.forward = types.MethodType(_sdar_mlp_forward, mlp)
+        for norm in (
+            getattr(layer, "input_layernorm", None),
+            getattr(layer, "post_attention_layernorm", None),
+            getattr(attention, "q_norm", None),
+            getattr(attention, "k_norm", None),
+        ):
+            if norm is not None and hasattr(norm, "weight") and not hasattr(
+                norm, "_sdar_dense_forward"
+            ):
+                norm._sdar_dense_forward = norm.forward
+                norm._sdar_model_ref = weakref.ref(model)
+                norm.forward = types.MethodType(_sdar_rms_norm_forward, norm)
     if losa:
         for layer in model.model.layers:
             attention = layer.self_attn
