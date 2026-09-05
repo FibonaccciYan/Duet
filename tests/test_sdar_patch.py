@@ -23,16 +23,26 @@ from src.sparse.sdar_patch import (
 )
 
 
+class _FakeBackbone:
+    def __init__(self, owner):
+        self.owner = owner
+        self.layers = torch.nn.ModuleList()
+
+    def __call__(self, *args, **kwargs):
+        self.owner.backbone_calls += 1
+        return self.owner(*args, **kwargs)
+
+
 class _FakeSDAR(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.anchor = torch.nn.Parameter(torch.zeros(1))
         self.config = types.SimpleNamespace(model_type="sdar")
         self.generation_config = types.SimpleNamespace(eos_token_id=[14, 15])
-        self.model = torch.nn.Module()
-        self.model.layers = torch.nn.ModuleList()
+        self.model = _FakeBackbone(self)
         self.generate = lambda *args, **kwargs: None
         self.store_calls = 0
+        self.backbone_calls = 0
 
     @property
     def device(self):
@@ -597,6 +607,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
 
         self.assertEqual(output.tolist(), [[2, 2, 2, 2]])
         self.assertEqual(model.store_calls, 2)
+        self.assertEqual(model.backbone_calls, 2)
         self.assertEqual(model.assert_attention_shape, (4, 8))
 
     def test_query_sparse_uses_dense_first_step(self):

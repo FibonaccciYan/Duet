@@ -1026,12 +1026,12 @@ def block_diffusion_generate(
                 chunk_end = min(chunk_start + prefill_chunk_length, prefill_length)
                 cur_x = x[:, chunk_start:chunk_end]
                 cur_position_ids = position_ids[:, chunk_start:chunk_end]
-                model(cur_x,
-                      attention_mask=None,
-                      position_ids=cur_position_ids,
-                      past_key_values=past_key_values,
-                      use_cache=True,
-                      store_kv=True)
+                model.model(cur_x,
+                            attention_mask=None,
+                            position_ids=cur_position_ids,
+                            past_key_values=past_key_values,
+                            use_cache=True,
+                            store_kv=True)
         finally:
             model._sdar_triton_prefill = False
 
@@ -1054,12 +1054,12 @@ def block_diffusion_generate(
             mask_index = (cur_x == mask_id)
             if mask_index.sum() == 0:
                 # Store kv cache
-                model(cur_x,
-                      attention_mask=cur_attn_mask,
-                      position_ids=cur_position_ids,
-                      past_key_values=past_key_values,
-                      use_cache=True,
-                      store_kv=True)
+                model.model(cur_x,
+                            attention_mask=cur_attn_mask,
+                            position_ids=cur_position_ids,
+                            past_key_values=past_key_values,
+                            use_cache=True,
+                            store_kv=True)
                 break
 
             if step == denoising_steps:

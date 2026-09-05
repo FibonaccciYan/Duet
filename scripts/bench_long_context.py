@@ -52,6 +52,8 @@ def parse_args():
     )
     parser.add_argument("--contexts", type=int, nargs="+", default=(8192, 16384, 32768))
     parser.add_argument("--gen-length", type=int, default=64)
+    parser.add_argument("--block-length", type=int, default=32)
+    parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--losa-active-topk", type=int, default=5)
     parser.add_argument(
         "--losa-score-mode",
@@ -171,8 +173,8 @@ def generation_kwargs(args, tokenizer, input_ids):
         # makes different sparse selectors execute different numbers of blocks.
         "eos_early_stop": False,
         "gen_length": args.gen_length,
-        "block_length": 32,
-        "steps": 32,
+        "block_length": args.block_length,
+        "steps": args.steps or args.block_length,
         "threshold": 1.0 if is_sdar else 0.5,
         "temperature": 0.0,
         "top_p": None,
@@ -252,6 +254,8 @@ def main():
         "mode": args.mode,
         "dtype": "float16" if args.model == "sdar" else "bfloat16",
         "gen_length": args.gen_length,
+        "block_length": args.block_length,
+        "steps": args.steps or args.block_length,
         "losa_active_topk": args.losa_active_topk,
         "losa_score_mode": args.losa_score_mode,
         "losa_key_samples": args.losa_key_samples,
