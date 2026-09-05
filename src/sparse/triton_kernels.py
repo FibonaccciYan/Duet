@@ -11,6 +11,53 @@ _MOE_BLOCK_K = 64
 
 
 @triton.jit
+def _moe_route_kernel(
+    expert_ids,
+    counts,
+    offsets,
+    order,
+    total_rows: tl.constexpr,
+    num_experts: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    row = tl.arange(0, BLOCK)
+    tl.store(counts + row, 0, mask=row < num_experts)
+    tl.debug_barrier()
+
+    valid = row < total_rows
+    expert = tl.load(expert_ids + row, mask=valid, other=0).to(tl.int32)
+    rank = tl.atomic_add(counts + expert, 1, mask=valid)
+    tl.debug_barrier()
+
+    destination = rank
+    prefix = tl.zeros((BLOCK,), dtype=tl.int32)
+    for expert_idx in range(num_experts):
+        count = tl.load(counts + expert_idx)
+        destination += tl.where(expert_idx < expert, count, 0)
+        prefix += tl.where(expert_idx < row, count, 0)
+    tl.store(order + destination, row, mask=valid)
+    tl.store(offsets + row, prefix, mask=row <= num_experts)
+
+
+def _route_moe(expert_ids, num_experts):
+    total_rows = expert_ids.numel()
+    counts = torch.empty(num_experts, dtype=torch.int32, device=expert_ids.device)
+    offsets = torch.empty(num_experts + 1, dtype=torch.int32, device=expert_ids.device)
+    order = torch.empty(total_rows, dtype=torch.long, device=expert_ids.device)
+    _moe_route_kernel[(1,)](
+        expert_ids,
+        counts,
+        offsets,
+        order,
+        total_rows=total_rows,
+        num_experts=num_experts,
+        BLOCK=triton.next_power_of_2(max(total_rows, num_experts + 1)),
+        num_warps=4,
+    )
+    return counts, offsets, order
+
+
+@triton.jit
 def _rotary_kernel(X, C, S, Y, s0, s1, s2, s3,
                    c0, c1, c2, t0, t1, t2,
                    H: tl.constexpr, L, D: tl.constexpr,
@@ -842,9 +889,12 @@ def _triton_moe_infer(self, x, topk_ids, topk_weight):
     down_weight = self._llada_moe_down_weight
     num_experts, intermediate_size, hidden_size = gate_weight.shape
     flat_ids = topk_ids.reshape(-1)
-    counts = torch.bincount(flat_ids, minlength=num_experts)
-    offsets = torch.cat((counts.new_zeros(1), counts.cumsum(0)))
-    order = torch.argsort(flat_ids)
+    if flat_ids.numel() <= 256:
+        counts, offsets, order = _route_moe(flat_ids, num_experts)
+    else:
+        counts = torch.bincount(flat_ids, minlength=num_experts)
+        offsets = torch.cat((counts.new_zeros(1), counts.cumsum(0)))
+        order = torch.argsort(flat_ids)
     sorted_tokens = x.index_select(0, order // top_k).contiguous()
     total_rows = sorted_tokens.shape[0]
     active_experts = torch.nonzero(counts, as_tuple=False).flatten()

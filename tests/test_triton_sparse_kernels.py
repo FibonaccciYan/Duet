@@ -3,6 +3,7 @@ import unittest
 import torch
 
 from src.sparse.triton_kernels import (
+    _route_moe,
     adamas_distances,
     attention_output_lse,
     block_causal_prefill,
@@ -13,6 +14,14 @@ from src.sparse.triton_kernels import (
 
 @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
 class TritonSparseKernelsTest(unittest.TestCase):
+    def test_moe_route_matches_expert_groups(self):
+        expert_ids = torch.tensor([2, 0, 1, 2, 1, 1], device="cuda")
+        counts, offsets, order = _route_moe(expert_ids, 4)
+
+        self.assertEqual(counts.tolist(), [1, 3, 2, 0])
+        self.assertEqual(offsets.tolist(), [0, 1, 4, 6, 6])
+        self.assertEqual(expert_ids.index_select(0, order).tolist(), [0, 1, 1, 1, 2, 2])
+
     def test_rotary_preserves_rounding_and_strides(self):
         for dtype in (torch.float16, torch.bfloat16):
             x = torch.randn(1, 7, 4, 128, device="cuda", dtype=dtype).transpose(1, 2)
