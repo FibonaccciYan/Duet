@@ -180,6 +180,10 @@ def _sdar_attention_forward(
     key = _apply_rotary(key, cos, sin)
     if past_key_value is not None and kwargs.get("store_kv", False):
         key, value = past_key_value.update(key, value, self.layer_idx)
+    elif past_key_value is not None and len(past_key_value) > self.layer_idx:
+        prefix_key, prefix_value = past_key_value[self.layer_idx]
+        key = torch.cat((prefix_key, key), dim=2)
+        value = torch.cat((prefix_value, value), dim=2)
 
     if prefill:
         output = block_causal_prefill(query, key, value)
@@ -675,7 +679,10 @@ def _block_diffusion_generate(self, *args, **kwargs):
             selection_state.update(
                 positions=None,
                 step=step,
-                sequential_decoded=(minimum if strategy == "sequential" else None),
+                sequential_decoded=(
+                    min(block_tokens.shape[1], max(0, prompt_length - block_start) + minimum)
+                    if strategy == "sequential" else None
+                ),
                 sparse_cache=(
                     _dual_cache_from_dense(
                         dense_cache, prefix_cache, block_start, block_end

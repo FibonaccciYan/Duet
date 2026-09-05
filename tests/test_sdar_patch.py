@@ -12,6 +12,7 @@ from src.sparse.sparse_ops import (
     _new_losa_state,
 )
 from src.sparse.sdar_patch import (
+    _sdar_attention_forward,
     _sdar_losa_attention_forward,
     _select_positions,
     _sparse_cached_forward,
@@ -50,6 +51,31 @@ class _FakeSDAR(torch.nn.Module):
 
 
 class SDARBlockDiffusionPatchTest(unittest.TestCase):
+    def test_decode_reads_prefix_without_mutating_cache(self):
+        model = types.SimpleNamespace(_sdar_decode_attention=True)
+        attention = types.SimpleNamespace(
+            _sdar_prefill_model_ref=lambda: model,
+            q_norm=torch.nn.Identity(), k_norm=torch.nn.Identity(),
+            q_proj=torch.nn.Identity(), k_proj=torch.nn.Identity(),
+            v_proj=torch.nn.Identity(), o_proj=torch.nn.Identity(),
+            num_attention_heads=1, num_key_value_heads=1,
+            head_dim=2, layer_idx=0, scaling=2**-0.5,
+        )
+        prefix = torch.ones(1, 1, 3, 2)
+        cache = DynamicCache.from_legacy_cache(((prefix, prefix),))
+        hidden = torch.zeros(1, 2, 2)
+        with mock.patch(
+            "src.sparse.sdar_patch.flash_attn_func",
+            side_effect=lambda q, k, v, **kw: torch.zeros_like(q),
+        ) as flash:
+            _sdar_attention_forward(
+                attention, hidden, (torch.ones_like(hidden), torch.zeros_like(hidden)),
+                None, past_key_value=cache, store_kv=False,
+            )
+        self.assertEqual(flash.call_args.args[1].shape[1], 5)
+        torch.testing.assert_close(flash.call_args.args[1][:, :3], prefix.transpose(1, 2))
+        self.assertEqual(cache.get_seq_length(), 3)
+
     def test_sequential_selector_reuses_known_decoded_prefix(self):
         selected = _select_positions(
             types.SimpleNamespace(),
