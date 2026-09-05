@@ -7,6 +7,7 @@ from src.sparse.triton_kernels import (
     adamas_distances,
     attention_output_lse,
     block_causal_prefill,
+    fused_swiglu,
     losa_query_delta,
     rotary_embedding,
 )
@@ -14,6 +15,18 @@ from src.sparse.triton_kernels import (
 
 @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
 class TritonSparseKernelsTest(unittest.TestCase):
+    def test_fused_swiglu_matches_linear_reference(self):
+        torch.manual_seed(4)
+        hidden = torch.randn(1, 7, 64, device="cuda", dtype=torch.float16) * 0.1
+        gate = torch.randn(128, 64, device="cuda", dtype=torch.float16) * 0.1
+        up = torch.randn_like(gate) * 0.1
+        actual = fused_swiglu(hidden, gate, up)
+        expected = torch.nn.functional.silu(
+            torch.nn.functional.linear(hidden, gate)
+        ) * torch.nn.functional.linear(hidden, up)
+
+        torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-3)
+
     def test_moe_route_matches_expert_groups(self):
         expert_ids = torch.tensor([2, 0, 1, 2, 1, 1], device="cuda")
         counts, offsets, order = _route_moe(expert_ids, 4)

@@ -204,6 +204,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         model.model = torch.nn.Module()
         layer = torch.nn.Module()
         layer.self_attn = Attention()
+        layer.mlp = torch.nn.Identity()
         model.model.layers = torch.nn.ModuleList([layer])
 
         patch_model(model, query_sparse=False, losa=True)

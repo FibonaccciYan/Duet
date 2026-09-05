@@ -740,6 +740,87 @@ def fused_kv_index_copy_(
         total,
         BLOCK_SIZE=256,
     )
+
+
+@triton.jit
+def _fused_swiglu_kernel(
+    x,
+    gate_weight,
+    up_weight,
+    output,
+    rows: tl.constexpr,
+    hidden_size: tl.constexpr,
+    intermediate_size: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    offsets_m = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    offsets_n = tl.program_id(1) * BLOCK_N + tl.arange(0, BLOCK_N)
+    offsets_k = tl.arange(0, BLOCK_K)
+    gate = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    up = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for start_k in range(0, hidden_size, BLOCK_K):
+        hidden = tl.load(
+            x + offsets_m[:, None] * hidden_size + start_k + offsets_k[None, :],
+            mask=offsets_m[:, None] < rows,
+            other=0.0,
+        )
+        weight_mask = offsets_n[None, :] < intermediate_size
+        gate_values = tl.load(
+            gate_weight
+            + offsets_n[None, :] * hidden_size
+            + start_k
+            + offsets_k[:, None],
+            mask=weight_mask,
+            other=0.0,
+        )
+        up_values = tl.load(
+            up_weight
+            + offsets_n[None, :] * hidden_size
+            + start_k
+            + offsets_k[:, None],
+            mask=weight_mask,
+            other=0.0,
+        )
+        gate += tl.dot(hidden, gate_values)
+        up += tl.dot(hidden, up_values)
+    gate = gate.to(tl.float16)
+    up = up.to(tl.float16)
+    activated = gate * tl.sigmoid(gate.to(tl.float32)) * up
+    tl.store(
+        output + offsets_m[:, None] * intermediate_size + offsets_n[None, :],
+        activated,
+        mask=(offsets_m[:, None] < rows)
+        & (offsets_n[None, :] < intermediate_size),
+    )
+
+
+def fused_swiglu(hidden_states, gate_weight, up_weight):
+    hidden_size = hidden_states.shape[-1]
+    intermediate_size = gate_weight.shape[0]
+    rows = hidden_states.numel() // hidden_size
+    output = torch.empty(
+        (*hidden_states.shape[:-1], intermediate_size),
+        dtype=hidden_states.dtype,
+        device=hidden_states.device,
+    )
+    _fused_swiglu_kernel[(1, triton.cdiv(intermediate_size, 64))](
+        hidden_states,
+        gate_weight,
+        up_weight,
+        output,
+        rows=rows,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        BLOCK_M=32,
+        BLOCK_N=64,
+        BLOCK_K=64,
+        num_warps=4,
+    )
+    return output
+
+
 @triton.jit
 def _moe_gate_up_kernel(
     x_ptr,

@@ -28,7 +28,7 @@ from .sparse_ops import (
     _queue_losa_active_update,
     _prefix_from_dynamic_cache,
 )
-from .triton_kernels import block_causal_prefill
+from .triton_kernels import block_causal_prefill, fused_swiglu
 # Zero-based decoder layer after which Query Sparse chooses mask candidates.
 # Layer 4 is too early for SDAR-b32: its candidate ranking diverges sharply
 # from the final-layer transfer positions.
@@ -148,6 +148,19 @@ def _project_qkv(attention, hidden_states, model):
         batch_size, query_length, attention.num_key_value_heads, attention.head_dim
     )
     return query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
+
+
+def _sdar_mlp_forward(self, hidden_states):
+    model = self._sdar_model_ref()
+    if getattr(model, "_sdar_decode_attention", False) and hidden_states.shape[-2] < 32:
+        return self.down_proj(
+            fused_swiglu(
+                hidden_states,
+                self.gate_proj.weight,
+                self.up_proj.weight,
+            )
+        )
+    return self._sdar_dense_forward(hidden_states)
 
 
 def _sdar_attention_forward(
@@ -848,6 +861,11 @@ def patch_sdar_model(
             attention.forward = types.MethodType(
                 _sdar_attention_forward, attention
             )
+        mlp = layer.mlp
+        if not hasattr(mlp, "_sdar_dense_forward"):
+            mlp._sdar_dense_forward = mlp.forward
+            mlp._sdar_model_ref = weakref.ref(model)
+            mlp.forward = types.MethodType(_sdar_mlp_forward, mlp)
     if losa:
         for layer in model.model.layers:
             attention = layer.self_attn
