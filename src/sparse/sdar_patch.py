@@ -583,7 +583,7 @@ def _sparse_cached_forward(
     return model.lm_head(hidden_states.index_select(1, mask_positions)), mask_positions
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def _block_diffusion_generate(self, *args, **kwargs):
     inputs = kwargs.pop("inputs", args[0] if args else None)
     if inputs is None:
@@ -627,6 +627,8 @@ def _block_diffusion_generate(self, *args, **kwargs):
     refresh_step = self.config.sdar_sparse_dlm_refresh_step
     deep_only_transfer = self.config.sdar_sparse_dlm_deep_only_transfer
     selection_state = {}
+    previous_prefix_indices = None
+    previous_prefix_length = 0
 
     def sparse_denoise(
         model,
@@ -639,6 +641,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
         step,
         minimum,
     ):
+        nonlocal previous_prefix_indices, previous_prefix_length
         if step == 0:
             dense_cache = DynamicCache.from_legacy_cache(
                 past_key_values.to_legacy_cache()
@@ -660,7 +663,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
                     for handle in handles:
                         handle.remove()
             if prefix_sparse and block_start:
-                prefix_cache, _ = _compact_prefix_cache(
+                prefix_cache, previous_prefix_indices = _compact_prefix_cache(
                     model,
                     dense_cache,
                     block_start,
@@ -668,7 +671,10 @@ def _block_diffusion_generate(self, *args, **kwargs):
                     position_ids,
                     prefix_token_budget,
                     prefix_chunk_size,
+                    previous_prefix_indices,
+                    previous_prefix_length,
                 )
+                previous_prefix_length = block_start
             else:
                 prefix_cache = _prefix_from_dynamic_cache(dense_cache, block_start)
             selection_state.clear()
@@ -969,7 +975,7 @@ def select_transfer(
     return transfer
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def block_diffusion_generate(
         model,
         prompt,

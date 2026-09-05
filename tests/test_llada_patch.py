@@ -154,6 +154,37 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             [[1, 3], [1, 3], [0, 2], [0, 2]],
         )
 
+    def test_prefix_compaction_reselects_from_prior_winners_and_new_tokens(self):
+        key = torch.arange(6).reshape(1, 1, 6, 1).float()
+        cache = DynamicCache.from_legacy_cache(((key, key),))
+        model = SimpleNamespace(
+            config=SimpleNamespace(model_type="llada2_moe"),
+            model=SimpleNamespace(
+                rotary_emb=lambda query, positions: (
+                    torch.ones(1, positions.shape[-1], query.shape[-1]),
+                    torch.zeros(1, positions.shape[-1], query.shape[-1]),
+                ),
+            ),
+        )
+        with mock_patch(
+            "src.sparse.sparse_ops._adamas_prefix_indices",
+            return_value=torch.tensor([0, 3]),
+        ) as selector:
+            _, indices = _compact_prefix_cache(
+                model,
+                cache,
+                6,
+                [torch.ones(1, 1, 1, 1)],
+                torch.zeros(1, 1, dtype=torch.long),
+                2,
+                2,
+                (torch.tensor([1, 3]),),
+                4,
+            )
+
+        self.assertEqual(selector.call_args.args[1].flatten().tolist(), [1, 3, 4, 5])
+        self.assertEqual(indices[0].tolist(), [1, 5])
+
     def test_losa_online_merge_matches_concatenated_attention(self):
         torch.manual_seed(1)
         query = torch.randn(1, 4, 3, 8)

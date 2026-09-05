@@ -690,7 +690,7 @@ def _cached_forward(
     )
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def _block_cache_generate(self, *args, **kwargs):
     inputs = kwargs.pop("inputs", args[0] if args else None)
     if inputs is None:
@@ -752,6 +752,8 @@ def _block_cache_generate(self, *args, **kwargs):
                 fixed_prefix_cache,
             )
 
+    previous_prefix_indices = None
+    previous_prefix_length = 0
     for block_idx in range(prefill_blocks, num_blocks):
         block_start = block_idx * block_length
         block_end = min((block_idx + 1) * block_length, total_length)
@@ -818,7 +820,11 @@ def _block_cache_generate(self, *args, **kwargs):
                 cur_positions[:, block_start:block_end],
                 prefix_token_budget,
                 prefix_chunk_size,
+                previous_prefix_indices,
+                previous_prefix_length,
             )
+            previous_prefix_indices = prefix_indices
+            previous_prefix_length = block_start
         else:
             prefix_cache = _prefix_from_dynamic_cache(
                 dense_outputs.past_key_values, block_start

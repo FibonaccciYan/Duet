@@ -347,6 +347,8 @@ def _compact_prefix_cache(
     block_position_ids,
     token_budget,
     chunk_size,
+    previous_indices=None,
+    previous_length=0,
 ):
     # Selection only reads the prefix; gather directly from strided views.
     # Copying the entire history here duplicates KV before discarding most of it.
@@ -356,7 +358,8 @@ def _compact_prefix_cache(
     )
     if not prefix_cache:
         return prefix_cache, ()
-    if prefix_length <= token_budget:
+    budget = min(int(token_budget), prefix_length)
+    if prefix_length <= budget:
         indices = torch.arange(prefix_length, device=prefix_cache[0][0].device)
         return prefix_cache, tuple(indices for _ in prefix_cache)
 
@@ -371,6 +374,15 @@ def _compact_prefix_cache(
         if query is None:
             raise RuntimeError("Failed to capture a layer query during dense refresh")
         key = prefix_cache[representative][0]
+        candidates = None
+        if previous_indices is not None and previous_length < prefix_length:
+            candidates = torch.cat(
+                (
+                    previous_indices[representative],
+                    torch.arange(previous_length, prefix_length, device=key.device),
+                )
+            )
+            key = key.index_select(2, candidates)
         indices = _adamas_prefix_indices(
             _apply_rotary(query, cos, sin),
             key,
@@ -378,6 +390,8 @@ def _compact_prefix_cache(
             chunk_size,
             bucket_thresholds=thresholds,
         )
+        if candidates is not None:
+            indices = candidates.index_select(0, indices)
         for key, value in prefix_cache[start : start + group_size]:
             compact_cache.append(
                 (
