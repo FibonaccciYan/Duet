@@ -3,6 +3,120 @@
 This repository provides one GPU runtime for Query Sparse, Prefix Sparse,
 LoSA, and the LLaDA MoE optimization. Checkpoint files are never modified.
 
+## 当前状态与会话接手指南
+
+本节是后续开发与论文实验的入口，状态快照为
+`query_losa_correlation@bd468ac`。后文保留了历史实验，但除非在本节明确
+列为当前结果，否则不能直接作为论文最终数字。
+
+### 目标与验收准则
+
+目标是在尽量保持生成质量的同时，使 LLaDA 和 SDAR 的
+Query+Prefix Sparse 相对 dense 获得公平、可复现的端到端加速。论文重点测试
+8K/16K/32K context 与 `gen_length=256/768`，而不是只比较 kernel 或短任务吞吐。
+
+论文主 baseline 是 **matched optimized dense**：使用相同模型、dtype、生成
+实现及所有公共 Triton/MoE 优化，只关闭 Query Sparse、Prefix Sparse 和 LoSA。
+原始官方 dense 实现可以作为辅助 baseline 单独报告，但不能与优化后的 sparse
+直接计算主加速比。所有结论遵守以下规则：
+
+1. 每组 dense/sparse A/B 必须在同一 GPU、同一模型进程中 paired 执行；不同
+   context 或模型可以分配到不同 GPU 并行。
+2. 输入、seed、生成长度和去噪配置必须相同；长上下文测试关闭 EOS early stop，
+   保证实际生成长度一致。
+3. 每个 mode 都先用相同 shape 完整 warmup，执行顺序轮换、context 顺序交替；
+   当前探索至少 3 次，论文最终数据至少 4 次并报告 median、绝对延迟、speedup、
+   peak memory 和 output checksum。
+4. 不得把首次编译、模型加载、不同实际输出长度或不同 GPU 的绝对时间计为
+   sparse 收益。`scripts/bench_long_context.py --paired/--ablation` 是唯一认可的
+   长上下文计时入口。
+5. HumanEval 同时报告 official 与 indentation-normalized；后者不能替代前者。
+   一旦输出发生变化，必须完整重跑。相对 matched dense，任一指标回退超过
+   **2/164 题**即拒绝该近似。
+6. 论文最终配置还必须在同一最终提交上重跑 dense、Prefix-only、Query-only、
+   Query+Prefix；只有六个长上下文点的 median 都快于 dense，才宣称全范围加速。
+
+### 当前生产配置与可信结果
+
+`eval_instruct/eval.sh` 是精度配置的 source of truth。两种模型拥有独立 config，
+不要为了统一接口而强行共享数值参数。当前论文速度候选使用 Prefix budget 256、
+LoSA off；LLaDA 在 prefix 小于 24K 时自动关闭无收益的 Query Sparse。
+
+当前 LLaDA 三次 paired 探索结果如下；这些结果已经排除首次 shape 编译偏差，
+但论文提交前仍需按上述四次协议统一重跑：
+
+| LLaDA Query+Prefix-256 / dense | 8K | 16K | 32K |
+| --- | ---: | ---: | ---: |
+| `gen_length=256` | 1.029x | 1.104x | 1.504x |
+| `gen_length=768` | 1.048x | 1.116x | 1.589x |
+
+对应 HumanEval 为 74/164 official、132/164 indentation-normalized。另有
+Prefix-1024 calibrated-quality 配置达到 74/164 official、137/164 normalized；
+两者不是同一论文配置，不得混用精度与速度数字。最新精确 kernel 优化保持了
+六点 synthetic output checksum；现有证据未显示精度变化，但论文最终提交仍需
+完整重跑上述 HumanEval 矩阵。
+
+SDAR 最近一次完整 paired 消融显示：Query 是主要收益来源，Query+Prefix 在
+`gen_length=256` 下为 1.39x/1.33x/1.36x，在 `gen_length=768` 下为
+1.41x/1.40x/1.52x；HumanEval 为 127/164 official、129/164 normalized。
+这些数据早于共享 prefill kernel 的最后一次更新，算法输出未变，但必须在当前
+HEAD 重跑后才能作为论文最终结果。SDAR-b4 在现有配置下慢于 b32，暂不替代
+b32 主实验。
+
+### 已保留的优化
+
+| 子系统 | 当前实现 | 已确认收益或作用 |
+| --- | --- | --- |
+| 公平评测 | paired/ablation、逐 shape warmup、固定输出长度、轮换顺序 | 消除了旧报告中 dense 独自承担首次编译、虚高至约 2--4x 的错误加速 |
+| Prefix/Adamas | Faster Hadamard、模型专属 bucket、int32 distance、rolling candidates、chunk 1024 | 32K selector microbenchmark：LLaDA 12.22ms→10.71ms，SDAR 16.55ms→13.06ms |
+| Prefix cache | 固定 prompt KV 只编码一次，新 block 只刷新 suffix；每层 compact KV | 避免重复完整 prefill；LLaDA 32K peak memory 由约 64 GiB 降至 34--36 GiB |
+| Triton prefill | 隐式 block metadata，不构造二次方 mask；query tile 只扫描可见 KV | profile 中 attention 1.007s→0.828s；32K/gen256 sparse 5.483s→5.281s |
+| LLaDA Query | layer 1 confidence selector、interval 4、prefix 24K cost gate | Query 在 8K/16K 无收益时退化为 Prefix-only，32K 保留 Query 收益 |
+| LLaDA MoE | fused routing、32x128x64 tiles、down 使用 8 warps、SwiGLU 只计算一次 | MoE down 2.108s→1.799s；32K/gen256 sparse 5.281s→5.145s，checksum 不变 |
+| SDAR Query | fused QKV/RMSNorm/SwiGLU、跳过无用 logits/同步、sequential contiguous slice | Query-only 在已验证矩阵中提供约 1.30--1.42x 加速 |
+| LoSA correctness | prefix/current online-softmax merge、query-driven refresh、full-active control | `active_topk >= block_length` 仍走 LoSA 且接近 dense；当前无可靠 E2E 优势，默认关闭 |
+
+### 已尝试但未保留
+
+以下方向已有实测结论，下一会话不要无条件重复：
+
+| 尝试 | 结论 | 仅在何时重访 |
+| --- | --- | --- |
+| LLaDA Query interval 8/16、ratio 0.5/0.6 | 不能稳定改善 8K/16K；小 M MoE 效率抵消少算的 token | selector 或 MoE 成本结构发生实质变化 |
+| 小 expert 动态 `BLOCK_M=16` | 无端到端收益 | 新 GPU 架构或路由分布变化 |
+| compact final norm/logits、direct query capture/去 hooks | 无可测收益 | profile 再次显示对应算子成为热点 |
+| LLaDA empirical Hq/Hk threshold | HumanEval 64/164 official、127/164 normalized，劣于 v1.2 threshold 的 71/164、128/164 | 新模型或重新校准完整质量矩阵 |
+| unpacked Adamas lookup table | 0--3 的 16-entry LUT 比整数 subtract/abs 多一次 lookup | 与 packed 2-bit XOR/popcount kernel 一起实现 |
+| GQA representative/group-mean | LLaDA 32K 均慢于 exact；SDAR 单次约 1% 收益接近噪声且改变选择 | 先验证 index overlap，再跑完整质量 A/B |
+| attention `BLOCK_N=128` | 改变归约顺序，未通过逐元素一致性测试 | 有明确精度预算并重新跑完整 eval |
+| BF16 MoE down 近似 | 32K/gen256 很快，但 HumanEval 降至 72/164、129/164，8K/gen768 仅 0.996x | 不重访；同时违反精度门槛和六点加速目标 |
+| LoSA key samples/频繁 query refresh | 额外估算与小 attention 开销尚未换来可靠 E2E 加速 | profile 证明 Prefix attention 再次主导且六点测试可获益 |
+
+### 下一会话执行顺序
+
+1. 先检查 `git status --short`、当前 commit、GPU 占用和两套 config；不要修改
+   benchmark 公平性逻辑。
+2. 在当前 HEAD 重跑 LLaDA、SDAR 的 8K/16K/32K × gen 256/768 paired
+   ablation，优先补齐 SDAR，并保存 JSON 与 GPU/commit 元数据。
+3. 在同一提交重跑两模型 HumanEval dense/Prefix/Query/Query+Prefix matrix；
+   official 与 normalized 都写入最终表。
+4. LLaDA 下一热点限定为保持 FP32 中间语义的 MoE down/gate-up；Adamas 当前仅占
+   profile 约 0.3%，不要优先融合其 reduction/LUT。
+5. 每个候选只改一个因素：单测与 checksum → 六点端到端 → 输出变化时完整精度
+   matrix。失败实验立即回退，不给生产路径增加 fallback 或永久实验开关。
+
+每轮实现后的最低检查为：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 /home/ysy/anaconda3/envs/llada/bin/python \
+  -m unittest discover -s tests -q
+git diff --check
+```
+
+当前关键 profile 位于 `/tmp/llada_prefix_32k_cuda_visible.nsys-rep` 和
+`/tmp/llada_prefix_32k_cuda_fused_moe.nsys-rep`；`/tmp` 文件不保证跨机器或重启
+存在，因此论文数据必须另存到仓库外的持久实验目录并在 README 记录路径。
+
 ## Code layout
 
 ```text
@@ -153,7 +267,10 @@ GSM8K matrix:
 CUDA_VISIBLE_DEVICES=3,4,5 bash eval_instruct/run_gsm8k_matrix.sh
 ```
 
-## Long-context benchmark
+## Benchmark history and reproduction
+
+以下表格是不同阶段的历史记录，用于追踪优化来源，不是同一提交、配置或测速
+协议下的论文主表。当前可引用状态与最终重跑要求以上面的接手指南为准。
 
 ```bash
 CUDA_VISIBLE_DEVICES=5 /home/ysy/anaconda3/envs/llada/bin/python \
