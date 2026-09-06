@@ -739,6 +739,10 @@ def _block_cache_generate(self, *args, **kwargs):
     prefix_chunk_size = self.config.llada_prefix_chunk_size
     prefill_blocks = prompt_length // block_length
     fixed_prefix_length = prefill_blocks * block_length
+    query_sparse = (
+        query_sparse
+        and fixed_prefix_length >= self.config.llada_query_min_prefix_length
+    )
     fixed_prefix_cache = None
     if input_ids.is_cuda and fixed_prefix_length:
         fixed_prefix_cache = DynamicCache()
@@ -935,6 +939,7 @@ def patch_llada_model(
     top_k=64,
     selection_interval=4,
     query_dense_threshold=4,
+    query_min_prefix_length=24576,
     selection_layer=1,
     query_sparse=True,
     prefix_sparse=True,
@@ -951,6 +956,7 @@ def patch_llada_model(
         or selection_interval <= 0
         or prefix_token_budget <= 0
         or prefix_chunk_size <= 0
+        or query_min_prefix_length < 0
         or losa_active_topk <= 0
         or losa_score_mode not in {"query", "key_diag"}
         or losa_key_samples <= 0
@@ -969,6 +975,7 @@ def patch_llada_model(
     model.config.llada_sparse_dlm_top_k = int(top_k)
     model.config.llada_sparse_dlm_selection_interval = max(1, int(selection_interval))
     model.config.llada_query_dense_threshold = int(query_dense_threshold)
+    model.config.llada_query_min_prefix_length = int(query_min_prefix_length)
     model.config.llada_query_selection_layer = int(selection_layer)
     model.config.llada_query_sparse = bool(query_sparse)
     model.config.llada_prefix_sparse = bool(prefix_sparse)

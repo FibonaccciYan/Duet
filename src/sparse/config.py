@@ -9,6 +9,7 @@ class LLaDASparseConfig:
     top_k: int = 64
     selection_interval: int = 4
     query_dense_threshold: int = 4
+    query_min_prefix_length: int = 24576
     selection_layer: int = 1
     query_sparse: bool = True
     prefix_sparse: bool = True

@@ -77,6 +77,7 @@ def parse_args():
     parser.add_argument("--sparse_dlm_top_k", type=int, default=None)
     parser.add_argument("--sparse_dlm_selection_interval", type=int, default=None)
     parser.add_argument("--query_dense_threshold", type=int, default=None)
+    parser.add_argument("--query_min_prefix_length", type=int, default=None)
     parser.add_argument("--sparse_dlm_refresh_step", type=int, default=None)
     parser.add_argument(
         "--sparse_dlm_selection_layer",
@@ -153,6 +154,7 @@ def load_model_and_tokenizer(args):
             top_k=args.sparse_dlm_top_k,
             selection_interval=args.sparse_dlm_selection_interval,
             query_dense_threshold=args.query_dense_threshold,
+            query_min_prefix_length=args.query_min_prefix_length,
             refresh_step=args.sparse_dlm_refresh_step,
             selection_layer=args.sparse_dlm_selection_layer,
             deep_only_transfer=args.sparse_dlm_deep_only_transfer,

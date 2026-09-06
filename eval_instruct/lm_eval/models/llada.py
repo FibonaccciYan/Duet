@@ -73,6 +73,7 @@ class LLaDA(LM):
         sparse_dlm_top_k: Optional[int] = None,
         sparse_dlm_selection_interval: int = 4,
         query_dense_threshold: int = 4,
+        query_min_prefix_length: int = 24576,
         sparse_dlm_refresh_step: int = 2,
         sparse_dlm_selection_layer: Optional[int] = None,
         sparse_dlm_deep_only_transfer: Optional[bool] = None,
@@ -149,6 +150,7 @@ class LLaDA(LM):
                 query_dense_threshold=(
                     None if query_dense_threshold is None else int(query_dense_threshold)
                 ),
+                query_min_prefix_length=int(query_min_prefix_length),
                 refresh_step=(
                     None
                     if sparse_dlm_refresh_step is None

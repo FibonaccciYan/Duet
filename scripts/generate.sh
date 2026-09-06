@@ -15,6 +15,7 @@ case "${model_type}" in
     default_ratio=0.7
     default_selection_interval=4
     default_query_dense_threshold=4
+    default_query_min_prefix_length=24576
     default_selection_layer=1
     default_refresh_step=2
     default_prefix_chunk_size=256
@@ -27,6 +28,7 @@ case "${model_type}" in
     default_ratio=0.5
     default_selection_interval=1
     default_query_dense_threshold=0
+    default_query_min_prefix_length=0
     default_selection_layer=5
     default_prefix_chunk_size=1024
     ;;
@@ -61,6 +63,7 @@ args=(
   --sparse_dlm_top_k "${SPARSE_DLM_TOP_K:-64}"
   --sparse_dlm_selection_interval "${SPARSE_DLM_SELECTION_INTERVAL:-${default_selection_interval}}"
   --query_dense_threshold "${QUERY_DENSE_THRESHOLD:-${default_query_dense_threshold}}"
+  --query_min_prefix_length "${QUERY_MIN_PREFIX_LENGTH:-${default_query_min_prefix_length}}"
   --block_length "${BLOCK_LENGTH:-32}"
   --steps "${STEPS:-32}"
   --sparse_dlm_refresh_step "${SPARSE_DLM_REFRESH_STEP:-${default_refresh_step}}"

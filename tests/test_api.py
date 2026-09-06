@@ -30,6 +30,7 @@ class SparseApiTest(unittest.TestCase):
         self.assertTrue(kwargs["prefix_sparse"])
         self.assertTrue(kwargs["losa"])
         self.assertEqual(kwargs["selection_layer"], 3)
+        self.assertEqual(kwargs["query_min_prefix_length"], 24576)
         self.assertEqual(kwargs["prefix_chunk_size"], 256)
         self.assertEqual(model.config.llada_sparse_config["prefix_chunk_size"], 256)
         patch_moe.assert_called_once_with(model)

@@ -746,6 +746,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             top_k=8,
             selection_interval=3,
             query_dense_threshold=0,
+            query_min_prefix_length=0,
             query_sparse=True,
             prefix_sparse=False,
             prefix_token_budget=2,
@@ -767,6 +768,34 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         self.assertEqual(output.shape, (1, 8))
         self.assertFalse(torch.any(output == 127).item())
+
+    def test_short_prefix_disables_query_sparse(self):
+        model = _tiny_model()
+        patch_model(
+            model,
+            query_min_prefix_length=8,
+            query_sparse=True,
+            prefix_sparse=False,
+        )
+        with mock_patch(
+            "src.sparse.llada_patch._cached_forward", wraps=_cached_forward
+        ) as cached_forward:
+            model.generate(
+                inputs=torch.tensor([[1, 2, 3, 4]]),
+                gen_length=4,
+                block_length=4,
+                steps=4,
+                threshold=2.0,
+                editing_threshold=0.0,
+                max_post_steps=2,
+                mask_id=127,
+                eos_id=126,
+            )
+
+        self.assertTrue(cached_forward.called)
+        self.assertTrue(
+            all(not call.kwargs["query_sparse"] for call in cached_forward.call_args_list)
+        )
 
     def test_llada_generate_rejects_sdar_strategy_arguments(self):
         model = _tiny_model()

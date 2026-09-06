@@ -66,6 +66,7 @@ def parse_args():
     parser.add_argument("--prefix-chunk-size", type=int, default=None)
     parser.add_argument("--query-ratio", type=float, default=None)
     parser.add_argument("--query-dense-threshold", type=int, default=None)
+    parser.add_argument("--query-min-prefix-length", type=int, default=None)
     parser.add_argument(
         "--deep-only-transfer", action=argparse.BooleanOptionalAction, default=False
     )
@@ -136,6 +137,7 @@ def load(args):
             if args.query_dense_threshold is not None
             else (0 if is_sdar else 4)
         ),
+        query_min_prefix_length=args.query_min_prefix_length,
         refresh_step=-1 if is_sdar else 2,
         selection_layer=5 if is_sdar else 1,
         deep_only_transfer=args.deep_only_transfer,

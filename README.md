@@ -75,6 +75,11 @@ in the selected set so their hidden states and KV entries remain available.
 the current mask count is at or below it. LLaDA defaults to 4 and SDAR defaults
 to 0.
 
+LLaDA also uses `query_min_prefix_length=24576`: below that prefix length the
+runtime keeps Prefix Sparse but skips Query Sparse because its fixed selection
+cost exceeds the saved short-prefix attention work. Set it to 0 to force Query
+Sparse at every context length.
+
 LLaDA uses its native confidence selector. SDAR uses the same configured
 `remasking_strategy` for shallow query selection and final token transfer.
 
@@ -216,13 +221,13 @@ Times and speedups relative to dense:
 | Model / generation / mode | 8K | 16K | 32K |
 | --- | ---: | ---: | ---: |
 | LLaDA 256 dense | 2.354s | 3.669s | 8.481s |
-| LLaDA 256 Query | 3.013s (0.78x) | 3.757s (0.98x) | 7.795s (1.09x) |
+| LLaDA 256 Query, forced | 3.013s (0.78x) | 3.757s (0.98x) | 7.795s (1.09x) |
 | LLaDA 256 Prefix-256 | 2.320s (1.01x) | 3.410s (1.08x) | 6.565s (1.29x) |
-| LLaDA 256 Query+Prefix-256 | 2.423s (0.97x) | 3.508s (1.05x) | 5.886s (1.44x) |
+| LLaDA 256 adaptive Query+Prefix-256 | 2.334s (1.01x) | 3.416s (1.07x) | 5.938s (1.43x) |
 | LLaDA 768 dense | 5.405s | 6.484s | 12.902s |
-| LLaDA 768 Query | 5.459s (0.99x) | 7.131s (0.91x) | 11.573s (1.11x) |
+| LLaDA 768 Query, forced | 5.459s (0.99x) | 7.131s (0.91x) | 11.573s (1.11x) |
 | LLaDA 768 Prefix-256 | 5.193s (1.04x) | 5.738s (1.13x) | 8.142s (1.58x) |
-| LLaDA 768 Query+Prefix-256 | 5.190s (1.04x) | 5.998s (1.08x) | 8.339s (1.55x) |
+| LLaDA 768 adaptive Query+Prefix-256 | 5.228s (1.03x) | 5.761s (1.13x) | 8.362s (1.55x) |
 | SDAR-b32 256 dense | 8.288s | 9.213s | 13.783s |
 | SDAR-b32 256 Query | 5.939s (1.40x) | 6.926s (1.33x) | 10.593s (1.30x) |
 | SDAR-b32 256 Prefix-256 | 8.374s (0.99x) | 9.327s (0.99x) | 12.595s (1.09x) |
@@ -233,15 +238,17 @@ Times and speedups relative to dense:
 | SDAR-b32 768 Query+Prefix-256 | 16.622s (1.41x) | 17.511s (1.40x) | 20.983s (1.52x) |
 
 Prefix is the main LLaDA accelerator: it saves 1--8% at 8K/16K and 23--37%
-at 32K. LLaDA Query is only beneficial at 32K and can reduce the Prefix gain
-at shorter contexts. Query is the main SDAR accelerator, saving 23--30% by
+at 32K. Forced LLaDA Query is only beneficial at 32K, so the default adaptive
+policy skips it below 24K and makes Query+Prefix faster than dense at every
+tested length. Query is the main SDAR accelerator, saving 23--30% by
 itself; Prefix is neutral below 32K and adds a further 3--4% of dense latency
 savings after Query at 32K. Thus the two selectors have a measurable
 interaction and their standalone speedups should not be multiplied.
 
-The corresponding full HumanEval results are 79/164 official and 130/164
-indentation-normalized for LLaDA, and 127/164 official and 129/164 normalized
-for SDAR. SDAR-b4 remains slower than b32 for this configuration.
+Adaptive LLaDA Query+Prefix reaches 74/164 official and 132/164
+indentation-normalized on HumanEval; forced Query reached 79/164 and 130/164.
+SDAR reaches 127/164 official and 129/164 normalized. SDAR-b4 remains slower
+than b32 for this configuration.
 
 The runtime stores block-causal structure as implicit metadata, caches the
 fixed prompt KV once, and only refreshes the generated suffix for each new
