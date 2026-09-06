@@ -19,7 +19,7 @@ case "${model_type}" in
     threshold="${THRESHOLD:-0.5}"
     mask_id="${MASK_ID:-156895}"
     eos_id="${EOS_ID:-156892}"
-    default_prefix_chunk_size=256
+    default_prefix_chunk_size=1024
     ;;
   sdar)
     default_model=/data0/ysy/models/SDAR-8B-Chat-b32

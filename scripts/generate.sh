@@ -18,7 +18,7 @@ case "${model_type}" in
     default_query_min_prefix_length=24576
     default_selection_layer=1
     default_refresh_step=2
-    default_prefix_chunk_size=256
+    default_prefix_chunk_size=1024
     ;;
   sdar)
     default_model_path=/data0/ysy/models/SDAR-8B-Chat-b32

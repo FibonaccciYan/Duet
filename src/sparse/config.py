@@ -14,7 +14,7 @@ class LLaDASparseConfig:
     query_sparse: bool = True
     prefix_sparse: bool = True
     prefix_token_budget: int = 256
-    prefix_chunk_size: int = 256
+    prefix_chunk_size: int = 1024
     losa: bool = False
     losa_active_topk: int = 5
     losa_score_mode: str = "query"

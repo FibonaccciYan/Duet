@@ -136,7 +136,7 @@ the default for the detected model family.
 | selection interval | 4 | 1 |
 | query dense threshold | 4 | 0 |
 | selection layer | 1 | 5 |
-| Prefix chunk size | 256 | 1024 |
+| Prefix chunk size | 1024 | 1024 |
 | Prefix Sparse default | enabled | disabled |
 | LoSA default | disabled | disabled |
 | MoE patch | enabled | disabled |
@@ -236,6 +236,11 @@ Times and speedups relative to dense:
 | SDAR-b32 768 Query | 16.519s (1.42x) | 17.632s (1.39x) | 22.365s (1.42x) |
 | SDAR-b32 768 Prefix-256 | 23.738s (0.99x) | 24.721s (0.99x) | 28.179s (1.13x) |
 | SDAR-b32 768 Query+Prefix-256 | 16.622s (1.41x) | 17.511s (1.40x) | 20.983s (1.52x) |
+
+LLaDA now defaults to Adamas chunk 1024. Direct paired measurements after
+that change give `1.035x / 1.099x / 1.485x` for generation length 256 and
+`1.051x / 1.134x / 1.553x` for generation length 768 at 8K/16K/32K. Output
+checksums were stable across repeats and matched the former chunk-256 runs.
 
 Prefix is the main LLaDA accelerator: it saves 1--8% at 8K/16K and 23--37%
 at 32K. Forced LLaDA Query is only beneficial at 32K, so the default adaptive
