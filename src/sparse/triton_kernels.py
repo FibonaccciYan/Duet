@@ -881,8 +881,7 @@ def _moe_gate_up_kernel(
     x_ptr,
     gate_weight_ptr,
     up_weight_ptr,
-    gate_out_ptr,
-    up_out_ptr,
+    activated_ptr,
     active_experts_ptr,
     offsets_ptr,
     counts_ptr,
@@ -941,16 +940,16 @@ def _moe_gate_up_kernel(
         gate_acc += tl.dot(x_tile, tl.trans(gate_tile), out_dtype=tl.float32)
         up_acc += tl.dot(x_tile, tl.trans(up_tile), out_dtype=tl.float32)
 
-    out_ptrs = gate_out_ptr + row_ids[:, None] * intermediate_size + cols[None, :]
-    tl.store(out_ptrs, gate_acc, mask=row_mask[:, None] & col_mask[None, :])
-    out_ptrs = up_out_ptr + row_ids[:, None] * intermediate_size + cols[None, :]
-    tl.store(out_ptrs, up_acc, mask=row_mask[:, None] & col_mask[None, :])
+    gate_values = gate_acc.to(x_ptr.dtype.element_ty).to(tl.float32)
+    up_values = up_acc.to(x_ptr.dtype.element_ty).to(tl.float32)
+    activated = gate_values * tl.sigmoid(gate_values) * up_values
+    out_ptrs = activated_ptr + row_ids[:, None] * intermediate_size + cols[None, :]
+    tl.store(out_ptrs, activated, mask=row_mask[:, None] & col_mask[None, :])
 
 
 @triton.jit
 def _moe_down_kernel(
-    gate_ptr,
-    up_ptr,
+    activated_ptr,
     down_weight_ptr,
     out_ptr,
     active_experts_ptr,
@@ -982,17 +981,11 @@ def _moe_down_kernel(
     for k_start in range(0, tl.cdiv(intermediate_size, BLOCK_K)):
         ks = k_start * BLOCK_K + tl.arange(0, BLOCK_K)
         k_mask = ks < intermediate_size
-        gate_values = tl.load(
-            gate_ptr + row_ids[:, None] * intermediate_size + ks[None, :],
+        activated = tl.load(
+            activated_ptr + row_ids[:, None] * intermediate_size + ks[None, :],
             mask=row_mask[:, None] & k_mask[None, :],
             other=0.0,
-        ).to(tl.float32)
-        up_values = tl.load(
-            up_ptr + row_ids[:, None] * intermediate_size + ks[None, :],
-            mask=row_mask[:, None] & k_mask[None, :],
-            other=0.0,
-        ).to(tl.float32)
-        activated = gate_values * tl.sigmoid(gate_values) * up_values
+        )
         weight_ptrs = (
             down_weight_ptr
             + expert_id * hidden_size * intermediate_size
@@ -1039,18 +1032,16 @@ def _triton_moe_infer(self, x, topk_ids, topk_weight):
     max_tokens = max(1, int(counts.max().item()))
     tiles_m = triton.cdiv(max_tokens, _MOE_BLOCK_M)
 
-    gate_out = torch.empty(
-        (total_rows, intermediate_size), dtype=x.dtype, device=x.device
+    activated = torch.empty(
+        (total_rows, intermediate_size), dtype=torch.float32, device=x.device
     )
-    up_out = torch.empty_like(gate_out)
     _moe_gate_up_kernel[
         (active_experts.numel() * tiles_m, triton.cdiv(intermediate_size, _MOE_BLOCK_N))
     ](
         sorted_tokens,
         gate_weight,
         up_weight,
-        gate_out,
-        up_out,
+        activated,
         active_experts,
         offsets,
         counts,
@@ -1069,8 +1060,7 @@ def _triton_moe_infer(self, x, topk_ids, topk_weight):
     _moe_down_kernel[
         (active_experts.numel() * tiles_m, triton.cdiv(hidden_size, _MOE_BLOCK_N))
     ](
-        gate_out,
-        up_out,
+        activated,
         down_weight,
         routed_out,
         active_experts,

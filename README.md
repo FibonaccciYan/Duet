@@ -237,11 +237,12 @@ Times and speedups relative to dense:
 | SDAR-b32 768 Prefix-256 | 23.738s (0.99x) | 24.721s (0.99x) | 28.179s (1.13x) |
 | SDAR-b32 768 Query+Prefix-256 | 16.622s (1.41x) | 17.511s (1.40x) | 20.983s (1.52x) |
 
-LLaDA now defaults to Adamas chunk 1024, and block-causal prefill stops each
-query tile at its last visible KV block. Direct paired measurements give
-`1.031x / 1.099x / 1.504x` for generation length 256 and
-`1.049x / 1.149x / 1.591x` for generation length 768 at 8K/16K/32K. Output
-checksums were stable across repeats and matched the former prefill kernel and
+LLaDA now defaults to Adamas chunk 1024, block-causal prefill stops each query
+tile at its last visible KV block, and routed MoE computes SwiGLU once before
+the down projection. Direct paired measurements give
+`1.029x / 1.104x / 1.504x` for generation length 256 and
+`1.048x / 1.116x / 1.589x` for generation length 768 at 8K/16K/32K. Output
+checksums were stable across repeats and matched the former kernels and
 chunk-256 runs.
 
 Prefix is the main LLaDA accelerator: it saves 1--8% at 8K/16K and 23--37%
