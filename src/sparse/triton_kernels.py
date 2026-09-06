@@ -392,7 +392,14 @@ def _block_causal_prefill_kernel(
         + (offsets_m // block_length + 1) * block_length
     )
 
-    for start_n in range(0, prefix_length, BLOCK_N):
+    visible_end = tl.minimum(
+        prefix_length,
+        prefix_length
+        - query_length
+        + ((query_block * BLOCK_M + BLOCK_M + block_length - 1) // block_length)
+        * block_length,
+    )
+    for start_n in range(0, visible_end, BLOCK_N):
         offsets_n = start_n + tl.arange(0, BLOCK_N)
         valid_n = offsets_n < prefix_length
         key_offsets = (
