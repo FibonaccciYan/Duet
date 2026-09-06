@@ -198,52 +198,56 @@ Latest SDAR prefill/Adamas optimization (GPU 2/3, generation length 64):
 The original SDAR dense prefill baseline at 32K was 35.76s; the current dense
 Triton path is approximately 4.1x faster.
 
-For end-to-end generation, the benchmark uses a fixed output length
-(`eos_early_stop=False`) so sparse and dense runs perform the same amount of
-work. Paired SDAR-b32 medians from three alternating runs on GPU 4 are:
+For fair end-to-end ablation, use `--ablation`. Dense, Query-only, Prefix-only,
+and Query+Prefix are run on the same loaded model. Every mode is first warmed
+up with the same context and generation length as the measured run; the four
+measured orders rotate, context order alternates, output length is fixed with
+`eos_early_stop=False`, and the table reports four-run medians. This avoids
+charging a new generation shape's compilation cost to dense.
 
-| Generation/configuration | 8K | 16K | 32K |
+```bash
+scripts/bench_long_context.py --model llada --mode query_prefix \
+  --contexts 8192 16384 32768 --gen-length 256 \
+  --prefix-token-budget 256 --repeats 4 --ablation
+```
+
+Times and speedups relative to dense:
+
+| Model / generation / mode | 8K | 16K | 32K |
 | --- | ---: | ---: | ---: |
-| gen=256 dense | 8.32s | 9.25s | 13.71s |
-| gen=256 Query+Prefix-256 | 6.04s (1.38x) | 6.96s (1.33x) | 10.19s (1.35x) |
-| gen=768 dense | 23.38s | 24.33s | 31.78s |
-| gen=768 Query+Prefix-256 | 16.55s (1.41x) | 17.46s (1.39x) | 20.92s (1.52x) |
+| LLaDA 256 dense | 2.354s | 3.669s | 8.481s |
+| LLaDA 256 Query | 3.013s (0.78x) | 3.757s (0.98x) | 7.795s (1.09x) |
+| LLaDA 256 Prefix-256 | 2.320s (1.01x) | 3.410s (1.08x) | 6.565s (1.29x) |
+| LLaDA 256 Query+Prefix-256 | 2.423s (0.97x) | 3.508s (1.05x) | 5.886s (1.44x) |
+| LLaDA 768 dense | 5.405s | 6.484s | 12.902s |
+| LLaDA 768 Query | 5.459s (0.99x) | 7.131s (0.91x) | 11.573s (1.11x) |
+| LLaDA 768 Prefix-256 | 5.193s (1.04x) | 5.738s (1.13x) | 8.142s (1.58x) |
+| LLaDA 768 Query+Prefix-256 | 5.190s (1.04x) | 5.998s (1.08x) | 8.339s (1.55x) |
+| SDAR-b32 256 dense | 8.288s | 9.213s | 13.783s |
+| SDAR-b32 256 Query | 5.939s (1.40x) | 6.926s (1.33x) | 10.593s (1.30x) |
+| SDAR-b32 256 Prefix-256 | 8.374s (0.99x) | 9.327s (0.99x) | 12.595s (1.09x) |
+| SDAR-b32 256 Query+Prefix-256 | 5.967s (1.39x) | 6.903s (1.33x) | 10.164s (1.36x) |
+| SDAR-b32 768 dense | 23.506s | 24.465s | 31.863s |
+| SDAR-b32 768 Query | 16.519s (1.42x) | 17.632s (1.39x) | 22.365s (1.42x) |
+| SDAR-b32 768 Prefix-256 | 23.738s (0.99x) | 24.721s (0.99x) | 28.179s (1.13x) |
+| SDAR-b32 768 Query+Prefix-256 | 16.622s (1.41x) | 17.511s (1.40x) | 20.983s (1.52x) |
 
-The corresponding full HumanEval result is 127/164 official and 129/164
-indentation-normalized. SDAR-b4 Query+Prefix-256 at gen=256 reaches 0.92x,
-1.05x, and 1.17x at 8K, 16K, and 32K respectively, so b32 remains the primary
-optimization target.
+Prefix is the main LLaDA accelerator: it saves 1--8% at 8K/16K and 23--37%
+at 32K. LLaDA Query is only beneficial at 32K and can reduce the Prefix gain
+at shorter contexts. Query is the main SDAR accelerator, saving 23--30% by
+itself; Prefix is neutral below 32K and adds a further 3--4% of dense latency
+savings after Query at 32K. Thus the two selectors have a measurable
+interaction and their standalone speedups should not be multiplied.
 
-These timings include the complete prefill/decode path; checksums and actual
-generated-token counts are emitted by `scripts/bench_long_context.py`.
-
-LLaDA compact-prefill results (GPU 5, matched Triton MoE backend, 32x128x128
-MoE tiles):
-
-| Generation/configuration | 8K | 16K | 32K |
-| --- | ---: | ---: | ---: |
-| gen=256 dense | 11.57s | 13.02s | 14.23s |
-| gen=256 Query+Prefix-256 | 3.97s (2.92x) | 5.02s (2.59x) | 8.34s (1.71x) |
-| gen=768 dense | 31.93s | 33.26s | 29.04s |
-| gen=768 Query+Prefix-256 | 8.22s (3.89x) | 9.74s (3.42x) | 14.46s (2.01x) |
+The corresponding full HumanEval results are 79/164 official and 130/164
+indentation-normalized for LLaDA, and 127/164 official and 129/164 normalized
+for SDAR. SDAR-b4 remains slower than b32 for this configuration.
 
 The runtime stores block-causal structure as implicit metadata, caches the
 fixed prompt KV once, and only refreshes the generated suffix for each new
-block. Peak memory is 34--36 GiB; the former quadratic-mask path used about
-64 GiB at 32K and could not run the 32K/gen=768 dense case on an 80 GiB GPU.
-The routed-MoE kernels use a 32-row tile; compared with the former 16-row tile,
-32K Query+Prefix generation fell from 11.37s to 8.34s at gen=256 and from
-18.36s to 14.46s at gen=768, with identical output checksums. A 64-row tile
-exceeds the GPU shared-memory limit. Reducing the K tile from 128 to 64 and
-using eight warps for the down projection then
-reduced isolated 32K sparse runs to 7.69--8.28s at gen=256 and 13.70s at
-gen=768; the 1K/gen=768 short-context case fell from 5.46s to 4.87s. All
-checksums remained identical. The lower speedup ratio at longer context
-comes from prefix selection/Adamas work growing with prefix length while dense
-large GEMMs become more efficient; sparse absolute latency still grows much
-more slowly than dense attention would without the shared prefill cache.
-Full HumanEval validation for Query+Prefix-256 is 79/164 official and 130/164
-indentation-normalized (the previous implementation was 71/164 and 128/164).
+block. Peak LLaDA memory is 33--37 GiB; the former quadratic-mask path used
+about 64 GiB at 32K. The routed-MoE kernels use a 32-row tile because a 64-row
+tile exceeds the GPU shared-memory limit.
 
 ## Supporting tools
 

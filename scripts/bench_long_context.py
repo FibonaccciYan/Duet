@@ -11,6 +11,7 @@ import json
 import math
 import os
 import random
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -80,6 +81,16 @@ def parse_args():
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument(
+        "--paired",
+        action="store_true",
+        help="compare the selected sparse mode with dense in one loaded model",
+    )
+    parser.add_argument(
+        "--ablation",
+        action="store_true",
+        help="compare dense, Query-only, Prefix-only, and Query+Prefix",
+    )
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args()
 
@@ -215,19 +226,50 @@ def run_once(args, model, tokenizer, context_length):
     }
 
 
+def set_runtime_mode(model, model_name, mode):
+    prefix = model_name
+    setattr(
+        model.config,
+        f"{prefix}_query_sparse",
+        mode in {"query", "query_prefix", "combined", "eval"},
+    )
+    setattr(
+        model.config,
+        f"{prefix}_prefix_sparse",
+        mode in {"prefix", "query_prefix", "combined"}
+        or (mode == "eval" and model_name == "llada"),
+    )
+    setattr(model.config, f"{prefix}_losa", mode in {"losa", "combined"})
+
+
 def main():
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("this benchmark requires CUDA")
+    if args.ablation and args.mode != "query_prefix":
+        raise ValueError("--ablation requires --mode query_prefix")
     set_seed(args.seed)
     model, tokenizer = load(args)
+    compared_modes = (
+        ("dense", "query", "prefix", "query_prefix")
+        if args.ablation
+        else ("dense", args.mode)
+        if args.paired
+        else (args.mode,)
+    )
 
-    # Compile fixed-shape Triton kernels and initialize remote-code caches outside
-    # the measured region. The A/B runs perform the same warmup.
+    # Compile fixed-shape kernels and initialize caches outside the measurement.
     warmup_args = argparse.Namespace(**vars(args))
-    warmup_args.gen_length = 32
-    warmup_ids = exact_prompt(tokenizer, 480, model.device)
-    model.generate(**generation_kwargs(warmup_args, tokenizer, warmup_ids))
+    warmup_args.gen_length = args.gen_length if args.paired or args.ablation else 32
+    if args.paired or args.ablation:
+        for context_length in args.contexts:
+            warmup_context = context_length - args.gen_length + warmup_args.gen_length
+            for mode in compared_modes:
+                set_runtime_mode(model, args.model, mode)
+                run_once(warmup_args, model, tokenizer, warmup_context)
+    else:
+        warmup_ids = exact_prompt(tokenizer, 480, model.device)
+        model.generate(**generation_kwargs(warmup_args, tokenizer, warmup_ids))
     torch.cuda.synchronize()
 
     results = []
@@ -243,11 +285,34 @@ def main():
         flush=True,
     )
     for repeat in range(args.repeats):
+        contexts = args.contexts if repeat % 2 == 0 else reversed(args.contexts)
+        shift = repeat % len(compared_modes)
+        modes = compared_modes[shift:] + compared_modes[:shift]
+        for context_length in contexts:
+            for mode in modes:
+                set_runtime_mode(model, args.model, mode)
+                result = run_once(args, model, tokenizer, context_length)
+                result.update(repeat=repeat, mode=mode)
+                results.append(result)
+                print(json.dumps(result, sort_keys=True), flush=True)
+
+    if args.paired or args.ablation:
         for context_length in args.contexts:
-            result = run_once(args, model, tokenizer, context_length)
-            result["repeat"] = repeat
-            results.append(result)
-            print(json.dumps(result, sort_keys=True), flush=True)
+            dense = statistics.median(
+                row["seconds"] for row in results
+                if row["context_tokens"] == context_length and row["mode"] == "dense"
+            )
+            for mode in compared_modes[1:]:
+                sparse = statistics.median(
+                    row["seconds"] for row in results
+                    if row["context_tokens"] == context_length
+                    and row["mode"] == mode
+                )
+                print(
+                    f"SUMMARY {context_length} {mode} {dense} {sparse} "
+                    f"{dense / sparse}",
+                    flush=True,
+                )
 
     report = {
         "model": args.model,
@@ -260,6 +325,8 @@ def main():
         "losa_score_mode": args.losa_score_mode,
         "losa_key_samples": args.losa_key_samples,
         "prefix_token_budget": args.prefix_token_budget,
+        "paired": args.paired,
+        "ablation": args.ablation,
         "sparse_config": getattr(model.config, f"{args.model}_sparse_config"),
         "remasking_strategy": args.remasking_strategy,
         "results": results,
