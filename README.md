@@ -154,6 +154,10 @@ repeated prompt 上的局部 attention 重建指标不能可靠预测逐步生�
 | SDAR dynamic 仅允许 deep-selected mask transfer | 当前树 32 题从默认的 29/29 降至 28/28；浅层位置可 transfer 不是主要精度根因 | 不重访；优先诊断未选 mask 的陈旧深层 KV/state |
 | LLaDA Adamas 全局阈值 `Hq=0、Hk=±2.5` | 离线 attention-output error 最优，但完整 HumanEval 仅 66/125，低于旧阈值 71/128 | 有多样化真实代码 prompt 的逐层、多步校准集 |
 | LLaDA Adamas 全局阈值 `Hq=±0.1、Hk=±2.26` | 完整 HumanEval 69/132；normalized 提升但 official 回退 2 题，距 matched dense 低 5 题 | 同上 |
+| SDAR dynamic 固定 50% budget 内优先轮换陈旧 mask | 32 题由 29/29 降至 27/27；刷新陈旧位置会挤掉关键高置信候选 | 不重访；必须保留高置信候选或用额外低成本 KV 刷新 |
+| SDAR dynamic 额外刷新首个稀疏深层的全量 K/V | 只增加 K/V projection、不增加 attention/MLP，但 32 题仍降至 28/28 | 不重访；单层 KV 陈旧不是主要误差源 |
+| SDAR dynamic 首次稀疏步复用前一 dense 步置信度 | 32 题为 28/29，未超过当前 29/29 | 不重访；单步陈旧排序不能替代当前 shallow selector |
+| SDAR dynamic 在 refresh2 步直接使用已算出的完整最终 logits | 32 题仍为 30/30；完整为 114/118，对比旧 refresh2 的 114/119 无提升 | 不重访；局部“更精确”不等于更好的扩散轨迹 |
 
 ### 下一会话执行顺序
 
