@@ -882,11 +882,11 @@ def _moe_gate_up_kernel(
     gate_weight_ptr,
     up_weight_ptr,
     activated_ptr,
-    active_experts_ptr,
+    tile_experts_ptr,
+    tile_offsets_ptr,
     offsets_ptr,
     counts_ptr,
     total_rows,
-    tiles_m,
     hidden_size,
     intermediate_size,
     BLOCK_M: tl.constexpr,
@@ -894,9 +894,8 @@ def _moe_gate_up_kernel(
     BLOCK_K: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    expert_slot = pid // tiles_m
-    expert_id = tl.load(active_experts_ptr + expert_slot)
-    tile_m = pid % tiles_m
+    expert_id = tl.load(tile_experts_ptr + pid)
+    tile_m = pid - tl.load(tile_offsets_ptr + expert_id)
     pid_n = tl.program_id(1)
 
     rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -952,11 +951,12 @@ def _moe_down_kernel(
     activated_ptr,
     down_weight_ptr,
     out_ptr,
-    active_experts_ptr,
+    order_ptr,
+    tile_experts_ptr,
+    tile_offsets_ptr,
     offsets_ptr,
     counts_ptr,
     total_rows,
-    tiles_m,
     hidden_size,
     intermediate_size,
     BLOCK_M: tl.constexpr,
@@ -964,9 +964,8 @@ def _moe_down_kernel(
     BLOCK_K: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    expert_slot = pid // tiles_m
-    expert_id = tl.load(active_experts_ptr + expert_slot)
-    tile_m = pid % tiles_m
+    expert_id = tl.load(tile_experts_ptr + pid)
+    tile_m = pid - tl.load(tile_offsets_ptr + expert_id)
     pid_n = tl.program_id(1)
 
     rows = tile_m * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -1000,7 +999,9 @@ def _moe_down_kernel(
         acc += tl.dot(activated, tl.trans(weights), out_dtype=tl.float32)
 
     tl.store(
-        out_ptr + row_ids[:, None] * hidden_size + cols[None, :],
+        out_ptr
+        + tl.load(order_ptr + row_ids, mask=row_mask, other=0)[:, None] * hidden_size
+        + cols[None, :],
         acc,
         mask=row_mask[:, None] & col_mask[None, :],
     )
@@ -1026,27 +1027,30 @@ def _triton_moe_infer(self, x, topk_ids, topk_weight):
         order = torch.argsort(flat_ids)
     sorted_tokens = x.index_select(0, order // top_k).contiguous()
     total_rows = sorted_tokens.shape[0]
-    active_experts = torch.nonzero(counts, as_tuple=False).flatten()
-    # One scalar sync keeps the launch grid compact instead of padding every
-    # active expert to the full routed-token count.
-    max_tokens = max(1, int(counts.max().item()))
-    tiles_m = triton.cdiv(max_tokens, _MOE_BLOCK_M)
+    # Launch only occupied expert tiles instead of padding every expert to the
+    # most-routed expert's size.
+    tile_counts = torch.div(
+        counts + _MOE_BLOCK_M - 1, _MOE_BLOCK_M, rounding_mode="floor"
+    )
+    tile_offsets = torch.cat((tile_counts.new_zeros(1), tile_counts.cumsum(0)))
+    total_tiles = int(tile_offsets[-1].item())
+    tile_experts = torch.repeat_interleave(tile_counts, output_size=total_tiles)
 
     activated = torch.empty(
         (total_rows, intermediate_size), dtype=torch.float32, device=x.device
     )
     _moe_gate_up_kernel[
-        (active_experts.numel() * tiles_m, triton.cdiv(intermediate_size, _MOE_BLOCK_N))
+        (total_tiles, triton.cdiv(intermediate_size, _MOE_BLOCK_N))
     ](
         sorted_tokens,
         gate_weight,
         up_weight,
         activated,
-        active_experts,
+        tile_experts,
+        tile_offsets,
         offsets,
         counts,
         total_rows,
-        tiles_m,
         hidden_size,
         intermediate_size,
         BLOCK_M=_MOE_BLOCK_M,
@@ -1058,16 +1062,17 @@ def _triton_moe_infer(self, x, topk_ids, topk_weight):
         (total_rows, hidden_size), dtype=x.dtype, device=x.device
     )
     _moe_down_kernel[
-        (active_experts.numel() * tiles_m, triton.cdiv(hidden_size, _MOE_BLOCK_N))
+        (total_tiles, triton.cdiv(hidden_size, _MOE_BLOCK_N))
     ](
         activated,
         down_weight,
         routed_out,
-        active_experts,
+        order,
+        tile_experts,
+        tile_offsets,
         offsets,
         counts,
         total_rows,
-        tiles_m,
         hidden_size,
         intermediate_size,
         BLOCK_M=_MOE_BLOCK_M,
@@ -1076,10 +1081,8 @@ def _triton_moe_infer(self, x, topk_ids, topk_weight):
         num_warps=8,
     )
 
-    restored = torch.empty_like(routed_out)
-    restored.index_copy_(0, order, routed_out)
     return (
-        restored.view(token_count, top_k, hidden_size)
+        routed_out.view(token_count, top_k, hidden_size)
         .to(topk_weight.dtype)
         .mul_(topk_weight.unsqueeze(-1))
         .sum(dim=1)

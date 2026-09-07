@@ -13,6 +13,7 @@ class LLaDASparseConfig:
     selection_layer: int = 1
     query_sparse: bool = True
     prefix_sparse: bool = True
+    prefix_min_prefix_length: int = 4096
     prefix_token_budget: int = 256
     prefix_chunk_size: int = 1024
     losa: bool = False
@@ -34,6 +35,7 @@ class SDARSparseConfig:
     deep_only_transfer: bool = False
     query_sparse: bool = True
     prefix_sparse: bool = False
+    prefix_min_prefix_length: int = 24576
     prefix_token_budget: int = 256
     prefix_chunk_size: int = 1024
     losa: bool = False

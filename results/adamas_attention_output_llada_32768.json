@@ -1,0 +1,656 @@
+{
+  "model": "llada",
+  "context": 32768,
+  "q": {
+    "count": 1310720,
+    "mean": 7.912591099739075e-05,
+    "std": 1.5923525835087244,
+    "bucket_thresholds": [
+      -1.5200004577636719,
+      -0.010000446811318398,
+      1.5200004577636719
+    ]
+  },
+  "k": {
+    "count": 335216640,
+    "mean": 3.841970405402072e-06,
+    "std": 3.458653487798099,
+    "bucket_thresholds": [
+      -3.330000400543213,
+      4.470348358154297e-07,
+      3.320000410079956
+    ]
+  },
+  "calibration": [
+    {
+      "query_thresholds": [
+        -0.0,
+        0.0,
+        0.0
+      ],
+      "key_thresholds": [
+        -2.5,
+        0.0,
+        2.5
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6916496634483338,
+      "oracle_recall_mean": 0.2365234375,
+      "attention_output_error_mean": 0.4721182111650705
+    },
+    {
+      "query_thresholds": [
+        -0.1,
+        0.0,
+        0.1
+      ],
+      "key_thresholds": [
+        -2.5,
+        0.0,
+        2.5
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6932865709066391,
+      "oracle_recall_mean": 0.247265625,
+      "attention_output_error_mean": 0.47920680344104766
+    },
+    {
+      "query_thresholds": [
+        -0.0,
+        0.0,
+        0.0
+      ],
+      "key_thresholds": [
+        -2.26,
+        0.0,
+        2.26
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6852325856685638,
+      "oracle_recall_mean": 0.2357421875,
+      "attention_output_error_mean": 0.47932682409882543
+    },
+    {
+      "query_thresholds": [
+        -0.1,
+        0.0,
+        0.1
+      ],
+      "key_thresholds": [
+        -2.26,
+        0.0,
+        2.26
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6895348712801933,
+      "oracle_recall_mean": 0.2466796875,
+      "attention_output_error_mean": 0.4809421420097351
+    },
+    {
+      "query_thresholds": [
+        -0.0,
+        0.0,
+        0.0
+      ],
+      "key_thresholds": [
+        -1.8,
+        0.0,
+        1.8
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6805296085774899,
+      "oracle_recall_mean": 0.227734375,
+      "attention_output_error_mean": 0.4904701352119446
+    },
+    {
+      "query_thresholds": [
+        -0.1,
+        0.0,
+        0.1
+      ],
+      "key_thresholds": [
+        -2.0,
+        0.0,
+        2.0
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6841996110975742,
+      "oracle_recall_mean": 0.2404296875,
+      "attention_output_error_mean": 0.49327315129339694
+    },
+    {
+      "query_thresholds": [
+        -0.2,
+        0.0,
+        0.2
+      ],
+      "key_thresholds": [
+        -2.5,
+        0.0,
+        2.5
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6842274896800518,
+      "oracle_recall_mean": 0.24375,
+      "attention_output_error_mean": 0.49341217167675494
+    },
+    {
+      "query_thresholds": [
+        -0.1,
+        0.0,
+        0.1
+      ],
+      "key_thresholds": [
+        -1.8,
+        0.0,
+        1.8
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6828905589878559,
+      "oracle_recall_mean": 0.2357421875,
+      "attention_output_error_mean": 0.49345942847430707
+    },
+    {
+      "query_thresholds": [
+        -0.0,
+        0.0,
+        0.0
+      ],
+      "key_thresholds": [
+        -2.0,
+        0.0,
+        2.0
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.679383746534586,
+      "oracle_recall_mean": 0.228125,
+      "attention_output_error_mean": 0.49405916705727576
+    },
+    {
+      "query_thresholds": [
+        -0.1,
+        0.0,
+        0.1
+      ],
+      "key_thresholds": [
+        -1.6,
+        0.0,
+        1.6
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6828483961522579,
+      "oracle_recall_mean": 0.233984375,
+      "attention_output_error_mean": 0.49575185738503935
+    },
+    {
+      "query_thresholds": [
+        -0.2,
+        0.0,
+        0.2
+      ],
+      "key_thresholds": [
+        -2.26,
+        0.0,
+        2.26
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6811957649886609,
+      "oracle_recall_mean": 0.2431640625,
+      "attention_output_error_mean": 0.4967991322278976
+    },
+    {
+      "query_thresholds": [
+        -0.2,
+        0.0,
+        0.2
+      ],
+      "key_thresholds": [
+        -2.0,
+        0.0,
+        2.0
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.678900508582592,
+      "oracle_recall_mean": 0.2408203125,
+      "attention_output_error_mean": 0.49685501009225846
+    },
+    {
+      "query_thresholds": [
+        -0.3,
+        0.0,
+        0.3
+      ],
+      "key_thresholds": [
+        -2.5,
+        0.0,
+        2.5
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6812378719449044,
+      "oracle_recall_mean": 0.2541015625,
+      "attention_output_error_mean": 0.4989532956853509
+    },
+    {
+      "query_thresholds": [
+        -0.2,
+        0.0,
+        0.2
+      ],
+      "key_thresholds": [
+        -1.8,
+        0.0,
+        1.8
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6788427948951721,
+      "oracle_recall_mean": 0.2388671875,
+      "attention_output_error_mean": 0.4993206266313791
+    },
+    {
+      "query_thresholds": [
+        -0.3,
+        0.0,
+        0.3
+      ],
+      "key_thresholds": [
+        -1.8,
+        0.0,
+        1.8
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6786848232150078,
+      "oracle_recall_mean": 0.2388671875,
+      "attention_output_error_mean": 0.5006944481283426
+    },
+    {
+      "query_thresholds": [
+        -0.3,
+        0.0,
+        0.3
+      ],
+      "key_thresholds": [
+        -2.0,
+        0.0,
+        2.0
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6819770634174347,
+      "oracle_recall_mean": 0.2484375,
+      "attention_output_error_mean": 0.5009096831083297
+    },
+    {
+      "query_thresholds": [
+        -0.2,
+        0.0,
+        0.2
+      ],
+      "key_thresholds": [
+        -1.6,
+        0.0,
+        1.6
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6781713880598546,
+      "oracle_recall_mean": 0.2306640625,
+      "attention_output_error_mean": 0.5026805598288775
+    },
+    {
+      "query_thresholds": [
+        -0.3,
+        0.0,
+        0.3
+      ],
+      "key_thresholds": [
+        -2.26,
+        0.0,
+        2.26
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6790576323866844,
+      "oracle_recall_mean": 0.2482421875,
+      "attention_output_error_mean": 0.5046077428385616
+    },
+    {
+      "query_thresholds": [
+        -0.3,
+        0.0,
+        0.3
+      ],
+      "key_thresholds": [
+        -1.6,
+        0.0,
+        1.6
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6778953917324543,
+      "oracle_recall_mean": 0.2408203125,
+      "attention_output_error_mean": 0.5047757722437382
+    },
+    {
+      "query_thresholds": [
+        -0.0,
+        0.0,
+        0.0
+      ],
+      "key_thresholds": [
+        -1.6,
+        0.0,
+        1.6
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.671991590410471,
+      "oracle_recall_mean": 0.2244140625,
+      "attention_output_error_mean": 0.5060019236057997
+    },
+    {
+      "query_thresholds": [
+        -0.4,
+        0.0,
+        0.4
+      ],
+      "key_thresholds": [
+        -2.26,
+        0.0,
+        2.26
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6793272338807583,
+      "oracle_recall_mean": 0.2541015625,
+      "attention_output_error_mean": 0.507974699512124
+    },
+    {
+      "query_thresholds": [
+        -0.4,
+        0.0,
+        0.4
+      ],
+      "key_thresholds": [
+        -1.6,
+        0.0,
+        1.6
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6775134488940239,
+      "oracle_recall_mean": 0.2474609375,
+      "attention_output_error_mean": 0.5118571370840073
+    },
+    {
+      "query_thresholds": [
+        -0.4,
+        0.0,
+        0.4
+      ],
+      "key_thresholds": [
+        -2.5,
+        0.0,
+        2.5
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.67568818628788,
+      "oracle_recall_mean": 0.25703125,
+      "attention_output_error_mean": 0.5141028052195906
+    },
+    {
+      "query_thresholds": [
+        -0.4,
+        0.0,
+        0.4
+      ],
+      "key_thresholds": [
+        -2.0,
+        0.0,
+        2.0
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6788883984088898,
+      "oracle_recall_mean": 0.2513671875,
+      "attention_output_error_mean": 0.5203865619376302
+    },
+    {
+      "query_thresholds": [
+        -0.4,
+        0.0,
+        0.4
+      ],
+      "key_thresholds": [
+        -1.8,
+        0.0,
+        1.8
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6746416546404361,
+      "oracle_recall_mean": 0.2455078125,
+      "attention_output_error_mean": 0.5209768434986473
+    },
+    {
+      "query_thresholds": [
+        -0.8,
+        0.0,
+        0.8
+      ],
+      "key_thresholds": [
+        -1.6,
+        0.0,
+        1.6
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6634309232234955,
+      "oracle_recall_mean": 0.2357421875,
+      "attention_output_error_mean": 0.5492530975490808
+    },
+    {
+      "query_thresholds": [
+        -0.8,
+        0.0,
+        0.8
+      ],
+      "key_thresholds": [
+        -1.8,
+        0.0,
+        1.8
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6604972057044506,
+      "oracle_recall_mean": 0.237109375,
+      "attention_output_error_mean": 0.5513524111360312
+    },
+    {
+      "query_thresholds": [
+        -0.8,
+        0.0,
+        0.8
+      ],
+      "key_thresholds": [
+        -2.5,
+        0.0,
+        2.5
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6575668275356292,
+      "oracle_recall_mean": 0.2337890625,
+      "attention_output_error_mean": 0.5577218618243933
+    },
+    {
+      "query_thresholds": [
+        -0.8,
+        0.0,
+        0.8
+      ],
+      "key_thresholds": [
+        -2.26,
+        0.0,
+        2.26
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6588437214493752,
+      "oracle_recall_mean": 0.2302734375,
+      "attention_output_error_mean": 0.5655986063182354
+    },
+    {
+      "query_thresholds": [
+        -0.8,
+        0.0,
+        0.8
+      ],
+      "key_thresholds": [
+        -2.0,
+        0.0,
+        2.0
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6571016877889633,
+      "oracle_recall_mean": 0.2318359375,
+      "attention_output_error_mean": 0.569298023916781
+    },
+    {
+      "query_thresholds": [
+        -1.35,
+        0.0,
+        1.35
+      ],
+      "key_thresholds": [
+        -2.5,
+        0.0,
+        2.5
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6313702404499054,
+      "oracle_recall_mean": 0.201953125,
+      "attention_output_error_mean": 0.6239840097725391
+    },
+    {
+      "query_thresholds": [
+        -1.35,
+        0.0,
+        1.35
+      ],
+      "key_thresholds": [
+        -1.8,
+        0.0,
+        1.8
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6253015048801899,
+      "oracle_recall_mean": 0.2103515625,
+      "attention_output_error_mean": 0.6267603367567063
+    },
+    {
+      "query_thresholds": [
+        -1.35,
+        0.0,
+        1.35
+      ],
+      "key_thresholds": [
+        -1.6,
+        0.0,
+        1.6
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6221542183309794,
+      "oracle_recall_mean": 0.208203125,
+      "attention_output_error_mean": 0.6299275673925877
+    },
+    {
+      "query_thresholds": [
+        -1.35,
+        0.0,
+        1.35
+      ],
+      "key_thresholds": [
+        -2.26,
+        0.0,
+        2.26
+      ],
+      "production": true,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6257875770330429,
+      "oracle_recall_mean": 0.2037109375,
+      "attention_output_error_mean": 0.6300260858610273
+    },
+    {
+      "query_thresholds": [
+        -1.35,
+        0.0,
+        1.35
+      ],
+      "key_thresholds": [
+        -2.0,
+        0.0,
+        2.0
+      ],
+      "production": false,
+      "calls": 20,
+      "selected_tokens_mean": 256.0,
+      "retained_mass_mean": 0.6198954500257969,
+      "oracle_recall_mean": 0.2021484375,
+      "attention_output_error_mean": 0.6336330996826292
+    }
+  ]
+}

@@ -80,6 +80,7 @@ class LLaDA(LM):
         sparse_dlm_block_length: Optional[int] = None,
         query_sparse: bool = True,
         prefix_sparse: Optional[bool] = None,
+        prefix_min_prefix_length: Optional[int] = None,
         prefix_token_budget: int = 256,
         prefix_chunk_size: Optional[int] = None,
         losa: bool = False,
@@ -164,6 +165,9 @@ class LLaDA(LM):
                 deep_only_transfer=_as_bool(sparse_dlm_deep_only_transfer),
                 query_sparse=sparse_enabled and _as_bool(query_sparse),
                 prefix_sparse=prefix_sparse_enabled,
+                prefix_min_prefix_length=_optional_number(
+                    prefix_min_prefix_length, int
+                ),
                 prefix_token_budget=int(prefix_token_budget),
                 prefix_chunk_size=_optional_number(prefix_chunk_size, int),
                 losa=sparse_enabled and _as_bool(losa),

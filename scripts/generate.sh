@@ -29,6 +29,7 @@ case "${model_type}" in
     default_selection_interval=1
     default_query_dense_threshold=0
     default_query_min_prefix_length=0
+    default_prefix_min_prefix_length=24576
     default_selection_layer=5
     default_prefix_chunk_size=1024
     ;;
@@ -40,6 +41,7 @@ esac
 if [[ "${model_type}" == "llada" ]]; then
   default_refresh_step=2
   default_moe_expert_patch=true
+  default_prefix_min_prefix_length=4096
 fi
 model_path="${MODEL_PATH:-${default_model_path}}"
 if [[ -n "${PYTHON:-}" ]]; then
@@ -71,6 +73,7 @@ args=(
   --sparse_dlm_deep_only_transfer "${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false}"
   --query_sparse "${QUERY_SPARSE:-true}"
   --query_losa_union "${QUERY_LOSA_UNION:-false}"
+  --prefix_min_prefix_length "${PREFIX_MIN_PREFIX_LENGTH:-${default_prefix_min_prefix_length}}"
   --prefix_token_budget "${PREFIX_TOKEN_BUDGET:-256}"
   --prefix_chunk_size "${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}}"
   --losa "${LOSA:-false}"

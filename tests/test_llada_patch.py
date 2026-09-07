@@ -797,6 +797,29 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             all(not call.kwargs["query_sparse"] for call in cached_forward.call_args_list)
         )
 
+    def test_short_prefix_disables_prefix_sparse(self):
+        model = _tiny_model()
+        patch_model(
+            model,
+            query_sparse=False,
+            prefix_sparse=True,
+            prefix_min_prefix_length=8,
+        )
+        with mock_patch("src.sparse.llada_patch._compact_prefix_cache") as compact:
+            model.generate(
+                inputs=torch.tensor([[1, 2, 3, 4]]),
+                gen_length=4,
+                block_length=4,
+                steps=4,
+                threshold=2.0,
+                editing_threshold=0.0,
+                max_post_steps=2,
+                mask_id=127,
+                eos_id=126,
+            )
+
+        compact.assert_not_called()
+
     def test_llada_generate_rejects_sdar_strategy_arguments(self):
         model = _tiny_model()
         patch_model(model, selection_layer=3)

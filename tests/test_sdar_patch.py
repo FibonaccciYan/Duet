@@ -206,8 +206,30 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         )
 
         self.assertTrue(model.config.sdar_prefix_sparse)
+        self.assertEqual(model.config.sdar_prefix_min_prefix_length, 24576)
         self.assertEqual(model.config.sdar_prefix_token_budget, 17)
         self.assertEqual(model.config.sdar_prefix_chunk_size, 9)
+
+    def test_short_prefix_disables_prefix_sparse(self):
+        model = patch_model(
+            _FakeSDAR(),
+            query_sparse=False,
+            prefix_sparse=True,
+            prefix_min_prefix_length=4,
+        )
+        with mock.patch("src.sparse.sdar_patch._compact_prefix_cache") as compact:
+            model.generate(
+                inputs=torch.tensor([[7, 8, 9]]),
+                gen_length=4,
+                block_length=4,
+                steps=4,
+                temperature=0,
+                threshold=0.85,
+                mask_id=15,
+                eos_id=14,
+            )
+
+        compact.assert_not_called()
 
     def test_losa_patch_does_not_register_parent_as_attention_child(self):
         class Attention(torch.nn.Module):
@@ -425,13 +447,15 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         self.assertEqual(transfer.tolist(), [[True, True, False]])
 
     def test_layer6_selector_matches_final_logit_postprocessing(self):
+        norm_mock = mock.Mock(side_effect=lambda hidden_states: hidden_states * 10)
+
         class ShiftLayer(torch.nn.Module):
             def forward(self, hidden_states, **kwargs):
                 return (hidden_states + 1,)
 
         class Base:
             layers = [ShiftLayer() for _ in range(7)]
-            norm = staticmethod(lambda hidden_states: hidden_states * 10)
+            norm = staticmethod(norm_mock)
             embed_tokens = staticmethod(
                 lambda input_ids: input_ids.float().unsqueeze(-1)
             )
@@ -485,6 +509,35 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         )
         self.assertEqual(select_positions.call_args.kwargs["threshold"], 0.6)
         self.assertEqual(select_positions.call_args.kwargs["entropy_budget"], 0.35)
+
+        norm_mock.reset_mock()
+        with mock.patch(
+            "src.sparse.sdar_patch._select_positions",
+            return_value=None,
+        ) as select_positions:
+            _sparse_cached_forward(
+                model,
+                input_ids,
+                torch.arange(2).unsqueeze(0),
+                (),
+                {
+                    "sparse_cache": mock.Mock(),
+                    "step": 0,
+                    "sequential_decoded": 0,
+                    "block_positions": torch.arange(2),
+                },
+                mask_id=15,
+                temperature=0.0,
+                top_k=0,
+                top_p=1.0,
+                strategy="sequential",
+            )
+
+        self.assertEqual(norm_mock.call_count, 1)
+        torch.testing.assert_close(
+            select_positions.call_args.args[1],
+            input_ids.float().unsqueeze(-1) + 6,
+        )
 
     def test_sparse_forward_keeps_layer6_logits_for_unselected_masks(self):
         class ShiftLayer(torch.nn.Module):

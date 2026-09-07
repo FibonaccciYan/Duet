@@ -89,6 +89,7 @@ def parse_args():
     parser.add_argument("--query_sparse", type=parse_bool, default=True)
     parser.add_argument("--query_losa_union", type=parse_bool, default=False)
     parser.add_argument("--prefix_sparse", type=parse_bool, default=None)
+    parser.add_argument("--prefix_min_prefix_length", type=int, default=None)
     parser.add_argument("--prefix_token_budget", type=int, default=256)
     parser.add_argument("--prefix_chunk_size", type=int, default=None)
     parser.add_argument("--losa", type=parse_bool, default=False)
@@ -160,6 +161,7 @@ def load_model_and_tokenizer(args):
             deep_only_transfer=args.sparse_dlm_deep_only_transfer,
             query_sparse=args.query_sparse,
             prefix_sparse=args.prefix_sparse,
+            prefix_min_prefix_length=args.prefix_min_prefix_length,
             prefix_token_budget=args.prefix_token_budget,
             prefix_chunk_size=args.prefix_chunk_size,
             losa=args.losa,

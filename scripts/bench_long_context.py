@@ -12,6 +12,7 @@ import math
 import os
 import random
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -63,6 +64,7 @@ def parse_args():
     )
     parser.add_argument("--losa-key-samples", type=int, default=32)
     parser.add_argument("--prefix-token-budget", type=int, default=256)
+    parser.add_argument("--prefix-min-prefix-length", type=int, default=None)
     parser.add_argument("--prefix-chunk-size", type=int, default=None)
     parser.add_argument("--query-ratio", type=float, default=None)
     parser.add_argument("--query-dense-threshold", type=int, default=None)
@@ -143,13 +145,14 @@ def load(args):
         deep_only_transfer=args.deep_only_transfer,
         query_sparse=query_sparse,
         prefix_sparse=prefix_sparse,
+        prefix_min_prefix_length=args.prefix_min_prefix_length,
         prefix_token_budget=args.prefix_token_budget,
         prefix_chunk_size=(args.prefix_chunk_size or 1024),
         losa=args.mode in {"losa", "combined"},
         losa_active_topk=args.losa_active_topk,
         losa_score_mode=args.losa_score_mode,
         losa_key_samples=args.losa_key_samples,
-        moe_expert_patch=not is_sdar,
+        moe_expert_patch=getattr(args, "moe_expert_patch", not is_sdar),
     )
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     return model, tokenizer
@@ -176,6 +179,19 @@ def exact_prompt(tokenizer, length, device):
 def checksum(tensor):
     data = tensor.detach().to(device="cpu", dtype=torch.int64).numpy().tobytes()
     return hashlib.sha256(data).hexdigest()[:16]
+
+
+def repository_state():
+    return {
+        "commit": subprocess.check_output(
+            ("git", "rev-parse", "HEAD"), cwd=REPO_ROOT, text=True
+        ).strip(),
+        "dirty": bool(
+            subprocess.check_output(
+                ("git", "status", "--porcelain"), cwd=REPO_ROOT, text=True
+            ).strip()
+        ),
+    }
 
 
 def generation_kwargs(args, tokenizer, input_ids):
@@ -214,6 +230,10 @@ def run_once(args, model, tokenizer, context_length):
     sequences = model.generate(**generation_kwargs(args, tokenizer, input_ids))
     torch.cuda.synchronize()
     elapsed = time.perf_counter() - started
+    if sequences.shape[-1] != args.gen_length:
+        raise RuntimeError(
+            f"expected {args.gen_length} generated tokens, got {sequences.shape[-1]}"
+        )
     return {
         "context_tokens": context_length,
         "prompt_tokens": prompt_length,
@@ -316,8 +336,27 @@ def main():
                     flush=True,
                 )
 
+    for context_length in args.contexts:
+        context_rows = [
+            row for row in results if row["context_tokens"] == context_length
+        ]
+        if len({row["input_checksum"] for row in context_rows}) != 1:
+            raise RuntimeError(f"input changed across runs at context {context_length}")
+        for mode in compared_modes:
+            mode_rows = [row for row in context_rows if row["mode"] == mode]
+            if len({row["output_checksum"] for row in mode_rows}) != 1:
+                raise RuntimeError(
+                    f"output changed across repeats for {mode} at context {context_length}"
+                )
+
     report = {
+        **repository_state(),
         "model": args.model,
+        "model_path": args.model_path or MODEL_PATHS[args.model],
+        "gpu": torch.cuda.get_device_name(model.device),
+        "gpu_uuid": str(torch.cuda.get_device_properties(model.device).uuid),
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda,
         "mode": args.mode,
         "dtype": "float16" if args.model == "sdar" else "bfloat16",
         "gen_length": args.gen_length,

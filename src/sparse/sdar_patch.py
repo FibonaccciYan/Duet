@@ -524,9 +524,15 @@ def _sparse_cached_forward(
             )
 
             if query_sparse and layer_idx == selection_layer:
+                selector_hidden = (
+                    hidden_states
+                    if strategy == "sequential"
+                    and selection_state.get("sequential_decoded") is not None
+                    else base.norm(hidden_states)
+                )
                 selected_positions = _select_positions(
                     model,
-                    base.norm(hidden_states),
+                    selector_hidden,
                     input_ids,
                     mask_id=mask_id,
                     ratio=model.config.sdar_sparse_dlm_ratio,
@@ -650,7 +656,10 @@ def _block_diffusion_generate(self, *args, **kwargs):
     prompt_length = input_ids.shape[1]
     stop_ids = _stop_ids(self, eos_id)
     query_sparse = self.config.sdar_query_sparse
-    prefix_sparse = self.config.sdar_prefix_sparse
+    prefix_sparse = (
+        self.config.sdar_prefix_sparse
+        and prompt_length >= self.config.sdar_prefix_min_prefix_length
+    )
     losa = self.config.sdar_losa
     prefix_token_budget = self.config.sdar_prefix_token_budget
     prefix_chunk_size = self.config.sdar_prefix_chunk_size
@@ -810,6 +819,7 @@ def patch_sdar_model(
     deep_only_transfer=False,
     query_sparse=True,
     prefix_sparse=False,
+    prefix_min_prefix_length=24576,
     prefix_token_budget=256,
     prefix_chunk_size=1024,
     losa=False,
@@ -824,6 +834,7 @@ def patch_sdar_model(
         or selection_interval <= 0
         or refresh_step < -2
         or selection_layer < 0
+        or prefix_min_prefix_length < 0
         or prefix_token_budget <= 0
         or prefix_chunk_size <= 0
         or losa_active_topk <= 0
@@ -846,6 +857,7 @@ def patch_sdar_model(
     model.config.sdar_sparse_dlm_deep_only_transfer = bool(deep_only_transfer)
     model.config.sdar_query_sparse = bool(query_sparse)
     model.config.sdar_prefix_sparse = bool(prefix_sparse)
+    model.config.sdar_prefix_min_prefix_length = int(prefix_min_prefix_length)
     model.config.sdar_prefix_token_budget = int(prefix_token_budget)
     model.config.sdar_prefix_chunk_size = int(prefix_chunk_size)
     model.config.sdar_losa = bool(losa)

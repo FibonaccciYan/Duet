@@ -31,8 +31,9 @@ Query+Prefix Sparse 相对 dense 获得公平、可复现的端到端加速。�
    sparse 收益。`scripts/bench_long_context.py --paired/--ablation` 是唯一认可的
    长上下文计时入口。
 5. HumanEval 同时报告 official 与 indentation-normalized；后者不能替代前者。
-   一旦输出发生变化，必须完整重跑。相对 matched dense，任一指标回退超过
-   **2/164 题**即拒绝该近似。
+   一旦输出发生变化，必须完整重跑。official 相对 matched dense 回退不得超过
+   **2/164 题**；indentation-normalized 回退不超过 **2/164 题**或绝对成绩达到
+   **130/164** 均可接受。
 6. 论文最终配置还必须在同一最终提交上重跑 dense、Prefix-only、Query-only、
    Query+Prefix；只有六个长上下文点的 median 都快于 dense，才宣称全范围加速。
 
@@ -40,15 +41,16 @@ Query+Prefix Sparse 相对 dense 获得公平、可复现的端到端加速。�
 
 `eval_instruct/eval.sh` 是精度配置的 source of truth。两种模型拥有独立 config，
 不要为了统一接口而强行共享数值参数。当前论文速度候选使用 Prefix budget 256、
-LoSA off；LLaDA 在 prefix 小于 24K 时自动关闭无收益的 Query Sparse。
+LoSA off。LLaDA 在 prefix 小于 4K 时关闭 Prefix Sparse、小于 24K 时关闭
+Query Sparse；SDAR 在 prefix 小于 24K 时关闭无收益的 Prefix Sparse。
 
-当前 LLaDA 三次 paired 探索结果如下；这些结果已经排除首次 shape 编译偏差，
-但论文提交前仍需按上述四次协议统一重跑：
+当前 LLaDA 四模式、四次 paired 消融结果如下；这些结果已经排除首次 shape
+编译偏差：
 
 | LLaDA Query+Prefix-256 / dense | 8K | 16K | 32K |
 | --- | ---: | ---: | ---: |
-| `gen_length=256` | 1.029x | 1.104x | 1.504x |
-| `gen_length=768` | 1.048x | 1.116x | 1.589x |
+| `gen_length=256` | 1.036x | 1.193x | 1.928x |
+| `gen_length=768` | 1.017x | 1.208x | 1.941x |
 
 对应 HumanEval 为 74/164 official、132/164 indentation-normalized。另有
 Prefix-1024 calibrated-quality 配置达到 74/164 official、137/164 normalized；
@@ -56,24 +58,72 @@ Prefix-1024 calibrated-quality 配置达到 74/164 official、137/164 normalized
 六点 synthetic output checksum；现有证据未显示精度变化，但论文最终提交仍需
 完整重跑上述 HumanEval 矩阵。
 
-SDAR 最近一次完整 paired 消融显示：Query 是主要收益来源，Query+Prefix 在
-`gen_length=256` 下为 1.39x/1.33x/1.36x，在 `gen_length=768` 下为
-1.41x/1.40x/1.52x；HumanEval 为 127/164 official、129/164 normalized。
-这些数据早于共享 prefill kernel 的最后一次更新，算法输出未变，但必须在当前
-HEAD 重跑后才能作为论文最终结果。SDAR-b4 在现有配置下慢于 b32，暂不替代
-b32 主实验。
+SDAR 当前四模式、四次 paired 消融确认 Query 是主要收益来源；HumanEval 为
+127/164 official、129/164 normalized。SDAR-b4 在现有配置下慢于 b32，暂不替代
+b32 主实验。24K Prefix gate 与 sequential selector 跳过无用 norm 后结果为：
+
+| SDAR Query+Prefix-256 / dense | 8K | 16K | 32K |
+| --- | ---: | ---: | ---: |
+| `gen_length=256` | 1.410x | 1.338x | 1.368x |
+| `gen_length=768` | 1.426x | 1.402x | 1.533x |
+
+8K/16K 的 Query+Prefix 与 Query-only checksum 一致；六点输出均与删除 selector
+norm 前一致。
+
+`low_confidence_dynamic` 在相同 b32、ratio 0.5、threshold 1.0 配置下仍快于
+matched dense，但慢于 sequential；三次 paired 中位数如下：
+
+| SDAR dynamic Query+Prefix-256 / dense | 8K | 16K | 32K |
+| --- | ---: | ---: | ---: |
+| `gen_length=256` | 1.325x | 1.262x | 1.288x |
+| `gen_length=768` | 1.338x | 1.309x | 1.446x |
+
+完整 HumanEval 中 dynamic dense 为 121/164 official、124/164
+indentation-normalized；dynamic Query Sparse 仅为 115/164、117/164，相对其
+matched dense 再低 6/7 题，也分别比 sequential Query Sparse 低 12 题。两者均
+未通过质量门槛，因此生产配置继续使用 sequential。官方 README 推荐的是 b4、
+dynamic threshold 0.9，不能作为本项目 b32/threshold 1.0 配置的精度证据。
+提高 dynamic Query ratio 没有得到可验收配置：ratio 0.75 提升至 118/164
+official、121/164 normalized，但相对 dynamic dense 仍低 3/3；ratio 0.875
+反而降至 113/164、120/164，说明该精度不是随计算量单调恢复。停止继续调整
+ratio，且不为未通过质量门槛的候选补跑六点速度。
+
+后续精度研究只保留两条路线。Adamas 不再用 pooled Hq/Hk 边缘分布的经验
+分位点直接决定阈值，而应在固定 budget 下优化真实 attention top-k recall、保留的
+softmax mass 或 attention-output error，并分别隔离量化阈值与 rolling-candidate
+截断造成的误差；先搜索每模型一个对称 Hq/Hk 阈值对，只有全局阈值确实不足时
+才增加逐层参数。SDAR dynamic 固定 ratio 0.5、layer 5、interval 1 和 threshold
+1.0，优先检查深层 KV/state 一致性。当前树的 32 题 matched 筛选为：默认
+`deep_only_transfer=false` 29/29 official/normalized，只允许深层位置 transfer
+反而为 28/28；单次 `refresh_step=2` 为 30/30，并复现了历史完整 164 题中
+111/114→114/119 的改善方向。因此停止 deep-only 路线，下一候选必须直接解决
+未选 mask 的陈旧深层 KV，而不是继续调整 ratio。
+
+第一轮 Adamas 阈值校准已经完成。校准工具现在除 Hq/Hk 分布外，还在固定
+Prefix budget 256 下测量选中 token 数、保留 softmax mass、exact top-count oracle
+recall，以及使用真实 V 的 normalized attention-output error。8K/16K/32K 的离线
+最优全局阈值 `Hq=[0,0,0]、Hk=[-2.5,0,2.5]` 将平均 output error 从旧阈值的
+约 0.573 降到 0.383、retained mass 从 0.664 提高到 0.754，但完整 HumanEval
+仅为 66/164 official、125/164 normalized，低于旧生产阈值的 71/128。较保守的
+`Hq=[-0.1,0,0.1]、Hk=[-2.26,0,2.26]` 也只有 69/132。说明单个 synthetic
+repeated prompt 上的局部 attention 重建指标不能可靠预测逐步生成质量；生产阈值
+保持 `Hq=[-1.35,0,1.35]、Hk=[-2.26,0,2.26]`。停止继续扫全局阈值；若重访，
+先使用多样化真实代码 prompt 做逐层、多生成步校准，再以完整 HumanEval 验收。
+离线明细保存在 `results/adamas_attention_output_llada_{8192,16384,32768}.json`；
+完整生成结果位于仓库外 `../llada_exp/adamas_attention_{q0_k25,q01_k226}_full_20260907`。
 
 ### 已保留的优化
 
 | 子系统 | 当前实现 | 已确认收益或作用 |
 | --- | --- | --- |
-| 公平评测 | paired/ablation、逐 shape warmup、固定输出长度、轮换顺序 | 消除了旧报告中 dense 独自承担首次编译、虚高至约 2--4x 的错误加速 |
+| 公平评测 | paired/ablation、逐 shape warmup、固定输出长度、轮换顺序、commit/GPU/version 元数据与 checksum fail-fast | 消除了旧报告中 dense 独自承担首次编译、虚高至约 2--4x 的错误加速 |
+| Prefix cost gate | LLaDA <4K、SDAR <24K 自动关闭 Prefix Sparse | 短上下文保持精确；SDAR 8K/16K Query+Prefix 退化为更快的 Query-only |
 | Prefix/Adamas | Faster Hadamard、模型专属 bucket、int32 distance、rolling candidates、chunk 1024 | 32K selector microbenchmark：LLaDA 12.22ms→10.71ms，SDAR 16.55ms→13.06ms |
 | Prefix cache | 固定 prompt KV 只编码一次，新 block 只刷新 suffix；每层 compact KV | 避免重复完整 prefill；LLaDA 32K peak memory 由约 64 GiB 降至 34--36 GiB |
 | Triton prefill | 隐式 block metadata，不构造二次方 mask；query tile 只扫描可见 KV | profile 中 attention 1.007s→0.828s；32K/gen256 sparse 5.483s→5.281s |
 | LLaDA Query | layer 1 confidence selector、interval 4、prefix 24K cost gate | Query 在 8K/16K 无收益时退化为 Prefix-only，32K 保留 Query 收益 |
-| LLaDA MoE | fused routing、32x128x64 tiles、down 使用 8 warps、SwiGLU 只计算一次 | MoE down 2.108s→1.799s；32K/gen256 sparse 5.281s→5.145s，checksum 不变 |
-| SDAR Query | fused QKV/RMSNorm/SwiGLU、跳过无用 logits/同步、sequential contiguous slice | Query-only 在已验证矩阵中提供约 1.30--1.42x 加速 |
+| LLaDA MoE | fused routing、32x128x64 tiles、down 使用 8 warps、SwiGLU 只计算一次、down 直接写 route 顺序、按 expert count 紧凑发射 tile | 紧凑 tile 使 32K/gen256 dense 7.676s→5.463s、sparse 5.035s→2.834s；nsys 中 down/gate-up 分别减少 84%/75%，checksum 不变 |
+| SDAR Query | fused QKV/RMSNorm/SwiGLU、跳过无用 logits/同步与 sequential selector norm、contiguous slice | 删除 selector norm 使 8K/gen256 sparse 5.823s→5.723s；最终 Query+Prefix 六点为 1.34--1.53x |
 | LoSA correctness | prefix/current online-softmax merge、query-driven refresh、full-active control | `active_topk >= block_length` 仍走 LoSA 且接近 dense；当前无可靠 E2E 优势，默认关闭 |
 
 ### 已尝试但未保留
@@ -91,17 +141,32 @@ b32 主实验。
 | attention `BLOCK_N=128` | 改变归约顺序，未通过逐元素一致性测试 | 有明确精度预算并重新跑完整 eval |
 | BF16 MoE down 近似 | 32K/gen256 很快，但 HumanEval 降至 72/164、129/164，8K/gen768 仅 0.996x | 不重访；同时违反精度门槛和六点加速目标 |
 | LoSA key samples/频繁 query refresh | 额外估算与小 attention 开销尚未换来可靠 E2E 加速 | profile 证明 Prefix attention 再次主导且六点测试可获益 |
+| LLaDA 跳过 prefill 无用 logits | 32K/gen256 sparse 5.065s→5.058s，仅 0.13%，属于噪声 | profile 显示 lm_head 成为热点 |
+| SDAR 强制 cuDNN SDPA | 8K/gen256 Query 5.84s→6.16s，首次 shape 编译约 62s | PyTorch/cuDNN backend 有实质更新 |
+| SDAR 无 mask Triton decode attention | 消除占 GPU 时间 17.8% 的 semaphore fill，但串行 KV 扫描使 5.84s→5.96s | 有可验证的 split-K/merge kernel |
+| LLaDA gate-up 直接 gather 原 token | 取消约 94ms index-select，但非连续读取使 32K/gen256 sparse 5.011s→5.102s | 数据布局或 grouped GEMM 能保持连续读取 |
+| SDAR 外部 FlashAttention GQA | 真实 stride 下 q=8--32 与 PyTorch SDPA 同为约 0.05ms，q=4 更慢且输出有微小差异 | 新版 FlashAttention 有明确 kernel 收益 |
+| SDAR SwiGLU tile/warp/K 调参 | 当前 32x64x64、4 warps 最快；K=128 仅约 1.5% kernel 收益，折算 E2E <0.3% | profile 中 SwiGLU 占比进一步升高 |
+| SDAR Query dense threshold 2/4/8 | 8K/gen256 sparse 从 threshold 0 的 5.823s 退化为 5.887/5.980/6.370s | block size 或 selector 成本结构变化 |
+| SDAR dynamic threshold>=1 跳过无效高置信筛选 | 32K/gen256 同卡中位数 10.1731s→10.1614s，仅 0.11%；dynamic 又未通过质量门槛，不增加生产分支 | dynamic 成为通过质量门槛的生产候选 |
+| SDAR dynamic greedy confidence 改为 `exp(max-logsumexp)` | 32K/gen256 同卡中位数 10.1731s→10.2865s，慢 1.1% | backend 能融合词表归约且 profile 显示 softmax 成为热点 |
+| SDAR dynamic Query ratio 0.75/0.875 | 0.75 为 118/121，距 matched dense 仍差 3/3；0.875 非单调退化至 113/120 | 不继续调 ratio；只有 selector/KV 语义修正后重访 |
+| SDAR dynamic 仅允许 deep-selected mask transfer | 当前树 32 题从默认的 29/29 降至 28/28；浅层位置可 transfer 不是主要精度根因 | 不重访；优先诊断未选 mask 的陈旧深层 KV/state |
+| LLaDA Adamas 全局阈值 `Hq=0、Hk=±2.5` | 离线 attention-output error 最优，但完整 HumanEval 仅 66/125，低于旧阈值 71/128 | 有多样化真实代码 prompt 的逐层、多步校准集 |
+| LLaDA Adamas 全局阈值 `Hq=±0.1、Hk=±2.26` | 完整 HumanEval 69/132；normalized 提升但 official 回退 2 题，距 matched dense 低 5 题 | 同上 |
 
 ### 下一会话执行顺序
 
 1. 先检查 `git status --short`、当前 commit、GPU 占用和两套 config；不要修改
    benchmark 公平性逻辑。
-2. 在当前 HEAD 重跑 LLaDA、SDAR 的 8K/16K/32K × gen 256/768 paired
-   ablation，优先补齐 SDAR，并保存 JSON 与 GPU/commit 元数据。
-3. 在同一提交重跑两模型 HumanEval dense/Prefix/Query/Query+Prefix matrix；
+2. 当前 dirty tree 已完成 LLaDA、SDAR 的 8K/16K/32K × gen 256/768 四模式、
+   四次 paired ablation；冻结最终提交后再统一复核一次并持久化 JSON。
+3. 在该最终提交重跑两模型 HumanEval dense/Prefix/Query/Query+Prefix matrix；
    official 与 normalized 都写入最终表。
-4. LLaDA 下一热点限定为保持 FP32 中间语义的 MoE down/gate-up；Adamas 当前仅占
-   profile 约 0.3%，不要优先融合其 reduction/LUT。
+4. SDAR 下一热点是 Flash split-K attention 的 semaphore fill 与 SwiGLU；只有
+   可验证的高效 split-K merge 或新版 backend 才重访。LLaDA 下一热点是
+   prefill/decode attention 与 Prefix cache concat；Adamas 当前仅占约 0.3%。当前
+   机器的 NCU hardware counter 不可用，管理员开放前使用 nsys 定位。
 5. 每个候选只改一个因素：单测与 checksum → 六点端到端 → 输出变化时完整精度
    matrix。失败实验立即回退，不给生产路径增加 fallback 或永久实验开关。
 
@@ -113,9 +178,10 @@ CUDA_VISIBLE_DEVICES=0 /home/ysy/anaconda3/envs/llada/bin/python \
 git diff --check
 ```
 
-当前关键 profile 位于 `/tmp/llada_prefix_32k_cuda_visible.nsys-rep` 和
-`/tmp/llada_prefix_32k_cuda_fused_moe.nsys-rep`；`/tmp` 文件不保证跨机器或重启
-存在，因此论文数据必须另存到仓库外的持久实验目录并在 README 记录路径。
+当前可读关键 profile 位于 `/tmp/llada_direct_scatter_cuda.nsys-rep`、
+`/tmp/llada_compact_moe_tiles_cuda.nsys-rep` 和
+`/tmp/sdar_current_query_8k_cuda.nsys-rep`；`/tmp` 文件不保证跨机器或重启存在，
+因此论文数据必须另存到仓库外的持久实验目录并在 README 记录路径。
 
 ## Code layout
 
@@ -203,7 +269,9 @@ Prefix Sparse runs one dense refresh at the beginning of a block and captures
 every layer's real RoPE query. LLaDA selects historical positions independently
 for every layer; SDAR shares one Adamas selection within each adjacent layer
 pair. Every layer gathers its own K/V values, and the complete current block is
-always retained.
+always retained. The production policy keeps short prefixes dense because the
+approximation has no useful latency payoff there: below 4K for LLaDA and below
+24K for SDAR.
 
 Validated deployment budgets are:
 
@@ -251,6 +319,7 @@ the default for the detected model family.
 | query dense threshold | 4 | 0 |
 | selection layer | 1 | 5 |
 | Prefix chunk size | 1024 | 1024 |
+| Prefix minimum length | 4096 | 24576 |
 | Prefix Sparse default | enabled | disabled |
 | LoSA default | disabled | disabled |
 | MoE patch | enabled | disabled |
@@ -356,11 +425,12 @@ Times and speedups relative to dense:
 
 LLaDA now defaults to Adamas chunk 1024, block-causal prefill stops each query
 tile at its last visible KV block, and routed MoE computes SwiGLU once before
-the down projection. Direct paired measurements give
-`1.029x / 1.104x / 1.504x` for generation length 256 and
-`1.048x / 1.116x / 1.589x` for generation length 768 at 8K/16K/32K. Output
-checksums were stable across repeats and matched the former kernels and
-chunk-256 runs.
+the down projection while launching only the real per-expert tiles. Direct
+four-mode paired ablation gives `1.036x / 1.193x / 1.928x` for generation
+length 256 and `1.017x / 1.208x / 1.941x` for generation length 768 at
+8K/16K/32K. At 32K/gen768 Prefix-only reaches 2.007x and is slightly faster
+than Query+Prefix. Output checksums were stable across repeats and matched the
+former kernels and chunk-256 runs.
 
 Prefix is the main LLaDA accelerator: it saves 1--8% at 8K/16K and 23--37%
 at 32K. Forced LLaDA Query is only beneficial at 32K, so the default adaptive

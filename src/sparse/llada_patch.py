@@ -739,6 +739,10 @@ def _block_cache_generate(self, *args, **kwargs):
     prefix_chunk_size = self.config.llada_prefix_chunk_size
     prefill_blocks = prompt_length // block_length
     fixed_prefix_length = prefill_blocks * block_length
+    prefix_sparse = (
+        prefix_sparse
+        and fixed_prefix_length >= self.config.llada_prefix_min_prefix_length
+    )
     query_sparse = (
         query_sparse
         and fixed_prefix_length >= self.config.llada_query_min_prefix_length
@@ -943,6 +947,7 @@ def patch_llada_model(
     selection_layer=1,
     query_sparse=True,
     prefix_sparse=True,
+    prefix_min_prefix_length=4096,
     prefix_token_budget=256,
     prefix_chunk_size=1024,
     losa=False,
@@ -956,6 +961,7 @@ def patch_llada_model(
         or selection_interval <= 0
         or prefix_token_budget <= 0
         or prefix_chunk_size <= 0
+        or prefix_min_prefix_length < 0
         or query_min_prefix_length < 0
         or losa_active_topk <= 0
         or losa_score_mode not in {"query", "key_diag"}
@@ -979,6 +985,7 @@ def patch_llada_model(
     model.config.llada_query_selection_layer = int(selection_layer)
     model.config.llada_query_sparse = bool(query_sparse)
     model.config.llada_prefix_sparse = bool(prefix_sparse)
+    model.config.llada_prefix_min_prefix_length = int(prefix_min_prefix_length)
     model.config.llada_prefix_token_budget = int(prefix_token_budget)
     model.config.llada_prefix_chunk_size = int(prefix_chunk_size)
     model.config.llada_losa = bool(losa)
