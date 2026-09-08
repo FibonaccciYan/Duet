@@ -35,6 +35,13 @@ dense 与 Query 平均每次约为 50.6 与 50.2 ms；1.35 倍端到端加速主
 27 次对 45 次调用。32K 时情况反转为 44 次对 31 次，因此 Query 变为 0.84 倍。
 Prefix/combined 的单次 cached-forward 则稳定在约 24--25 ms。
 
+后续门控搜索将 LLaDA 的 `query_dense_threshold` 从 4 提至 20：32K/生成 256
+的三次中位数从 2.880 秒降至 2.764 秒（1.042 倍），生成 768 从 4.897 秒
+降至 4.798 秒（1.021 倍）。阶段计时显示 cached-forward 从 26 次、645 ms
+降至 21 次、514 ms；dense prefill 与 Prefix compaction 不变。LongBench 五任务
+50 题中有 6 题触发长上下文 Query，整体 F1 从 0.5243 升至 0.5348，EM 均为
+0.32，因此默认值更新为 20。
+
 ### SDAR
 
 | 上下文 | dense / query / prefix / combined 秒 | Query 加速比 | Prefix 加速比 | Combined 加速比 |

@@ -21,7 +21,7 @@ case "${model_type}" in
     eos_id="${EOS_ID:-156892}"
     default_ratio=0.7
     default_selection_interval=4
-    default_query_dense_threshold=4
+    default_query_dense_threshold=20
     default_refresh_step=2
     default_selection_layer=1
     default_prefix_min_length=4096

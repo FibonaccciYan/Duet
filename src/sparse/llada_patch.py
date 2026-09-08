@@ -943,7 +943,7 @@ def patch_llada_model(
     ratio=0.5,
     top_k=64,
     selection_interval=4,
-    query_dense_threshold=4,
+    query_dense_threshold=20,
     query_min_prefix_length=24576,
     selection_layer=1,
     query_sparse=True,

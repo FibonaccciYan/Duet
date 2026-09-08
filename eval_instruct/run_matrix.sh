@@ -45,6 +45,7 @@ for method in "${methods[@]}"; do
       [[ -z "${LIMIT:-}" ]] || args+=(--limit "${LIMIT}")
       [[ -z "${DTYPE:-}" ]] || args+=(--dtype "${DTYPE}")
       [[ -z "${THRESHOLD:-}" ]] || args+=(--threshold "${THRESHOLD}")
+      [[ -z "${QUERY_DENSE_THRESHOLD:-}" ]] || args+=(--query_dense_threshold "${QUERY_DENSE_THRESHOLD}")
       [[ -z "${EDITING_THRESHOLD:-}" ]] || args+=(--editing_threshold "${EDITING_THRESHOLD}")
       [[ -z "${REMASKING_STRATEGY:-}" ]] || args+=(--remasking_strategy "${REMASKING_STRATEGY}")
       case "${MOE_EXPERT_PATCH:-}" in

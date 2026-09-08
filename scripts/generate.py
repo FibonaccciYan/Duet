@@ -143,7 +143,7 @@ def load_model_and_tokenizer(args):
         args.sparse_dlm_selection_interval or (1 if is_sdar else 4)
     )
     if args.query_dense_threshold is None:
-        args.query_dense_threshold = 0 if is_sdar else 4
+        args.query_dense_threshold = 0 if is_sdar else 20
     args.prefix_sparse = (
         not is_sdar if args.prefix_sparse is None else args.prefix_sparse
     )

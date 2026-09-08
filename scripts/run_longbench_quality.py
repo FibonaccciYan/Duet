@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_context_tokens", type=int, default=32768)
     parser.add_argument("--block_length", type=int, default=32)
     parser.add_argument("--steps", type=int, default=32)
+    parser.add_argument("--query_dense_threshold", type=int)
     parser.add_argument("--focus_alpha", type=float, default=1.5)
     parser.add_argument("--losa_token_budget", type=int, default=256)
     parser.add_argument("--threshold", type=float)
@@ -145,6 +146,8 @@ def main() -> int:
     )
     moe_patch = args.family == "llada" if args.moe_expert_patch is None else args.moe_expert_patch
     options = {"moe_expert_patch": moe_patch} if args.method in {"sparse", "dense"} else {}
+    if args.method == "sparse" and args.query_dense_threshold is not None:
+        options["query_dense_threshold"] = args.query_dense_threshold
     if args.method == "focus":
         options["alpha"] = args.focus_alpha
     elif args.method == "losa":
