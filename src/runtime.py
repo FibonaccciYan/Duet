@@ -20,7 +20,7 @@ def patch_method(model, method: MethodKind, model_name: str = "auto", **kwargs):
     if method == "sparse":
         return patch_sparse_model(model, model_name=model_name, **kwargs)
     if method == "dense":
-        return patch_dense_model(model, model_name=model_name)
+        return patch_dense_model(model, model_name=model_name, **kwargs)
     if method == "focus":
         return patch_focus_model(model, model_name=model_name, **kwargs)
     if method == "losa":

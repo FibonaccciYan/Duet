@@ -17,6 +17,7 @@ from src.sparse.llada_patch import (
     _cached_forward,
     _select_positions,
     _transfer_tokens,
+    _trim_to_first_eos,
     patch_llada_model as patch_model,
     patch_moe_experts,
 )
@@ -86,6 +87,11 @@ def _torch_kv_copy(key_cache, value_cache, positions, key, value, prefix_length)
 
 
 class BlockCacheSparsePatchTest(unittest.TestCase):
+    def test_trim_to_first_eos_is_independent_of_early_stop(self):
+        generated = torch.tensor([[5, 126, 7]])
+        self.assertEqual(_trim_to_first_eos(generated, 126).tolist(), [[5, 126]])
+        self.assertIs(_trim_to_first_eos(generated, 99), generated)
+
     def test_prefix_compaction_selects_indices_per_layer(self):
         cache = DynamicCache.from_legacy_cache(
             tuple(

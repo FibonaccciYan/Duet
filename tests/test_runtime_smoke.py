@@ -10,6 +10,7 @@ from unittest.mock import patch
 import torch
 
 import src.runtime as runtime
+from src.dense import patch_model as patch_dense_model
 
 from src.focus import (
     attention_importance,
@@ -41,6 +42,32 @@ class IntegratedRuntimeSmokeTest(unittest.TestCase):
             )
         patch_losa.assert_called_once_with(
             model, model_name="llada", token_budget=256
+        )
+
+    def test_method_dispatch_forwards_dense_options(self):
+        model = object()
+        with patch.object(runtime, "patch_dense_model", return_value=model) as patch_dense:
+            self.assertIs(
+                patch_method(model, "dense", model_name="llada", moe_expert_patch=True),
+                model,
+            )
+        patch_dense.assert_called_once_with(
+            model, model_name="llada", moe_expert_patch=True
+        )
+
+    def test_dense_patch_disables_all_sparse_attention_once(self):
+        model = types.SimpleNamespace(
+            config=types.SimpleNamespace(model_type="llada2_moe")
+        )
+        with patch("src.sparse.patch_model") as patch_sparse:
+            patch_dense_model(model, model_name="llada", moe_expert_patch=True)
+        patch_sparse.assert_called_once_with(
+            model,
+            model_name="llada",
+            query_sparse=False,
+            prefix_sparse=False,
+            losa=False,
+            moe_expert_patch=True,
         )
 
     def test_focus_exposes_sparse_compatible_patch_entrypoint(self):
@@ -134,6 +161,23 @@ class IntegratedRuntimeSmokeTest(unittest.TestCase):
         )
         self.assertEqual(retained.positions.tolist(), [0, 1, 2, 3])
         torch.testing.assert_close(retained.logits, dense.logits, atol=1e-6, rtol=1e-5)
+
+        with patch(
+            "src.focus.model.select_retained_positions",
+            return_value=torch.tensor([1, 3]),
+        ):
+            evicted = focus_forward(
+                model,
+                family="llada",
+                input_ids=tokens,
+                position_ids=positions,
+                mask_id=63,
+                alpha=1,
+                average_decoded_tokens=1,
+                block_progress=3,
+            )
+        self.assertEqual(evicted.positions.tolist(), [1, 3])
+        self.assertEqual(evicted.logits.shape[1], 2)
 
     def test_losa_step_shapes(self):
         q = torch.randn(4, 4, 8)

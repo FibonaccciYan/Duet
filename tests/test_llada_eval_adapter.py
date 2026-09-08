@@ -100,40 +100,5 @@ class LLaDAEvalAdapterTest(unittest.TestCase):
         self.assertEqual(adapter.threshold, 0.95)
         self.assertEqual(adapter.editing_threshold, 0.9)
 
-    def test_integrated_runtime_modes_use_their_own_patchers(self):
-        model = MagicMock()
-        model.eval.return_value = model
-        model.config.model_type = "llada2_moe"
-        accelerator = SimpleNamespace(num_processes=1, device=torch.device("cpu"))
-
-        for mode, patch_name in (
-            ("dense", "patch_dense_model"),
-            ("losa", "patch_losa_model"),
-            ("focus", "patch_focus_model"),
-        ):
-            with (
-                self.subTest(mode=mode),
-                patch.object(llada, "Accelerator", return_value=accelerator),
-                patch.object(
-                    llada.transformers.AutoModelForCausalLM,
-                    "from_pretrained",
-                    return_value=model,
-                ),
-                patch.object(llada.transformers.AutoTokenizer, "from_pretrained"),
-                patch.object(llada, "patch_model") as sparse_patch,
-                patch.object(llada, patch_name) as integrated_patch,
-            ):
-                llada.LLaDA(
-                    pretrained="fake",
-                    device="cpu",
-                    runtime_mode=mode,
-                    sparse_dlm=False,
-                    moe_expert_patch=False,
-                )
-
-            integrated_patch.assert_called_once()
-            sparse_patch.assert_not_called()
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -158,8 +158,6 @@ def focus_forward(
                 average_decoded_tokens=average_decoded_tokens,
                 block_progress=block_progress,
             )
-            # Layer one must run on the complete block.  Eviction applies to
-            # its output and therefore only affects layers two and later.
             hidden_states = hidden_states.index_select(1, selected_positions)
 
     hidden_states = base.norm(hidden_states)

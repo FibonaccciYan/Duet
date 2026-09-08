@@ -9,10 +9,6 @@ from src.losa.generation import (
     load_model_and_tokenizer,
     set_seed,
 )
-try:  # pragma: no cover - optional packed MoE backend
-    from src.losa.moe_patch import patch_moe_experts
-except Exception:  # pragma: no cover
-    patch_moe_experts = None
 
 
 DEFAULT_MODEL_PATHS = {
@@ -41,15 +37,14 @@ def patch_model(
     model: Any,
     model_name: str = "auto",
     *,
-    moe_expert_patch: bool = True,
+    moe_expert_patch: bool = False,
     **_: Any,
 ):
     """Install the dense baseline using the same ``patch_model`` entry point as sparse.
 
-    The trusted sparse runtime supplies the cache-efficient block driver for
-    both families with every approximation disabled.  This preserves dense
-    attention while avoiding the quadratic attention mask and full-vocabulary
-    prompt logits that make the checkpoint's monolithic 32K path run OOM.
+    Use the shared block-cache driver with every approximation disabled. This
+    keeps attention dense without the checkpoint decoder's quadratic mask and
+    full-vocabulary prompt logits at long context lengths.
     """
     family = _resolve_family(model, model_name)
     from src.sparse import patch_model as patch_sparse_model
@@ -72,7 +67,7 @@ class DenseRuntime:
     model_path: str | None = None
     dtype: str | None = None
     attn_implementation: str = "sdpa"
-    moe_expert_patch: bool = True
+    moe_expert_patch: bool = False
     model: Any | None = field(init=False, default=None)
     tokenizer: Any | None = field(init=False, default=None)
     moe_patch_report: Any | None = field(init=False, default=None)
@@ -91,10 +86,9 @@ class DenseRuntime:
             model_name=self.family,
             moe_expert_patch=self.moe_expert_patch,
         )
-        if self.moe_expert_patch:
-            if patch_moe_experts is None:
-                raise RuntimeError("the optional Triton MoE backend is unavailable")
-            self.moe_patch_report = patch_moe_experts(self.model, family=self.family)
+        self.moe_patch_report = getattr(
+            self.model, "_llada_moe_expert_patch_count", None
+        )
         return self.model, self.tokenizer
 
     def generate(self, inputs: torch.Tensor, **kwargs):

@@ -35,16 +35,27 @@ BENCHMARK=mmlu bash eval_instruct/eval.sh
 BENCHMARK=all bash eval_instruct/eval.sh
 ```
 
-Run the complete four-method, four-benchmark matrix sequentially:
+Run the complete four-method, five-benchmark matrix sequentially:
 
 ```bash
 bash eval_instruct/run_matrix.sh
 MODEL_TYPE=sdar bash eval_instruct/run_matrix.sh
 ```
 
+The fifth benchmark is a five-task LongBench QA subset (`hotpotqa`, `triviaqa`,
+`narrativeqa`, `qasper`, and `multifieldqa_en`). Point `LONGBENCH_DATA` at a
+directory containing those JSONL files; each record needs `prompt` and
+`answers` (or `answer`). Its `predictions.jsonl` supports `--resume_from`, and
+`report.json` contains per-task and overall token-F1/exact-match scores.
+
 `METHODS` and `BENCHMARKS` accept space-separated subsets. `DRY_RUN=true`
 prints the selected jobs. A `.done` marker is written only after each job and
-HumanEval post-processing both succeed.
+HumanEval post-processing both succeed. For example:
+
+```bash
+LONGBENCH_DATA=/path/to/longbench BENCHMARKS=longbench LIMIT=1 \
+  bash eval_instruct/run_matrix.sh
+```
 
 Outputs default to `../llada_exp/default` (that is,
 `/data0/ysy/sparse/llada_exp/default`). Set a directory name relative to
