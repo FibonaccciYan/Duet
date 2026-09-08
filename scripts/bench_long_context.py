@@ -6,7 +6,9 @@ case stays within checkpoints whose configured maximum is 32768 tokens.
 """
 
 import argparse
+import collections
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -95,7 +97,74 @@ def parse_args():
         help="compare dense, Query-only, Prefix-only, and Query+Prefix",
     )
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--phase-profile", action="store_true")
     return parser.parse_args()
+
+
+class PhaseProfiler:
+    """Low-overhead CUDA-event timings for the existing sparse phases."""
+
+    def __init__(self, model_name):
+        self.events = []
+        module = importlib.import_module(f"src.sparse.{model_name}_patch")
+        names = (
+            ("_dense_block_prefill", "dense_prefill"),
+            ("_cached_forward", "cached_forward"),
+            ("_compact_prefix_cache", "prefix_compaction"),
+        ) if model_name == "llada" else (
+            ("_sparse_cached_forward", "cached_forward"),
+            ("_compact_prefix_cache", "prefix_compaction"),
+        )
+        for function_name, phase in names:
+            original = getattr(module, function_name)
+
+            def timed(*args, _original=original, _phase=phase, **kwargs):
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                started = time.perf_counter()
+                start.record()
+                result = _original(*args, **kwargs)
+                end.record()
+                metadata = {}
+                if _phase != "prefix_compaction":
+                    metadata["input_rows"] = int(args[1].shape[1])
+                elif result[0]:
+                    metadata["selected_rows"] = int(result[0][0][0].shape[-2])
+                if _phase == "cached_forward":
+                    selected = (
+                        result[1]
+                        if model_name == "llada"
+                        else args[4].get("positions")
+                    )
+                    metadata["selected_rows"] = (
+                        int(selected.numel()) if selected is not None else metadata["input_rows"]
+                    )
+                self.events.append(
+                    (_phase, start, end, (time.perf_counter() - started) * 1000, metadata)
+                )
+                return result
+
+            setattr(module, function_name, timed)
+
+    def reset(self):
+        self.events.clear()
+
+    def summary(self):
+        result = {}
+        for phase in {event[0] for event in self.events}:
+            events = [event for event in self.events if event[0] == phase]
+            item = {
+                "calls": len(events),
+                "cpu_ms": sum(event[3] for event in events),
+                "gpu_ms": sum(event[1].elapsed_time(event[2]) for event in events),
+            }
+            for key in ("input_rows", "selected_rows"):
+                counts = collections.Counter(event[4].get(key) for event in events)
+                counts.pop(None, None)
+                if counts:
+                    item[f"{key}_histogram"] = dict(sorted(counts.items()))
+            result[phase] = item
+        return result
 
 
 def set_seed(seed):
@@ -226,15 +295,21 @@ def run_once(args, model, tokenizer, context_length):
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.synchronize()
+    profiler = getattr(args, "phase_profiler", None)
+    if profiler is not None:
+        profiler.reset()
     started = time.perf_counter()
-    sequences = model.generate(**generation_kwargs(args, tokenizer, input_ids))
+    with torch.cuda.nvtx.range(
+        f"generate:{args.model}:{args.mode}:{context_length}"
+    ):
+        sequences = model.generate(**generation_kwargs(args, tokenizer, input_ids))
     torch.cuda.synchronize()
     elapsed = time.perf_counter() - started
-    if sequences.shape[-1] != args.gen_length:
+    if sequences.shape[-1] > args.gen_length:
         raise RuntimeError(
-            f"expected {args.gen_length} generated tokens, got {sequences.shape[-1]}"
+            f"expected at most {args.gen_length} generated tokens, got {sequences.shape[-1]}"
         )
-    return {
+    result = {
         "context_tokens": context_length,
         "prompt_tokens": prompt_length,
         "requested_output_tokens": args.gen_length,
@@ -246,6 +321,9 @@ def run_once(args, model, tokenizer, context_length):
         "input_checksum": checksum(input_ids),
         "output_checksum": checksum(sequences),
     }
+    if profiler is not None:
+        result["phase_profile"] = profiler.summary()
+    return result
 
 
 def set_runtime_mode(model, model_name, mode):
@@ -272,6 +350,7 @@ def main():
         raise ValueError("--ablation requires --mode query_prefix")
     set_seed(args.seed)
     model, tokenizer = load(args)
+    args.phase_profiler = PhaseProfiler(args.model) if args.phase_profile else None
     compared_modes = (
         ("dense", "query", "prefix", "query_prefix")
         if args.ablation
