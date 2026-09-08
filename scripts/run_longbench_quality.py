@@ -43,6 +43,12 @@ def args() -> argparse.Namespace:
     p.add_argument("--losa_token_budget", type=int, default=16)
     p.add_argument("--focus_alpha", type=float, default=1.5)
     p.add_argument("--moe_expert_patch", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--threshold", type=float, default=None,
+                   help="denoise threshold (default: llada 0.7 Q-Mode, sdar 0.95)")
+    p.add_argument("--editing_threshold", type=float, default=None,
+                   help="LLaDA editing threshold (default: 0.5 Q-Mode)")
+    p.add_argument("--remasking_strategy", type=str, default=None,
+                   help="SDAR remasking strategy (default: low_confidence_static)")
     p.add_argument("--dtype", choices=("bfloat16", "float16", "float32"), default=None)
     p.add_argument("--resume_from", type=Path, default=None,
                    help="JSONL file with completed rows; matching (task, index) pairs are skipped")
@@ -125,15 +131,20 @@ def main() -> int:
             ids, truncated = truncate_middle(ids, budget)
             ids = ids.to(model.device)
             started = time.perf_counter()
+            threshold = a.threshold if a.threshold is not None else (
+                0.95 if a.family == "sdar" else 0.7)
             with torch.inference_mode():
                 result = runtime.generate(
                     ids, gen_length=gen_length, block_length=a.block_length,
-                    steps=a.steps, temperature=0.0, threshold=(0.85 if a.family == "sdar" else 0.95),
+                    steps=a.steps, temperature=0.0, threshold=threshold,
                     mask_id=(tokenizer.mask_token_id or 151669) if a.family == "sdar" else 156895,
                     eos_id=None if a.family == "sdar" else 156892,
                     eos_early_stop=True,
-                    **({"remasking_strategy": "sequential"} if a.family == "sdar" else
-                       {"editing_threshold": 0.9, "num_to_transfer": 1}),
+                    **({"remasking_strategy": a.remasking_strategy or "low_confidence_static"}
+                       if a.family == "sdar" else
+                       {"editing_threshold": a.editing_threshold
+                        if a.editing_threshold is not None else 0.5,
+                        "num_to_transfer": 1}),
                 )
             decoded = tokenizer.decode(result.tokens[0], skip_special_tokens=True)
             row = {
@@ -150,12 +161,18 @@ def main() -> int:
                       "max_context_tokens": a.max_context_tokens,
                       "truncation": "drop_middle_keep_head_tail",
                       "moe_expert_patch": a.moe_expert_patch,
+                      "threshold": threshold,
                       "data_dir": str(a.data_dir), "resumed": len(completed) > 0,
                       "rows": rows}
             (a.output_dir / "report.json").write_text(
                 json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     report = {"family": a.family, "mode": a.mode, "max_context_tokens": a.max_context_tokens,
               "truncation": "drop_middle_keep_head_tail", "moe_expert_patch": a.moe_expert_patch,
+              "threshold": threshold, "editing_threshold": (
+                  a.editing_threshold if a.editing_threshold is not None else 0.5)
+              if a.family == "llada" else None,
+              "remasking_strategy": a.remasking_strategy or "low_confidence_static"
+              if a.family == "sdar" else None,
               "data_dir": str(a.data_dir), "resumed": len(completed) > 0,
               "skipped": skipped, "rows": rows}
     (a.output_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

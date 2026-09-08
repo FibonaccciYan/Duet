@@ -690,6 +690,20 @@ def _cached_forward(
     )
 
 
+def _trim_to_first_eos(generated: torch.Tensor, eos_id: int) -> torch.Tensor:
+    """Trim to the first eos token, mirroring the official generate tail.
+
+    The official LLaDA 2.1 generate unconditionally truncates the generated
+    region at the first eos (modeling_llada2_moe.py:1423-1434), independent of
+    eos_early_stop; eos_early_stop only enables early termination between
+    blocks.
+    """
+    positions = (generated[0] == eos_id).nonzero(as_tuple=True)[0]
+    if len(positions):
+        return generated[:, : positions[0].item() + 1]
+    return generated
+
+
 @torch.inference_mode()
 def _block_cache_generate(self, *args, **kwargs):
     inputs = kwargs.pop("inputs", args[0] if args else None)
@@ -850,7 +864,10 @@ def _block_cache_generate(self, *args, **kwargs):
         del dense_outputs
         selection_state = {"positions": None, "step": 0, "sparse_cache": sparse_cache}
         post_steps = 0
-        max_iterations = max(steps, block_length) + max_post_steps
+        # Official generate uses an unbounded while-loop; the worst case is 32
+        # mask-clearing rounds + (max_post_steps + 1) post rounds = 49
+        # iterations, so range(1, max_iterations) must admit 49.
+        max_iterations = max(steps, block_length) + max_post_steps + 2
         for _ in range(1, max_iterations):
             old_block_tokens = x[:, block_start:block_end].clone()
             active_block_mask = old_block_tokens == mask_id
@@ -930,11 +947,7 @@ def _block_cache_generate(self, *args, **kwargs):
                 break
 
     generated = x[:, prompt_length : prompt_length + gen_length]
-    if eos_early_stop:
-        eos_positions = (generated[0] == eos_id).nonzero(as_tuple=True)[0]
-        if len(eos_positions):
-            generated = generated[:, : eos_positions[0].item() + 1]
-    return generated
+    return _trim_to_first_eos(generated, eos_id)
 
 
 def patch_llada_model(
