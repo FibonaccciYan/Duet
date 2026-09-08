@@ -4,11 +4,28 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .dense.api import DenseRuntime
+from .dense.api import patch_model as patch_dense_model
 from .focus.api import FocusRuntime
+from .focus.api import patch_model as patch_focus_model
 from .losa.api import LoSARuntime
+from .losa.api import patch_model as patch_losa_model
+from .sparse.api import patch_model as patch_sparse_model
 
 
 RuntimeKind = Literal["dense", "losa", "focus"]
+MethodKind = Literal["sparse", "dense", "focus", "losa"]
+
+
+def patch_method(model, method: MethodKind, model_name: str = "auto", **kwargs):
+    if method == "sparse":
+        return patch_sparse_model(model, model_name=model_name, **kwargs)
+    if method == "dense":
+        return patch_dense_model(model, model_name=model_name)
+    if method == "focus":
+        return patch_focus_model(model, model_name=model_name, **kwargs)
+    if method == "losa":
+        return patch_losa_model(model, model_name=model_name, **kwargs)
+    raise ValueError(f"unknown method: {method}")
 
 
 def load_runtime(kind: RuntimeKind, **kwargs):

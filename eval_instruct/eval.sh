@@ -10,16 +10,21 @@ model_type="${MODEL_TYPE:-llada}"
 port="${MAIN_PROCESS_PORT:-12335}"
 benchmark="${BENCHMARK:-gsm8k}"
 sparse_dlm="${SPARSE_DLM:-true}"
-runtime_mode="${RUNTIME_MODE:-sparse}"
+method="${METHOD:-}"
 case "${model_type}" in
   llada)
     default_model=/data0/ysy/models/LLaDA2.1-mini
     default_python=/home/ysy/anaconda3/envs/llada/bin/python
     block_length="${BLOCK_LENGTH:-32}"
     steps="${STEPS:-32}"
-    threshold="${THRESHOLD:-0.5}"
     mask_id="${MASK_ID:-156895}"
     eos_id="${EOS_ID:-156892}"
+    default_ratio=0.7
+    default_selection_interval=4
+    default_query_dense_threshold=4
+    default_refresh_step=2
+    default_selection_layer=1
+    default_prefix_min_length=4096
     default_prefix_chunk_size=1024
     ;;
   sdar)
@@ -27,8 +32,13 @@ case "${model_type}" in
     default_python=/home/ysy/anaconda3/envs/dream/bin/python
     block_length="${BLOCK_LENGTH:-32}"
     steps="${STEPS:-32}"
-    threshold="${THRESHOLD:-1.0}"
     mask_id="${MASK_ID:-151669}"
+    default_ratio=0.5
+    default_selection_interval=1
+    default_query_dense_threshold=0
+    default_refresh_step=-1
+    default_selection_layer=5
+    default_prefix_min_length=24576
     default_prefix_chunk_size=1024
     ;;
   *)
@@ -37,14 +47,39 @@ case "${model_type}" in
     ;;
 esac
 
-case "${runtime_mode}" in
-  sparse|dense|losa|focus)
-    ;;
+if [[ -z "${method}" ]]; then
+  case "${sparse_dlm,,}" in
+    1|true|yes|y) method=sparse ;;
+    0|false|no|n) method=dense ;;
+    *)
+      echo "Unsupported SPARSE_DLM value: ${sparse_dlm}" >&2
+      exit 2
+      ;;
+  esac
+fi
+case "${method}" in
+  sparse|dense|focus|losa) ;;
   *)
-    echo "Unsupported RUNTIME_MODE: ${runtime_mode} (expected sparse, dense, losa, or focus)" >&2
+    echo "Unsupported METHOD: ${method} (expected sparse, dense, focus, or losa)" >&2
     exit 2
     ;;
 esac
+
+if [[ "${method}" == "sparse" ]]; then
+  default_llada_threshold=0.5
+  default_sdar_threshold=1.0
+  default_editing_threshold=0.0
+  default_sdar_remasking=sequential
+else
+  default_llada_threshold=0.95
+  default_sdar_threshold=0.85
+  default_editing_threshold=0.9
+  if [[ "${method}" == "focus" ]]; then
+    default_sdar_remasking=low_confidence_dynamic
+  else
+    default_sdar_remasking=sequential
+  fi
+fi
 model="${MODEL:-${default_model}}"
 python_bin="${PYTHON:-${default_python}}"
 query_sparse="${QUERY_SPARSE:-true}"
@@ -77,18 +112,28 @@ default_output_root="${repo_root}/../${model_type}_exp/${output_path}"
 output_root="${OUTPUT_ROOT:-${default_output_root}}"
 
 if [[ "${model_type}" == "sdar" ]]; then
-  if [[ "${runtime_mode}" == "focus" ]]; then
-    default_remasking_strategy=low_confidence_dynamic
-  else
-    default_remasking_strategy=sequential
-  fi
-  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-float16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},runtime_mode=${runtime_mode},focus_alpha=${FOCUS_ALPHA:-1.5},losa_page_size=${LOSA_PAGE_SIZE:-16},losa_token_budget=${LOSA_TOKEN_BUDGET:-256},losa_gqa_mode=${LOSA_GQA_MODE:-per_query_head},losa_backend=${LOSA_BACKEND:-auto},losa_trace_detail=${LOSA_TRACE_DETAIL:-false},sparse_dlm=${sparse_dlm},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_min_prefix_length=${PREFIX_MIN_PREFIX_LENGTH:-24576},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}},losa=${losa},losa_active_topk=${losa_active_topk},losa_score_mode=${losa_score_mode},losa_key_samples=${losa_key_samples},sparse_dlm_ratio=${SPARSE_DLM_RATIO:-0.5},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-1},query_dense_threshold=${QUERY_DENSE_THRESHOLD:-0},sparse_dlm_refresh_step=${SPARSE_DLM_REFRESH_STEP:--1},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-5},sparse_dlm_deep_only_transfer=${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false},moe_expert_patch=${MOE_EXPERT_PATCH:-false},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${threshold},remasking_strategy=${REMASKING_STRATEGY:-${default_remasking_strategy}},eb_threshold=${EB_THRESHOLD:-0.35},mask_id=${mask_id}"
+  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-float16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-false},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_sdar_threshold}},remasking_strategy=${REMASKING_STRATEGY:-${default_sdar_remasking}},eb_threshold=${EB_THRESHOLD:-0.35},mask_id=${mask_id}"
   if [[ -n "${EOS_ID:-}" ]]; then
     model_args+=",eos_id=${EOS_ID}"
   fi
 else
-  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},runtime_mode=${runtime_mode},focus_alpha=${FOCUS_ALPHA:-1.5},losa_page_size=${LOSA_PAGE_SIZE:-16},losa_token_budget=${LOSA_TOKEN_BUDGET:-256},losa_gqa_mode=${LOSA_GQA_MODE:-per_query_head},losa_backend=${LOSA_BACKEND:-auto},losa_trace_detail=${LOSA_TRACE_DETAIL:-false},sparse_dlm=${sparse_dlm},sparse_dlm_ratio=${SPARSE_DLM_RATIO:-0.7},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-4},query_dense_threshold=${QUERY_DENSE_THRESHOLD:-4},query_min_prefix_length=${QUERY_MIN_PREFIX_LENGTH:-24576},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-1},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_min_prefix_length=${PREFIX_MIN_PREFIX_LENGTH:-4096},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}},losa=${losa},losa_active_topk=${losa_active_topk},losa_score_mode=${losa_score_mode},losa_key_samples=${losa_key_samples},query_losa_union=${QUERY_LOSA_UNION:-false},moe_expert_patch=${MOE_EXPERT_PATCH:-true},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${threshold},editing_threshold=${EDITING_THRESHOLD:-0.0},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${mask_id},eos_id=${eos_id}"
+  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-true},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_llada_threshold}},editing_threshold=${EDITING_THRESHOLD:-${default_editing_threshold}},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${mask_id},eos_id=${eos_id}"
 fi
+
+case "${method}" in
+  sparse)
+    model_args+=",sparse_dlm_ratio=${SPARSE_DLM_RATIO:-${default_ratio}},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-${default_selection_interval}},query_dense_threshold=${QUERY_DENSE_THRESHOLD:-${default_query_dense_threshold}},sparse_dlm_refresh_step=${SPARSE_DLM_REFRESH_STEP:-${default_refresh_step}},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-${default_selection_layer}},sparse_dlm_deep_only_transfer=${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_min_prefix_length=${PREFIX_MIN_PREFIX_LENGTH:-${default_prefix_min_length}},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}},losa=${losa},losa_active_topk=${losa_active_topk},losa_score_mode=${losa_score_mode},losa_key_samples=${losa_key_samples}"
+    if [[ "${model_type}" == "llada" ]]; then
+      model_args+=",query_min_prefix_length=${QUERY_MIN_PREFIX_LENGTH:-24576},query_losa_union=${QUERY_LOSA_UNION:-false}"
+    fi
+    ;;
+  focus)
+    model_args+=",focus_alpha=${FOCUS_ALPHA:-1.5}"
+    ;;
+  losa)
+    model_args+=",paper_losa_page_size=${PAPER_LOSA_PAGE_SIZE:-16},paper_losa_token_budget=${PAPER_LOSA_TOKEN_BUDGET:-256},paper_losa_active_topk=${PAPER_LOSA_ACTIVE_TOPK:-5},paper_losa_gqa_mode=${PAPER_LOSA_GQA_MODE:-per_query_head},paper_losa_backend=${PAPER_LOSA_BACKEND:-auto}"
+    ;;
+esac
 minerva_tasks="minerva_math_algebra,minerva_math_counting_and_prob,minerva_math_geometry,minerva_math_intermediate_algebra,minerva_math_num_theory,minerva_math_prealgebra,minerva_math_precalc"
 gsm8k_task=gsm8k
 gsm8k_gen_length=256

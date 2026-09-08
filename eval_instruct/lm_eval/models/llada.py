@@ -19,10 +19,8 @@ from lm_eval.models.utils import get_dtype
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-from src.dense import patch_model as patch_dense_model
-from src.focus import patch_model as patch_focus_model
-from src.losa import patch_model as patch_losa_model
-from src.sparse import patch_model, resolve_model_family
+from src.runtime import patch_method
+from src.sparse import resolve_model_family
 from src.sparse.llada_patch import patch_moe_experts
 
 
@@ -64,20 +62,14 @@ class LLaDA(LM):
         temperature: float = 0.0,
         top_p: Optional[float] = None,
         top_k: Optional[int] = None,
-        threshold: float = 0.5,
-        editing_threshold: float = 0.0,
+        threshold: Optional[float] = None,
+        editing_threshold: Optional[float] = None,
         max_post_steps: int = 16,
         minimal_topk: int = 1,
         num_to_transfer: int = 1,
         mask_id: int = 156895,
         eos_id: int = 156892,
-        runtime_mode: str = "sparse",
-        focus_alpha: float = 1.5,
-        losa_page_size: int = 16,
-        losa_token_budget: int = 256,
-        losa_gqa_mode: str = "per_query_head",
-        losa_backend: str = "auto",
-        losa_trace_detail: bool = False,
+        method: Optional[str] = None,
         sparse_dlm: bool = True,
         sparse_dlm_ratio: Optional[float] = None,
         sparse_dlm_top_k: Optional[int] = None,
@@ -98,6 +90,12 @@ class LLaDA(LM):
         losa_score_mode: str = "query",
         losa_key_samples: int = 32,
         query_losa_union: bool = False,
+        focus_alpha: float = 1.5,
+        paper_losa_page_size: int = 16,
+        paper_losa_token_budget: int = 256,
+        paper_losa_active_topk: int = 5,
+        paper_losa_gqa_mode: str = "per_query_head",
+        paper_losa_backend: str = "auto",
         moe_expert_patch: bool = True,
         show_samples: bool = False,
         **kwargs,
@@ -105,6 +103,11 @@ class LLaDA(LM):
         super().__init__()
         if kwargs:
             eval_logger.warning("Ignoring unsupported model arguments: %s", sorted(kwargs))
+
+        sparse_enabled = _as_bool(sparse_dlm)
+        self.method = str(method or ("sparse" if sparse_enabled else "dense")).lower()
+        if self.method not in {"sparse", "dense", "focus", "losa"}:
+            raise ValueError(f"Unsupported evaluation method: {self.method!r}")
 
         batch_size = int(batch_size)
         if batch_size != 1:
@@ -141,43 +144,15 @@ class LLaDA(LM):
         )
 
         resolve_model_family(self.model, self.MODEL_NAME)
-        runtime_mode = str(runtime_mode).lower()
-        if runtime_mode not in {"sparse", "dense", "losa", "focus"}:
-            raise ValueError(
-                "runtime_mode must be one of sparse, dense, losa, or focus"
-            )
-        self.runtime_mode = runtime_mode
-        sparse_enabled = _as_bool(sparse_dlm)
         prefix_sparse_enabled = sparse_enabled and (
             self.MODEL_NAME == "llada"
             if prefix_sparse is None
             else _as_bool(prefix_sparse)
         )
-        if runtime_mode == "dense":
-            patch_dense_model(self.model, model_name=self.MODEL_NAME)
-            eval_logger.info("Applied integrated dense runtime for %s", self.MODEL_NAME)
-        elif runtime_mode == "losa":
-            patch_losa_model(
+        if self.method == "sparse":
+            patch_method(
                 self.model,
-                model_name=self.MODEL_NAME,
-                page_size=int(losa_page_size),
-                token_budget=int(losa_token_budget),
-                active_topk=int(losa_active_topk),
-                gqa_mode=str(losa_gqa_mode),
-                backend=str(losa_backend),
-                trace_detail=_as_bool(losa_trace_detail),
-            )
-            eval_logger.info("Applied integrated LoSA runtime for %s", self.MODEL_NAME)
-        elif runtime_mode == "focus":
-            patch_focus_model(
-                self.model,
-                model_name=self.MODEL_NAME,
-                alpha=float(focus_alpha),
-            )
-            eval_logger.info("Applied integrated FOCUS runtime for %s", self.MODEL_NAME)
-        elif self.MODEL_NAME == "sdar" or sparse_enabled:
-            patch_model(
-                self.model,
+                method="sparse",
                 model_name=self.MODEL_NAME,
                 ratio=None if sparse_dlm_ratio is None else float(sparse_dlm_ratio),
                 top_k=None if sparse_dlm_top_k is None else int(sparse_dlm_top_k),
@@ -215,24 +190,34 @@ class LLaDA(LM):
                 query_losa_union=sparse_enabled and _as_bool(query_losa_union),
                 moe_expert_patch=_as_bool(moe_expert_patch),
             )
-            eval_logger.info(
-                "Applied %s patch: query_sparse=%s, prefix_sparse=%s, "
-                "losa=%s, moe_expert_patch=%s, ratio=%s, selection_layer=%s, "
-                "deep_only_transfer=%s",
-                self.MODEL_NAME,
-                sparse_enabled and _as_bool(query_sparse),
-                prefix_sparse_enabled,
-                sparse_enabled and _as_bool(losa),
-                _as_bool(moe_expert_patch),
-                sparse_dlm_ratio,
-                sparse_dlm_selection_layer,
-                _as_bool(sparse_dlm_deep_only_transfer),
+        elif self.method == "focus":
+            patch_method(
+                self.model,
+                method="focus",
+                model_name=self.MODEL_NAME,
+                alpha=float(focus_alpha),
             )
-        elif self.MODEL_NAME == "llada" and _as_bool(moe_expert_patch):
-            patched_count = patch_moe_experts(self.model)
-            eval_logger.info(
-                "Applied LLaDA MoE expert patch to %s blocks", patched_count
+        elif self.method == "losa":
+            patch_method(
+                self.model,
+                method="losa",
+                model_name=self.MODEL_NAME,
+                page_size=int(paper_losa_page_size),
+                token_budget=int(paper_losa_token_budget),
+                active_topk=int(paper_losa_active_topk),
+                gqa_mode=paper_losa_gqa_mode,
+                backend=paper_losa_backend,
             )
+        else:
+            patch_method(self.model, method="dense", model_name=self.MODEL_NAME)
+
+        if (
+            self.MODEL_NAME == "llada"
+            and self.method != "sparse"
+            and _as_bool(moe_expert_patch)
+        ):
+            patch_moe_experts(self.model)
+        eval_logger.info("Applied evaluation method=%s", self.method)
 
         self.model_type = self.MODEL_NAME
         self.batch_size_per_gpu = batch_size
@@ -243,6 +228,18 @@ class LLaDA(LM):
         self.temperature = float(temperature)
         self.top_p = _optional_number(top_p, float)
         self.top_k = _optional_number(top_k, int)
+        if threshold is None:
+            threshold = (
+                0.5
+                if self.method == "sparse" and self.MODEL_NAME == "llada"
+                else 1.0
+                if self.method == "sparse"
+                else 0.95
+                if self.MODEL_NAME == "llada"
+                else 0.85
+            )
+        if editing_threshold is None:
+            editing_threshold = 0.0 if self.method == "sparse" else 0.9
         self.threshold = float(threshold)
         self.editing_threshold = float(editing_threshold)
         self.max_post_steps = int(max_post_steps)
@@ -271,7 +268,7 @@ class LLaDA(LM):
 
     def get_model_info(self):
         """Expose generation throughput in the aggregated lm-eval result."""
-        return dict(self._generation_stats)
+        return {"method": self.method, **self._generation_stats}
 
     def apply_chat_template(
         self, chat_history, add_generation_prompt: bool = True

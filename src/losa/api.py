@@ -97,7 +97,7 @@ class LoSARuntime:
     attn_implementation: str = "sdpa"
     moe_expert_patch: bool = False
     losa_page_size: int = 16
-    losa_token_budget: int = 16
+    losa_token_budget: int = 256
     losa_active_topk: int = 5
     losa_gqa_mode: str = "per_query_head"
     losa_backend: str = "auto"

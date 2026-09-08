@@ -15,8 +15,8 @@ class SDAR(LLaDA):
         pretrained: str,
         block_length: int = 32,
         steps: int = 32,
-        threshold: float = 0.85,
-        remasking_strategy: str = "sequential",
+        threshold: Optional[float] = None,
+        remasking_strategy: Optional[str] = None,
         eb_threshold: float = 0.35,
         mask_id: int = 151669,
         eos_id: Optional[int] = None,
@@ -45,14 +45,14 @@ class SDAR(LLaDA):
             moe_expert_patch=moe_expert_patch,
             **kwargs,
         )
-        self.remasking_strategy = str(remasking_strategy)
+        self.remasking_strategy = str(
+            remasking_strategy
+            or ("low_confidence_dynamic" if self.method == "focus" else "sequential")
+        )
         self.eb_threshold = float(eb_threshold)
 
     def _extra_generation_kwargs(self) -> dict:
         kwargs = {"remasking_strategy": self.remasking_strategy}
-        # The integrated LoSA/FOCUS drivers do not implement the sparse
-        # runtime's entropy-bounded extension.  Keep that argument scoped to
-        # the sparse adapter where it is meaningful.
-        if self.runtime_mode == "sparse":
+        if self.method in {"sparse", "dense"}:
             kwargs["eb_threshold"] = self.eb_threshold
         return kwargs

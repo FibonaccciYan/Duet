@@ -38,11 +38,16 @@ def assert_no_forbidden_sparse_runtime(stage: str) -> None:
         item
         for item in sys.path
         if isinstance(item, str) and item.startswith(FORBIDDEN_RUNTIME_PREFIX)
+        and not item.startswith(str(WORKSPACE_ROOT))
     ]
     bad_modules = []
     for name, module in list(sys.modules.items()):
         module_file = getattr(module, "__file__", None)
-        if isinstance(module_file, str) and module_file.startswith(FORBIDDEN_RUNTIME_PREFIX):
+        if (
+            isinstance(module_file, str)
+            and module_file.startswith(FORBIDDEN_RUNTIME_PREFIX)
+            and not module_file.startswith(str(WORKSPACE_ROOT))
+        ):
             bad_modules.append((name, module_file))
     if bad_paths or bad_modules:
         raise RuntimeError(
@@ -92,7 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimal_topk", type=int, default=1)
     parser.add_argument("--eos_early_stop", type=parse_bool, default=True)
     parser.add_argument("--losa_page_size", type=int, default=16)
-    parser.add_argument("--losa_token_budget", type=int, default=16)
+    parser.add_argument("--losa_token_budget", type=int, default=256)
     parser.add_argument("--losa_active_topk", type=int, default=5)
     parser.add_argument(
         "--losa_gqa_mode",

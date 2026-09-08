@@ -5,8 +5,11 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 import torch
+
+import src.runtime as runtime
 
 from src.focus import (
     attention_importance,
@@ -16,7 +19,7 @@ from src.focus import (
 from src.focus.model import focus_forward
 from src.kernels.losa import GQAMode, adapted_quest_attention_step, losa_attention_step
 from src.losa.generation import transfer_llada
-from src.runtime import load_runtime
+from src.runtime import load_runtime, patch_method
 
 
 class IntegratedRuntimeSmokeTest(unittest.TestCase):
@@ -24,6 +27,21 @@ class IntegratedRuntimeSmokeTest(unittest.TestCase):
         self.assertEqual(type(load_runtime("dense", family="llada")).__name__, "DenseRuntime")
         self.assertEqual(type(load_runtime("losa", family="llada")).__name__, "LoSARuntime")
         self.assertEqual(type(load_runtime("focus", family="llada")).__name__, "FocusRuntime")
+
+    def test_method_dispatch_rejects_unknown_method(self):
+        with self.assertRaisesRegex(ValueError, "unknown method"):
+            patch_method(object(), "unknown")
+
+    def test_method_dispatch_forwards_losa_options(self):
+        model = object()
+        with patch.object(runtime, "patch_losa_model", return_value=model) as patch_losa:
+            self.assertIs(
+                patch_method(model, "losa", model_name="llada", token_budget=256),
+                model,
+            )
+        patch_losa.assert_called_once_with(
+            model, model_name="llada", token_budget=256
+        )
 
     def test_focus_exposes_sparse_compatible_patch_entrypoint(self):
         model = types.SimpleNamespace(
