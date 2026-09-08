@@ -49,7 +49,10 @@ class SDAR(LLaDA):
         self.eb_threshold = float(eb_threshold)
 
     def _extra_generation_kwargs(self) -> dict:
-        return {
-            "remasking_strategy": self.remasking_strategy,
-            "eb_threshold": self.eb_threshold,
-        }
+        kwargs = {"remasking_strategy": self.remasking_strategy}
+        # The integrated LoSA/FOCUS drivers do not implement the sparse
+        # runtime's entropy-bounded extension.  Keep that argument scoped to
+        # the sparse adapter where it is meaningful.
+        if self.runtime_mode == "sparse":
+            kwargs["eb_threshold"] = self.eb_threshold
+        return kwargs

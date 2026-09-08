@@ -19,6 +19,9 @@ from lm_eval.models.utils import get_dtype
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+from src.dense import patch_model as patch_dense_model
+from src.focus import patch_model as patch_focus_model
+from src.losa import patch_model as patch_losa_model
 from src.sparse import patch_model, resolve_model_family
 from src.sparse.llada_patch import patch_moe_experts
 
@@ -68,6 +71,13 @@ class LLaDA(LM):
         num_to_transfer: int = 1,
         mask_id: int = 156895,
         eos_id: int = 156892,
+        runtime_mode: str = "sparse",
+        focus_alpha: float = 1.5,
+        losa_page_size: int = 16,
+        losa_token_budget: int = 256,
+        losa_gqa_mode: str = "per_query_head",
+        losa_backend: str = "auto",
+        losa_trace_detail: bool = False,
         sparse_dlm: bool = True,
         sparse_dlm_ratio: Optional[float] = None,
         sparse_dlm_top_k: Optional[int] = None,
@@ -131,13 +141,41 @@ class LLaDA(LM):
         )
 
         resolve_model_family(self.model, self.MODEL_NAME)
+        runtime_mode = str(runtime_mode).lower()
+        if runtime_mode not in {"sparse", "dense", "losa", "focus"}:
+            raise ValueError(
+                "runtime_mode must be one of sparse, dense, losa, or focus"
+            )
+        self.runtime_mode = runtime_mode
         sparse_enabled = _as_bool(sparse_dlm)
         prefix_sparse_enabled = sparse_enabled and (
             self.MODEL_NAME == "llada"
             if prefix_sparse is None
             else _as_bool(prefix_sparse)
         )
-        if self.MODEL_NAME == "sdar" or sparse_enabled:
+        if runtime_mode == "dense":
+            patch_dense_model(self.model, model_name=self.MODEL_NAME)
+            eval_logger.info("Applied integrated dense runtime for %s", self.MODEL_NAME)
+        elif runtime_mode == "losa":
+            patch_losa_model(
+                self.model,
+                model_name=self.MODEL_NAME,
+                page_size=int(losa_page_size),
+                token_budget=int(losa_token_budget),
+                active_topk=int(losa_active_topk),
+                gqa_mode=str(losa_gqa_mode),
+                backend=str(losa_backend),
+                trace_detail=_as_bool(losa_trace_detail),
+            )
+            eval_logger.info("Applied integrated LoSA runtime for %s", self.MODEL_NAME)
+        elif runtime_mode == "focus":
+            patch_focus_model(
+                self.model,
+                model_name=self.MODEL_NAME,
+                alpha=float(focus_alpha),
+            )
+            eval_logger.info("Applied integrated FOCUS runtime for %s", self.MODEL_NAME)
+        elif self.MODEL_NAME == "sdar" or sparse_enabled:
             patch_model(
                 self.model,
                 model_name=self.MODEL_NAME,

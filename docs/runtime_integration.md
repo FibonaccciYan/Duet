@@ -13,7 +13,8 @@ patch_losa(model, model_name="sdar", token_budget=256)
 patch_focus(model, model_name="llada", alpha=1.5)
 ```
 
-`patch_dense` leaves LLaDA2.1's checkpoint decoder in place. This is required
+`patch_dense` enables the self-contained, chunked dense block-cache decoder and
+the packed MoE expert path by default. This is required
 because the canonical decoder performs both mask-to-token and token-to-token
 editing. `patch_losa` keeps that decoder schedule while changing only the
 attention partition used after a prefix has been established. The integrated

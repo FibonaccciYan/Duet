@@ -128,20 +128,6 @@ def focus_forward(
                 )
             )
 
-        if layer_idx == 1 and len(base.layers) > 2 and mask_positions.numel():
-            selected_positions = select_retained_positions(
-                input_ids[0],
-                mask_id,
-                importance[0],
-                importance[1],
-                alpha=alpha,
-                average_decoded_tokens=average_decoded_tokens,
-                block_progress=block_progress,
-            )
-            # The layer above has already computed and cached the complete
-            # layer-one output. Only the suffix sees the retained rows.
-            hidden_states = hidden_states.index_select(1, selected_positions)
-
         mask = _attention_mask(
             family,
             layer_hidden.shape[1],
@@ -161,6 +147,20 @@ def focus_forward(
         else:
             kwargs["store_kv"] = True
         hidden_states = layer(layer_hidden, **kwargs)[0]
+
+        if layer_idx == 1 and len(base.layers) > 2 and mask_positions.numel():
+            selected_positions = select_retained_positions(
+                input_ids[0],
+                mask_id,
+                importance[0],
+                importance[1],
+                alpha=alpha,
+                average_decoded_tokens=average_decoded_tokens,
+                block_progress=block_progress,
+            )
+            # Layer one must run on the complete block.  Eviction applies to
+            # its output and therefore only affects layers two and later.
+            hidden_states = hidden_states.index_select(1, selected_positions)
 
     hidden_states = base.norm(hidden_states)
     logits = model.lm_head(hidden_states)

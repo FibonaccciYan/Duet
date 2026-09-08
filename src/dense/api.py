@@ -6,7 +6,6 @@ from typing import Any
 import torch
 
 from src.losa.generation import (
-    block_diffusion_generate,
     load_model_and_tokenizer,
     set_seed,
 )
@@ -38,27 +37,30 @@ def _resolve_family(model: Any, model_name: str) -> str:
     return model_name
 
 
-def patch_model(model: Any, model_name: str = "auto", **_: Any):
+def patch_model(
+    model: Any,
+    model_name: str = "auto",
+    *,
+    moe_expert_patch: bool = True,
+    **_: Any,
+):
     """Install the dense baseline using the same ``patch_model`` entry point as sparse.
 
-    LLaDA 2.1 already ships its canonical block-diffusion implementation on
-    ``model.generate``. SDAR's checkpoint exposes only ``forward``, so the
-    trusted sparse runtime supplies its dense block decoder with all sparse
-    features disabled.
+    The trusted sparse runtime supplies the cache-efficient block driver for
+    both families with every approximation disabled.  This preserves dense
+    attention while avoiding the quadratic attention mask and full-vocabulary
+    prompt logits that make the checkpoint's monolithic 32K path run OOM.
     """
     family = _resolve_family(model, model_name)
-    if family == "llada":
-        model._dense_patch_family = family
-        return model
-
     from src.sparse import patch_model as patch_sparse_model
 
     patch_sparse_model(
         model,
-        model_name="sdar",
+        model_name=family,
         query_sparse=False,
         prefix_sparse=False,
         losa=False,
+        moe_expert_patch=bool(moe_expert_patch),
     )
     model._dense_patch_family = family
     return model
@@ -70,7 +72,7 @@ class DenseRuntime:
     model_path: str | None = None
     dtype: str | None = None
     attn_implementation: str = "sdpa"
-    moe_expert_patch: bool = False
+    moe_expert_patch: bool = True
     model: Any | None = field(init=False, default=None)
     tokenizer: Any | None = field(init=False, default=None)
     moe_patch_report: Any | None = field(init=False, default=None)
@@ -84,6 +86,11 @@ class DenseRuntime:
             dtype=dtype_name,
             attn_implementation=self.attn_implementation,
         )
+        patch_model(
+            self.model,
+            model_name=self.family,
+            moe_expert_patch=self.moe_expert_patch,
+        )
         if self.moe_expert_patch:
             if patch_moe_experts is None:
                 raise RuntimeError("the optional Triton MoE backend is unavailable")
@@ -94,17 +101,7 @@ class DenseRuntime:
         if self.model is None or self.tokenizer is None:
             self.load()
         assert self.model is not None
-        if self.family == "llada":
-            # Do not route dense LLaDA through the LoSA helper: the model's
-            # own decoder is the standard LLaDA 2.1 M2T + T2T implementation.
-            return type("DenseGeneration", (), {
-                "tokens": self.model.generate(inputs=inputs, **kwargs),
-                "trace": [],
-            })()
-        return block_diffusion_generate(
-            self.model,
-            family=self.family,
-            inputs=inputs,
-            use_losa=False,
-            **kwargs,
-        )
+        return type("DenseGeneration", (), {
+            "tokens": self.model.generate(inputs=inputs, **kwargs),
+            "trace": [],
+        })()
