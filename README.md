@@ -267,6 +267,10 @@ src/sparse/
 ├── triton_kernels.py   唯一 CUDA 内核实现
 ├── llada_patch.py      LLaDA 生成、注意力、查询稀疏与混合专家
 └── sdar_patch.py       SDAR 生成、注意力与查询稀疏
+
+src/dense/               Dense baseline adapter
+src/losa/                Paper-LoSA operators, generation, and model patch
+src/focus/               Integrated FOCUS importance, eviction, and generation
 ```
 
 依赖方向保持单向：

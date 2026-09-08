@@ -220,3 +220,4 @@ pyrightconfig.json
 # Project artifacts
 experiments/
 results/
+.hf_cache/

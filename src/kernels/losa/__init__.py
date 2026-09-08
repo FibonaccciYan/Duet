@@ -1,0 +1,53 @@
+"""LoSA and QUEST (Adapted) sparse-attention reproduction."""
+
+from .ops import (
+    AttentionStepResult,
+    GQAMode,
+    KVHeadUnion,
+    LoSAState,
+    QuestPageMetadata,
+    QuestSelection,
+    adapted_quest_attention_step,
+    build_page_metadata,
+    build_union_pages,
+    dense_attention,
+    locality_scores,
+    losa_attention_step,
+    merge_attention_states,
+    quest_page_scores,
+    select_active_rows,
+    select_pages,
+    sparse_prefix_attention_on_union,
+)
+from .reference import (
+    SparsePagePlan,
+    build_sparse_page_plan,
+    dense_partition_attention,
+    select_active_queries,
+    sparse_page_attention,
+)
+
+__all__ = [
+    "AttentionStepResult",
+    "GQAMode",
+    "KVHeadUnion",
+    "LoSAState",
+    "QuestPageMetadata",
+    "QuestSelection",
+    "SparsePagePlan",
+    "adapted_quest_attention_step",
+    "build_page_metadata",
+    "build_sparse_page_plan",
+    "build_union_pages",
+    "dense_attention",
+    "dense_partition_attention",
+    "locality_scores",
+    "losa_attention_step",
+    "merge_attention_states",
+    "quest_page_scores",
+    "select_active_queries",
+    "select_active_rows",
+    "select_pages",
+    "sparse_page_attention",
+    "sparse_prefix_attention_on_union",
+]
