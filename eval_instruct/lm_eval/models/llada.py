@@ -85,6 +85,7 @@ class LLaDA(LM):
         prefix_min_prefix_length: Optional[int] = None,
         prefix_token_budget: int = 256,
         prefix_chunk_size: Optional[int] = None,
+        prefix_selector: str = "adamas",
         losa: bool = False,
         losa_active_topk: int = 5,
         losa_score_mode: str = "query",
@@ -144,6 +145,16 @@ class LLaDA(LM):
         )
 
         resolve_model_family(self.model, self.MODEL_NAME)
+        prefix_selector = str(prefix_selector).lower()
+        if prefix_selector not in {"adamas", "qk"}:
+            raise ValueError(f"Unsupported prefix selector: {prefix_selector!r}")
+        if prefix_selector == "qk":
+            import src.sparse.sparse_ops as sparse
+
+            def select_qk(query, key, token_budget, *_args, **_kwargs):
+                return sparse._qk_prefix_indices(query, key, token_budget)
+
+            sparse._adamas_prefix_indices = select_qk
         prefix_sparse_enabled = sparse_enabled and (
             self.MODEL_NAME == "llada"
             if prefix_sparse is None
