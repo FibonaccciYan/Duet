@@ -8,7 +8,7 @@ class LLaDASparseConfig:
     ratio: float = 0.7
     top_k: int = 64
     selection_interval: int = 4
-    query_dense_threshold: int = 20
+    query_dense_threshold: int = 4
     query_min_prefix_length: int = 24576
     selection_layer: int = 1
     query_sparse: bool = True

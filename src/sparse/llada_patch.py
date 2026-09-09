@@ -488,7 +488,7 @@ def _capture_block_queries(model, block_start):
 
 
 
-def _layer_attention_mask(
+def _losa_attention_mask(
     attention_mask,
     query_positions,
     key_positions,
@@ -538,15 +538,16 @@ def _cached_forward(
     base = model.model
     inputs_embeds = base.word_embeddings(input_ids)
     position_embeddings = base.rotary_emb(inputs_embeds, position_ids)
-    full_cache = DynamicCache.from_legacy_cache(prefix_cache)
-    sparse_cache = selection_state.get("sparse_cache")
+    block_cache = selection_state.get("sparse_cache")
+    if block_cache is None:
+        raise RuntimeError("Cached forward requires an initialized block cache")
     hidden_states = inputs_embeds
     selected_positions = None
     selected_position_ids = None
     selected_position_embeddings = None
     full_hidden_base = None
     compressed_hidden_states = False
-    zero_attention_masks = {}
+    losa_attention_masks = {}
 
     losa_context = None
     if model.config.llada_losa:
@@ -577,7 +578,8 @@ def _cached_forward(
                 layer_hidden = hidden_states
                 layer_position_ids = position_ids
                 layer_position_embeddings = position_embeddings
-                layer_cache = full_cache
+                block_cache.set_positions(all_positions)
+                layer_cache = block_cache
                 layer_query_positions = all_positions
             else:
                 layer_hidden = (
@@ -587,28 +589,28 @@ def _cached_forward(
                 )
                 layer_position_ids = selected_position_ids
                 layer_position_embeddings = selected_position_embeddings
-                if sparse_cache is None:
-                    raise RuntimeError("Sparse cache is missing after dense refresh.")
-                sparse_cache.set_positions(selected_positions)
-                layer_cache = sparse_cache
+                block_cache.set_positions(selected_positions)
+                layer_cache = block_cache
                 layer_query_positions = selected_positions
 
             if losa_context is not None:
                 losa_context["query_positions"] = layer_query_positions
 
-            layer_prefix_positions = (
-                prefix_indices[layer_idx]
-                if prefix_indices is not None
-                else torch.arange(original_prefix_length, device=input_ids.device)
-            )
-            layer_attention_mask = _layer_attention_mask(
-                attention_mask,
-                layer_query_positions,
-                all_positions,
-                layer_prefix_positions,
-                original_prefix_length,
-                cache=zero_attention_masks,
-            )
+            layer_attention_mask = None
+            if losa_context is not None:
+                layer_prefix_positions = (
+                    prefix_indices[layer_idx]
+                    if prefix_indices is not None
+                    else torch.arange(original_prefix_length, device=input_ids.device)
+                )
+                layer_attention_mask = _losa_attention_mask(
+                    attention_mask,
+                    layer_query_positions,
+                    all_positions,
+                    layer_prefix_positions,
+                    original_prefix_length,
+                    cache=losa_attention_masks,
+                )
 
             layer_outputs = decoder_layer(
                 layer_hidden,
@@ -842,18 +844,14 @@ def _block_cache_generate(self, *args, **kwargs):
             prefix_cache = _prefix_from_dynamic_cache(
                 dense_outputs.past_key_values, block_start
             )
-        sparse_cache = (
-            _dual_cache_from_dense(
-                dense_outputs.past_key_values,
-                prefix_cache,
-                block_start,
-                block_end,
-            )
-            if query_sparse
-            else None
+        block_cache = _dual_cache_from_dense(
+            dense_outputs.past_key_values,
+            prefix_cache,
+            block_start,
+            block_end,
         )
         del dense_outputs
-        selection_state = {"positions": None, "step": 0, "sparse_cache": sparse_cache}
+        selection_state = {"positions": None, "step": 0, "sparse_cache": block_cache}
         post_steps = 0
         max_iterations = max(steps, block_length) + max_post_steps
         for _ in range(1, max_iterations):
@@ -943,7 +941,7 @@ def patch_llada_model(
     ratio=0.5,
     top_k=64,
     selection_interval=4,
-    query_dense_threshold=20,
+    query_dense_threshold=4,
     query_min_prefix_length=24576,
     selection_layer=1,
     query_sparse=True,

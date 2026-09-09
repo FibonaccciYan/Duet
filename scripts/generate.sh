@@ -14,7 +14,7 @@ case "${model_type}" in
     default_python=/home/ysy/anaconda3/envs/llada/bin/python
     default_ratio=0.7
     default_selection_interval=4
-    default_query_dense_threshold=20
+    default_query_dense_threshold=4
     default_query_min_prefix_length=24576
     default_selection_layer=1
     default_refresh_step=2

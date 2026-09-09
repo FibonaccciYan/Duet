@@ -410,12 +410,9 @@ def _sparse_cached_forward(
     base = model.model
     hidden_states = base.embed_tokens(input_ids)
     position_embeddings = base.rotary_emb(hidden_states, position_ids)
-    sparse_cache = selection_state.get("sparse_cache")
-    if query_sparse and sparse_cache is None:
-        raise RuntimeError("Query Sparse requires an initialized block cache")
-    full_cache = (
-        None if query_sparse else DynamicCache.from_legacy_cache(prefix_cache)
-    )
+    block_cache = selection_state.get("sparse_cache")
+    if block_cache is None:
+        raise RuntimeError("Cached forward requires an initialized block cache")
     all_positions = selection_state.get("block_positions")
     if all_positions is None:
         all_positions = torch.arange(input_ids.shape[1], device=input_ids.device)
@@ -465,11 +462,8 @@ def _sparse_cached_forward(
                 layer_hidden = hidden_states
                 layer_positions = position_ids
                 layer_position_embeddings = position_embeddings
-                if query_sparse:
-                    sparse_cache.set_positions(all_positions)
-                    layer_cache = sparse_cache
-                else:
-                    layer_cache = full_cache
+                block_cache.set_positions(all_positions)
+                layer_cache = block_cache
                 layer_query_positions = all_positions
             else:
                 layer_hidden = (
@@ -483,7 +477,7 @@ def _sparse_cached_forward(
                 )
                 layer_positions = sparse_position_ids
                 layer_position_embeddings = sparse_position_embeddings
-                layer_cache = sparse_cache
+                layer_cache = block_cache
                 layer_query_positions = selected_positions
 
             layer_prefix_length = (
@@ -570,7 +564,7 @@ def _sparse_cached_forward(
                             position_embeddings[0].index_select(1, selected_positions),
                             position_embeddings[1].index_select(1, selected_positions),
                         )
-                    sparse_cache.set_positions(selected_positions)
+                    block_cache.set_positions(selected_positions)
 
         if losa_context is not None:
             states = selection_state["losa_states"]
@@ -725,12 +719,8 @@ def _block_diffusion_generate(self, *args, **kwargs):
                     min(block_tokens.shape[1], max(0, prompt_length - block_start) + minimum)
                     if strategy == "sequential" else None
                 ),
-                sparse_cache=(
-                    _dual_cache_from_dense(
-                        dense_cache, prefix_cache, block_start, block_end
-                    )
-                    if query_sparse
-                    else None
+                sparse_cache=_dual_cache_from_dense(
+                    dense_cache, prefix_cache, block_start, block_end
                 ),
                 prefix_cache=prefix_cache,
                 losa_states={},

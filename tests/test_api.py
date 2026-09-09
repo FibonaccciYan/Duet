@@ -30,7 +30,7 @@ class SparseApiTest(unittest.TestCase):
         self.assertTrue(kwargs["prefix_sparse"])
         self.assertTrue(kwargs["losa"])
         self.assertEqual(kwargs["selection_layer"], 3)
-        self.assertEqual(kwargs["query_dense_threshold"], 20)
+        self.assertEqual(kwargs["query_dense_threshold"], 4)
         self.assertEqual(kwargs["query_min_prefix_length"], 24576)
         self.assertEqual(kwargs["prefix_min_prefix_length"], 4096)
         self.assertEqual(kwargs["prefix_chunk_size"], 1024)

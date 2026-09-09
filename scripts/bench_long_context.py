@@ -206,7 +206,7 @@ def load(args):
         query_dense_threshold=(
             args.query_dense_threshold
             if args.query_dense_threshold is not None
-            else (0 if is_sdar else 20)
+            else (0 if is_sdar else 4)
         ),
         query_min_prefix_length=args.query_min_prefix_length,
         refresh_step=-1 if is_sdar else 2,
