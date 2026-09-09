@@ -28,6 +28,7 @@ from src.sparse.sparse_ops import (
 )
 from src.sparse.sparse_ops import (
     _adamas_prefix_indices,
+    _qk_prefix_indices,
     _block_attention_output_lse,
     _compact_prefix_cache,
     _hadamard_transform,
@@ -431,6 +432,18 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         indices = _adamas_prefix_indices(query, key, token_budget=2, chunk_size=1)
 
         self.assertEqual(indices.tolist(), [0, 1, 2])
+
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    def test_qk_selector_matches_broadcast_reference(self):
+        torch.manual_seed(0)
+        query = torch.randn(1, 4, 3, 8, device="cuda", dtype=torch.float16)
+        key = torch.randn(1, 2, 11, 8, device="cuda", dtype=torch.float16)
+        actual = _qk_prefix_indices(query, key, token_budget=4)
+        scores = (
+            query.reshape(2, 2, 3, 8)[..., None, :] * key[:, :, None, None]
+        ).sum(-1)
+        expected = scores.reshape(-1, 11).argmax(-1).unique().sort().values
+        self.assertEqual(actual.tolist(), expected.tolist())
 
     def test_dense_cached_forward_matches_full_forward(self):
         model = _tiny_model()

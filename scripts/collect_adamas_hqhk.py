@@ -166,6 +166,16 @@ def main():
                 candidates.append(
                     (thresholds, original(query, key, *selector_args, **candidate_kwargs), False)
                 )
+            token_budget = (
+                selector_args[0] if selector_args else selector_kwargs["token_budget"]
+            )
+            candidates.append(
+                (
+                    "direct_qk",
+                    sparse._qk_prefix_indices(query, key, token_budget),
+                    False,
+                )
+            )
             for thresholds, indices, production in candidates:
                 if indices is production_indices:
                     candidate_metrics = metrics
@@ -177,8 +187,13 @@ def main():
                 entry = calibration.setdefault(
                     label,
                     {
-                        "query_thresholds": thresholds[0],
-                        "key_thresholds": thresholds[1],
+                        "query_thresholds": (
+                            None if thresholds == "direct_qk" else thresholds[0]
+                        ),
+                        "key_thresholds": (
+                            None if thresholds == "direct_qk" else thresholds[1]
+                        ),
+                        "method": thresholds if thresholds == "direct_qk" else "bucketized",
                         "production": production,
                         "calls": 0,
                         "selected_tokens": 0,

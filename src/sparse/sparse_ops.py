@@ -339,6 +339,37 @@ def _adamas_prefix_indices(
     return indices.sort().values
 
 
+def _qk_prefix_indices(query, key, token_budget):
+    """Select the same per-query union as Adamas using exact QK scores."""
+    prefix_length = key.shape[-2]
+    budget = min(int(token_budget), prefix_length)
+    if budget >= prefix_length:
+        return torch.arange(prefix_length, device=key.device)
+    if budget <= 0:
+        return torch.empty(0, dtype=torch.long, device=key.device)
+
+    batch_size, query_heads, query_length, head_dim = query.shape
+    key_heads = key.shape[1]
+    if batch_size != 1 or query_heads % key_heads:
+        raise ValueError("QK prefix selection requires batch_size=1 and valid GQA heads")
+    grouped_query = query.reshape(
+        key_heads, query_heads // key_heads * query_length, head_dim
+    )
+    scores = torch.bmm(grouped_query, key[0].transpose(1, 2)).reshape(
+        query_heads * query_length, prefix_length
+    )
+    local_budget = max(1, math.ceil(budget / scores.shape[0]))
+    query_indices = scores.topk(local_budget, dim=1).indices
+    indices = torch.unique(query_indices.flatten())
+    if indices.numel() < budget:
+        remaining_scores = scores.amax(dim=0).float()
+        remaining_scores[indices] = -torch.inf
+        indices = torch.cat(
+            (indices, remaining_scores.topk(budget - indices.numel()).indices)
+        )
+    return indices.sort().values
+
+
 def _compact_prefix_cache(
     model,
     cache,

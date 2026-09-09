@@ -66,6 +66,9 @@ def parse_args():
     )
     parser.add_argument("--losa-key-samples", type=int, default=32)
     parser.add_argument("--prefix-token-budget", type=int, default=256)
+    parser.add_argument(
+        "--prefix-selector", choices=("adamas", "qk"), default="adamas"
+    )
     parser.add_argument("--prefix-min-prefix-length", type=int, default=None)
     parser.add_argument("--prefix-chunk-size", type=int, default=None)
     parser.add_argument("--query-ratio", type=float, default=None)
@@ -349,6 +352,13 @@ def main():
     if args.ablation and args.mode != "query_prefix":
         raise ValueError("--ablation requires --mode query_prefix")
     set_seed(args.seed)
+    if args.prefix_selector == "qk":
+        import src.sparse.sparse_ops as sparse
+
+        def select_qk(query, key, token_budget, *_args, **_kwargs):
+            return sparse._qk_prefix_indices(query, key, token_budget)
+
+        sparse._adamas_prefix_indices = select_qk
     model, tokenizer = load(args)
     args.phase_profiler = PhaseProfiler(args.model) if args.phase_profile else None
     compared_modes = (
@@ -380,6 +390,7 @@ def main():
                 "model": args.model,
                 "mode": args.mode,
                 "losa_score_mode": args.losa_score_mode,
+                "prefix_selector": args.prefix_selector,
             },
             sort_keys=True,
         ),
@@ -445,6 +456,7 @@ def main():
         "losa_score_mode": args.losa_score_mode,
         "losa_key_samples": args.losa_key_samples,
         "prefix_token_budget": args.prefix_token_budget,
+        "prefix_selector": args.prefix_selector,
         "paired": args.paired,
         "ablation": args.ablation,
         "sparse_config": getattr(model.config, f"{args.model}_sparse_config"),
