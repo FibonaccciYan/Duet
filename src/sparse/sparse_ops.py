@@ -291,16 +291,21 @@ def _adamas_prefix_indices(
     key_code = torch.bucketize(
         _hadamard_transform(key), key.new_tensor(key_edges), out_int32=True
     )
-    batch_size, query_heads, query_length, head_dim = query_code.shape
-    key_heads = key_code.shape[1]
+    return _distance_prefix_indices(query_code, key_code, budget, chunk_size)
+
+
+def _distance_prefix_indices(query, key, budget, chunk_size):
+    prefix_length = key.shape[-2]
+    batch_size, query_heads, query_length, _ = query.shape
+    key_heads = key.shape[1]
     if batch_size != 1 or query_heads % key_heads:
         raise ValueError("Adamas prefix selection requires batch_size=1 and valid GQA heads")
     local_budget = max(1, math.ceil(budget / (query_heads * query_length)))
     query_distances = query_indices = None
     scores = []
     for start in range(0, prefix_length, chunk_size):
-        chunk = key_code[:, :, start : start + chunk_size]
-        flat_distances = adamas_distances(query_code, chunk)
+        chunk = key[:, :, start : start + chunk_size]
+        flat_distances = adamas_distances(query, chunk)
         scores.append(flat_distances.amin(dim=0, keepdim=True))
         chunk_length = chunk.shape[-2]
         if local_budget == 1:
@@ -368,6 +373,19 @@ def _qk_prefix_indices(query, key, token_budget):
             (indices, remaining_scores.topk(budget - indices.numel()).indices)
         )
     return indices.sort().values
+
+
+def _hadamard_qk_prefix_indices(query, key, token_budget, chunk_size=256):
+    """Select by exact L1 distance between floating-point Hq and Hk."""
+    prefix_length = key.shape[-2]
+    budget = min(int(token_budget), prefix_length)
+    if budget >= prefix_length:
+        return torch.arange(prefix_length, device=key.device)
+    if budget <= 0:
+        return torch.empty(0, dtype=torch.long, device=key.device)
+    return _distance_prefix_indices(
+        _hadamard_transform(query), _hadamard_transform(key), budget, chunk_size
+    )
 
 
 def _compact_prefix_cache(

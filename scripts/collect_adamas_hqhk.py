@@ -176,6 +176,20 @@ def main():
                     False,
                 )
             )
+            chunk_size = (
+                selector_args[1]
+                if len(selector_args) > 1
+                else selector_kwargs.get("chunk_size", 256)
+            )
+            candidates.append(
+                (
+                    "hadamard_qk",
+                    sparse._hadamard_qk_prefix_indices(
+                        query, key, token_budget, chunk_size
+                    ),
+                    False,
+                )
+            )
             for thresholds, indices, production in candidates:
                 if indices is production_indices:
                     candidate_metrics = metrics
@@ -184,16 +198,17 @@ def main():
                         query, key, indices, value=value, reference=reference
                     )
                 label = json.dumps(thresholds)
+                direct_method = thresholds in {"direct_qk", "hadamard_qk"}
                 entry = calibration.setdefault(
                     label,
                     {
                         "query_thresholds": (
-                            None if thresholds == "direct_qk" else thresholds[0]
+                            None if direct_method else thresholds[0]
                         ),
                         "key_thresholds": (
-                            None if thresholds == "direct_qk" else thresholds[1]
+                            None if direct_method else thresholds[1]
                         ),
-                        "method": thresholds if thresholds == "direct_qk" else "bucketized",
+                        "method": thresholds if direct_method else "bucketized",
                         "production": production,
                         "calls": 0,
                         "selected_tokens": 0,

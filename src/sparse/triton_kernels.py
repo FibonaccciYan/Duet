@@ -471,7 +471,7 @@ def adamas_distances(query_code, key_code):
     output = torch.empty(
         query_heads * query_length,
         prefix_length,
-        dtype=torch.int32,
+        dtype=torch.int32 if query_code.dtype == torch.int32 else torch.float32,
         device=query_code.device,
     )
     block_n = 32

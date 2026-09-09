@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.sparse.sparse_ops import (
     _adamas_prefix_indices,
     _attention_output_lse,
+    _hadamard_qk_prefix_indices,
     _losa_active_indices,
     _merge_attention_states,
     _new_losa_state,
@@ -98,6 +99,12 @@ def main():
     benchmark(
         "qk_prefix_indices",
         lambda: _qk_prefix_indices(query, key, token_budget=256),
+        warmup=1,
+        iterations=3,
+    )
+    benchmark(
+        "hadamard_qk_prefix_indices",
+        lambda: _hadamard_qk_prefix_indices(query, key, token_budget=256),
         warmup=1,
         iterations=3,
     )

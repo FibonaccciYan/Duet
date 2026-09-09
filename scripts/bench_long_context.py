@@ -67,7 +67,9 @@ def parse_args():
     parser.add_argument("--losa-key-samples", type=int, default=32)
     parser.add_argument("--prefix-token-budget", type=int, default=256)
     parser.add_argument(
-        "--prefix-selector", choices=("adamas", "qk"), default="adamas"
+        "--prefix-selector",
+        choices=("adamas", "qk", "hadamard_qk"),
+        default="adamas",
     )
     parser.add_argument("--prefix-min-prefix-length", type=int, default=None)
     parser.add_argument("--prefix-chunk-size", type=int, default=None)
@@ -352,11 +354,19 @@ def main():
     if args.ablation and args.mode != "query_prefix":
         raise ValueError("--ablation requires --mode query_prefix")
     set_seed(args.seed)
-    if args.prefix_selector == "qk":
+    if args.prefix_selector in {"qk", "hadamard_qk"}:
         import src.sparse.sparse_ops as sparse
 
         def select_qk(query, key, token_budget, *_args, **_kwargs):
-            return sparse._qk_prefix_indices(query, key, token_budget)
+            selector = (
+                sparse._hadamard_qk_prefix_indices
+                if args.prefix_selector == "hadamard_qk"
+                else sparse._qk_prefix_indices
+            )
+            if args.prefix_selector == "hadamard_qk":
+                chunk_size = _args[0] if _args else _kwargs.get("chunk_size", 256)
+                return selector(query, key, token_budget, chunk_size)
+            return selector(query, key, token_budget)
 
         sparse._adamas_prefix_indices = select_qk
     model, tokenizer = load(args)

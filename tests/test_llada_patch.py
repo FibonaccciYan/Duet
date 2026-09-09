@@ -32,6 +32,7 @@ from src.sparse.sparse_ops import (
     _block_attention_output_lse,
     _compact_prefix_cache,
     _hadamard_transform,
+    _hadamard_qk_prefix_indices,
     _merge_attention_states,
     _new_losa_state,
 )
@@ -443,6 +444,21 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             query.reshape(2, 2, 3, 8)[..., None, :] * key[:, :, None, None]
         ).sum(-1)
         expected = scores.reshape(-1, 11).argmax(-1).unique().sort().values
+        self.assertEqual(actual.tolist(), expected.tolist())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    def test_hadamard_qk_selector_matches_transformed_reference(self):
+        torch.manual_seed(0)
+        query = torch.randn(1, 4, 3, 8, device="cuda", dtype=torch.float16)
+        key = torch.randn(1, 2, 11, 8, device="cuda", dtype=torch.float16)
+        actual = _hadamard_qk_prefix_indices(
+            query, key, token_budget=4, chunk_size=3
+        )
+        hq, hk = _hadamard_transform(query), _hadamard_transform(key)
+        distances = (
+            hq.reshape(2, 2, 3, 8)[..., None, :] - hk[:, :, None, None]
+        ).abs().sum(-1)
+        expected = distances.reshape(-1, 11).argmin(-1).unique().sort().values
         self.assertEqual(actual.tolist(), expected.tolist())
 
     def test_dense_cached_forward_matches_full_forward(self):

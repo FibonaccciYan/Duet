@@ -79,6 +79,18 @@ class TritonSparseKernelsTest(unittest.TestCase):
         ).abs().sum(dim=-1)[0].reshape(-1, key.shape[2]).to(torch.int32)
         torch.testing.assert_close(actual, expected)
 
+    def test_adamas_distances_support_float_inputs(self):
+        torch.manual_seed(0)
+        query = torch.randn(1, 4, 3, 8, device="cuda", dtype=torch.float16)
+        key = torch.randn(1, 2, 11, 8, device="cuda", dtype=torch.float16)
+        actual = adamas_distances(query, key)
+        expected = (
+            query.reshape(1, 2, 2, 3, 8)[..., None, :]
+            - key[:, :, None, None]
+        ).abs().sum(-1)[0].reshape(-1, 11).float()
+        self.assertEqual(actual.dtype, torch.float32)
+        torch.testing.assert_close(actual, expected, rtol=2e-3, atol=2e-3)
+
     def test_losa_query_delta_matches_mse_reference(self):
         torch.manual_seed(1)
         query = torch.randn(1, 8, 7, 128, device="cuda", dtype=torch.float16)
