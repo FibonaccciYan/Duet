@@ -42,6 +42,20 @@ Prefix/combined 的单次 cached-forward 则稳定在约 24--25 ms。
 50 题中有 6 题触发长上下文 Query，整体 F1 从 0.5243 升至 0.5348，EM 均为
 0.32，因此默认值更新为 20。
 
+### Block 64 实验
+
+为隔离 block 大小，固定 `query_dense_threshold=0`、Query-only，并让 steps 等于
+block。生成 64 token 的三次配对中，block 32 在 8K/16K/24K/32K 的 Query
+加速比分别为 0.977/0.833/1.359/0.940；block 64 为
+0.938/0.828/0.898/0.957，所有长度均慢于各自 dense。32K/生成 256 时，block 32
+为 1.081 倍，而 block 64 降至 0.780 倍。
+
+阶段计时显示，32K/生成 64 时 block 32 的 dense/Query cached-forward 为
+31/33 次、平均 67.8/61.1 ms；block 64 为 59/66 次、平均 64.8/62.5 ms。
+64-token dense kernel 本身效率更高，使 Query 单次收益从约 10% 缩至 3.5%；同时
+更大的生成块减少了首次 dense 前向批量转移 token 的机会，调用次数接近翻倍。
+因此拒绝 block 64，保留 block 32。
+
 ### SDAR
 
 | 上下文 | dense / query / prefix / combined 秒 | Query 加速比 | Prefix 加速比 | Combined 加速比 |
