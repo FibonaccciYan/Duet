@@ -375,7 +375,7 @@ def _qk_prefix_indices(query, key, token_budget):
     return indices.sort().values
 
 
-def _hadamard_qk_prefix_indices(query, key, token_budget, chunk_size=256):
+def _hadamard_qk_prefix_indices(query, key, token_budget, chunk_size=16384):
     """Select by exact L1 distance between floating-point Hq and Hk."""
     prefix_length = key.shape[-2]
     budget = min(int(token_budget), prefix_length)

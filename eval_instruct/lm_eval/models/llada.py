@@ -148,6 +148,8 @@ class LLaDA(LM):
         prefix_selector = str(prefix_selector).lower()
         if prefix_selector not in {"adamas", "qk", "hadamard_qk"}:
             raise ValueError(f"Unsupported prefix selector: {prefix_selector!r}")
+        if prefix_selector == "hadamard_qk" and prefix_chunk_size is None:
+            prefix_chunk_size = 16384
         if prefix_selector in {"qk", "hadamard_qk"}:
             import src.sparse.sparse_ops as sparse
 

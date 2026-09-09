@@ -221,7 +221,10 @@ def load(args):
         prefix_sparse=prefix_sparse,
         prefix_min_prefix_length=args.prefix_min_prefix_length,
         prefix_token_budget=args.prefix_token_budget,
-        prefix_chunk_size=(args.prefix_chunk_size or 1024),
+        prefix_chunk_size=(
+            args.prefix_chunk_size
+            or (16384 if args.prefix_selector == "hadamard_qk" else 1024)
+        ),
         losa=args.mode in {"losa", "combined"},
         losa_active_topk=args.losa_active_topk,
         losa_score_mode=args.losa_score_mode,
