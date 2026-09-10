@@ -464,7 +464,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         self.assertIsNone(selected)
         self.assertIsNone(logit_positions)
-        torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=2e-3, atol=2e-3)
+        torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
     @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_query_sparse_returns_logits_only_for_selected_masks(self, _copy):
@@ -741,7 +741,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         self.assertIsNone(selected)
         self.assertIsNone(logit_positions)
-        torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=2e-3, atol=2e-3)
+        torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
     @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_sparse_multiblock_generation_uses_llada_selector(self, _copy):

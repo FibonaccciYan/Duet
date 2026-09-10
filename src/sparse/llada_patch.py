@@ -488,7 +488,7 @@ def _capture_block_queries(model, block_start):
 
 
 
-def _losa_attention_mask(
+def _layer_attention_mask(
     attention_mask,
     query_positions,
     key_positions,
@@ -546,7 +546,7 @@ def _cached_forward(
     selected_position_embeddings = None
     full_hidden_base = None
     compressed_hidden_states = False
-    losa_attention_masks = {}
+    zero_attention_masks = {}
 
     losa_context = None
     if model.config.llada_losa:
@@ -596,21 +596,19 @@ def _cached_forward(
             if losa_context is not None:
                 losa_context["query_positions"] = layer_query_positions
 
-            layer_attention_mask = None
-            if losa_context is not None:
-                layer_prefix_positions = (
-                    prefix_indices[layer_idx]
-                    if prefix_indices is not None
-                    else torch.arange(original_prefix_length, device=input_ids.device)
-                )
-                layer_attention_mask = _losa_attention_mask(
-                    attention_mask,
-                    layer_query_positions,
-                    all_positions,
-                    layer_prefix_positions,
-                    original_prefix_length,
-                    cache=losa_attention_masks,
-                )
+            layer_prefix_positions = (
+                prefix_indices[layer_idx]
+                if prefix_indices is not None
+                else torch.arange(original_prefix_length, device=input_ids.device)
+            )
+            layer_attention_mask = _layer_attention_mask(
+                attention_mask,
+                layer_query_positions,
+                all_positions,
+                layer_prefix_positions,
+                original_prefix_length,
+                cache=zero_attention_masks,
+            )
 
             layer_outputs = decoder_layer(
                 layer_hidden,

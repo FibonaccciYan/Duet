@@ -43,12 +43,6 @@ Prefix/combined 的单次 cached-forward 则稳定在约 24--25 ms。
 0.32。为避免把数据集相关的门控搜索混入论文消融，统一实现将 fallback 固定为 4；
 上述结果仅作为系统优化的历史诊断，不作为默认配置。
 
-### 全零 mask 与后端选择
-
-LLaDA 普通 attention 不再传入全零 mask，由 PyTorch 原生 GQA 与 SDPA auto 选择
-后端；LoSA 内部仍保留其状态合并所需的 mask。KV cache 保持原实现：Dense 和
-稀疏选择前使用 `DynamicCache`，Query 稀疏层使用 block cache。
-
 ### Block 64 实验
 
 为隔离 block 大小，固定 `query_dense_threshold=0`、Query-only，并让 steps 等于
