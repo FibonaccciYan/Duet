@@ -19,9 +19,11 @@ metric_list:
 filter_list:
   - name: get_response
     filter:
-      # Filter everything after the first letter
+      # Extract the last standalone A-D letter anywhere in the response;
+      # chat-tuned outputs often start with a preamble ("Let's ...", "The ...").
       - function: "regex"
-        regex_pattern: "^([A-Z]).*"
+        regex_pattern: ".*\\b([A-D])\\b"
+        group_select: -1
       - function: take_first
 metadata:
   version: 3.0

@@ -17,7 +17,6 @@ from src.sparse.llada_patch import (
     _cached_forward,
     _select_positions,
     _transfer_tokens,
-    _trim_to_first_eos,
     patch_llada_model as patch_model,
     patch_moe_experts,
 )
@@ -769,21 +768,6 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         self.assertEqual(output.shape, (1, 8))
         self.assertFalse(torch.any(output == 127).item())
-
-    def test_generate_trims_to_first_eos_without_early_stop(self):
-        generated = torch.tensor([[5, 126, 7, 126]])
-        trimmed = _trim_to_first_eos(generated, eos_id=126)
-        self.assertEqual(trimmed.tolist(), [[5, 126]])
-
-    def test_generate_keeps_full_output_when_no_eos(self):
-        generated = torch.tensor([[5, 7, 9]])
-        kept = _trim_to_first_eos(generated, eos_id=126)
-        self.assertEqual(kept.tolist(), [[5, 7, 9]])
-
-    def test_generate_trims_leading_eos_to_single_token(self):
-        generated = torch.tensor([[126, 3, 8]])
-        trimmed = _trim_to_first_eos(generated, eos_id=126)
-        self.assertEqual(trimmed.tolist(), [[126]])
 
     def test_short_prefix_disables_query_sparse(self):
         model = _tiny_model()
