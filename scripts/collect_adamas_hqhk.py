@@ -176,17 +176,10 @@ def main():
                     False,
                 )
             )
-            chunk_size = (
-                selector_args[1]
-                if len(selector_args) > 1
-                else selector_kwargs.get("chunk_size", 256)
-            )
             candidates.append(
                 (
                     "hadamard_qk",
-                    sparse._hadamard_qk_prefix_indices(
-                        query, key, token_budget, chunk_size
-                    ),
+                    sparse._hadamard_qk_prefix_indices(query, key, token_budget),
                     False,
                 )
             )

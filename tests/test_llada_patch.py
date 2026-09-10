@@ -451,9 +451,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         torch.manual_seed(0)
         query = torch.randn(1, 4, 3, 8, device="cuda", dtype=torch.float16)
         key = torch.randn(1, 2, 11, 8, device="cuda", dtype=torch.float16)
-        actual = _hadamard_qk_prefix_indices(
-            query, key, token_budget=4, chunk_size=3
-        )
+        actual = _hadamard_qk_prefix_indices(query, key, token_budget=4)
         hq, hk = _hadamard_transform(query), _hadamard_transform(key)
         distances = (
             hq.reshape(2, 2, 3, 8)[..., None, :] - hk[:, :, None, None]

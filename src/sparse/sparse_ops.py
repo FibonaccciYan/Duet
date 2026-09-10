@@ -375,7 +375,7 @@ def _qk_prefix_indices(query, key, token_budget):
     return indices.sort().values
 
 
-def _hadamard_qk_prefix_indices(query, key, token_budget, chunk_size=16384):
+def _hadamard_qk_prefix_indices(query, key, token_budget):
     """Select by exact L1 distance between floating-point Hq and Hk."""
     prefix_length = key.shape[-2]
     budget = min(int(token_budget), prefix_length)
@@ -384,7 +384,10 @@ def _hadamard_qk_prefix_indices(query, key, token_budget, chunk_size=16384):
     if budget <= 0:
         return torch.empty(0, dtype=torch.long, device=key.device)
     return _distance_prefix_indices(
-        _hadamard_transform(query), _hadamard_transform(key), budget, chunk_size
+        _hadamard_transform(query),
+        _hadamard_transform(key),
+        budget,
+        prefix_length,
     )
 
 

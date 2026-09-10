@@ -148,8 +148,6 @@ class LLaDA(LM):
         prefix_selector = str(prefix_selector).lower()
         if prefix_selector not in {"adamas", "qk", "hadamard_qk"}:
             raise ValueError(f"Unsupported prefix selector: {prefix_selector!r}")
-        if prefix_selector == "hadamard_qk" and prefix_chunk_size is None:
-            prefix_chunk_size = 16384
         if prefix_selector in {"qk", "hadamard_qk"}:
             import src.sparse.sparse_ops as sparse
 
@@ -159,9 +157,6 @@ class LLaDA(LM):
                     if prefix_selector == "hadamard_qk"
                     else sparse._qk_prefix_indices
                 )
-                if prefix_selector == "hadamard_qk":
-                    chunk_size = _args[0] if _args else _kwargs.get("chunk_size", 256)
-                    return selector(query, key, token_budget, chunk_size)
                 return selector(query, key, token_budget)
 
             sparse._adamas_prefix_indices = select_qk

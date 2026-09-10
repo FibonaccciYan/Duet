@@ -221,10 +221,7 @@ def load(args):
         prefix_sparse=prefix_sparse,
         prefix_min_prefix_length=args.prefix_min_prefix_length,
         prefix_token_budget=args.prefix_token_budget,
-        prefix_chunk_size=(
-            args.prefix_chunk_size
-            or (16384 if args.prefix_selector == "hadamard_qk" else 1024)
-        ),
+        prefix_chunk_size=(args.prefix_chunk_size or 1024),
         losa=args.mode in {"losa", "combined"},
         losa_active_topk=args.losa_active_topk,
         losa_score_mode=args.losa_score_mode,
@@ -366,9 +363,6 @@ def main():
                 if args.prefix_selector == "hadamard_qk"
                 else sparse._qk_prefix_indices
             )
-            if args.prefix_selector == "hadamard_qk":
-                chunk_size = _args[0] if _args else _kwargs.get("chunk_size", 256)
-                return selector(query, key, token_budget, chunk_size)
             return selector(query, key, token_budget)
 
         sparse._adamas_prefix_indices = select_qk
