@@ -596,19 +596,21 @@ def _cached_forward(
             if losa_context is not None:
                 losa_context["query_positions"] = layer_query_positions
 
-            layer_prefix_positions = (
-                prefix_indices[layer_idx]
-                if prefix_indices is not None
-                else torch.arange(original_prefix_length, device=input_ids.device)
-            )
-            layer_attention_mask = _layer_attention_mask(
-                attention_mask,
-                layer_query_positions,
-                all_positions,
-                layer_prefix_positions,
-                original_prefix_length,
-                cache=zero_attention_masks,
-            )
+            layer_attention_mask = None
+            if not query_sparse or losa_context is not None:
+                layer_prefix_positions = (
+                    prefix_indices[layer_idx]
+                    if prefix_indices is not None
+                    else torch.arange(original_prefix_length, device=input_ids.device)
+                )
+                layer_attention_mask = _layer_attention_mask(
+                    attention_mask,
+                    layer_query_positions,
+                    all_positions,
+                    layer_prefix_positions,
+                    original_prefix_length,
+                    cache=zero_attention_masks,
+                )
 
             layer_outputs = decoder_layer(
                 layer_hidden,

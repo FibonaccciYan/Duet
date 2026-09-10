@@ -43,6 +43,10 @@ Prefix/combined 的单次 cached-forward 则稳定在约 24--25 ms。
 0.32。为避免把数据集相关的门控搜索混入论文消融，统一实现将 fallback 固定为 4；
 上述结果仅作为系统优化的历史诊断，不作为默认配置。
 
+Query 与 Query+Prefix 将 cached attention 的全零 mask 省略，以启用 PyTorch
+SDPA 的原生 GQA；Dense、Prefix-only 与 LoSA 保留原 mask。该 attention 优化是
+Query 方法实现的一部分，质量变化由完整评测门控。
+
 ### Block 64 实验
 
 为隔离 block 大小，固定 `query_dense_threshold=0`、Query-only，并让 steps 等于

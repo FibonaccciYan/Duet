@@ -489,21 +489,23 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                     dense.past_key_values, prefix_cache, 4, 8
                 ),
             }
-            _, selected, logit_positions = _cached_forward(
-                model,
-                tokens[:, 4:],
-                attention_mask[:, :, 4:, :],
-                positions[:, 4:],
-                prefix_cache,
-                selection_state,
-                mask_id=127,
-                ratio=0.5,
-                top_k=8,
-                selection_interval=1,
-                query_dense_threshold=0,
-                query_sparse=True,
-                original_prefix_length=4,
-            )
+            with mock_patch("src.sparse.llada_patch._layer_attention_mask") as build_mask:
+                _, selected, logit_positions = _cached_forward(
+                    model,
+                    tokens[:, 4:],
+                    attention_mask[:, :, 4:, :],
+                    positions[:, 4:],
+                    prefix_cache,
+                    selection_state,
+                    mask_id=127,
+                    ratio=0.5,
+                    top_k=8,
+                    selection_interval=1,
+                    query_dense_threshold=0,
+                    query_sparse=True,
+                    original_prefix_length=4,
+                )
+            build_mask.assert_not_called()
 
         self.assertIsNotNone(selected)
         self.assertIsNotNone(logit_positions)
