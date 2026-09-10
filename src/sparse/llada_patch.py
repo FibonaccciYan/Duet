@@ -538,9 +538,8 @@ def _cached_forward(
     base = model.model
     inputs_embeds = base.word_embeddings(input_ids)
     position_embeddings = base.rotary_emb(inputs_embeds, position_ids)
-    block_cache = selection_state.get("sparse_cache")
-    if block_cache is None:
-        raise RuntimeError("Cached forward requires an initialized block cache")
+    full_cache = DynamicCache.from_legacy_cache(prefix_cache)
+    sparse_cache = selection_state.get("sparse_cache")
     hidden_states = inputs_embeds
     selected_positions = None
     selected_position_ids = None
@@ -578,8 +577,7 @@ def _cached_forward(
                 layer_hidden = hidden_states
                 layer_position_ids = position_ids
                 layer_position_embeddings = position_embeddings
-                block_cache.set_positions(all_positions)
-                layer_cache = block_cache
+                layer_cache = full_cache
                 layer_query_positions = all_positions
             else:
                 layer_hidden = (
@@ -589,8 +587,10 @@ def _cached_forward(
                 )
                 layer_position_ids = selected_position_ids
                 layer_position_embeddings = selected_position_embeddings
-                block_cache.set_positions(selected_positions)
-                layer_cache = block_cache
+                if sparse_cache is None:
+                    raise RuntimeError("Sparse cache is missing after dense refresh.")
+                sparse_cache.set_positions(selected_positions)
+                layer_cache = sparse_cache
                 layer_query_positions = selected_positions
 
             if losa_context is not None:
@@ -844,14 +844,18 @@ def _block_cache_generate(self, *args, **kwargs):
             prefix_cache = _prefix_from_dynamic_cache(
                 dense_outputs.past_key_values, block_start
             )
-        block_cache = _dual_cache_from_dense(
-            dense_outputs.past_key_values,
-            prefix_cache,
-            block_start,
-            block_end,
+        sparse_cache = (
+            _dual_cache_from_dense(
+                dense_outputs.past_key_values,
+                prefix_cache,
+                block_start,
+                block_end,
+            )
+            if query_sparse
+            else None
         )
         del dense_outputs
-        selection_state = {"positions": None, "step": 0, "sparse_cache": block_cache}
+        selection_state = {"positions": None, "step": 0, "sparse_cache": sparse_cache}
         post_steps = 0
         max_iterations = max(steps, block_length) + max_post_steps
         for _ in range(1, max_iterations):

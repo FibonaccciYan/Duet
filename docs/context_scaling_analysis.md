@@ -43,24 +43,11 @@ Prefix/combined 的单次 cached-forward 则稳定在约 24--25 ms。
 0.32。为避免把数据集相关的门控搜索混入论文消融，统一实现将 fallback 固定为 4；
 上述结果仅作为系统优化的历史诊断，不作为默认配置。
 
-### 统一 attention runtime 与后端选择
+### 全零 mask 与后端选择
 
-Dense、Query、Prefix 和 Query+Prefix 的 cached-forward 现统一使用同一个 block
-cache；普通 attention 不再传入全零 mask，由 PyTorch 原生 GQA 与 SDPA auto 选择
-后端。LoSA 内部仍保留其状态合并所需的 mask。
-
-在 H800、32K 上下文、生成 64 token 的五次交错 A/B 中，各模式耗时中位数如下：
-
-| 后端 | Dense | Query | Prefix | Query+Prefix |
-| --- | ---: | ---: | ---: | ---: |
-| SDPA auto | 2.519 s | 2.824 s | 2.170 s | 3.087 s |
-| 强制 Flash | 3.564 s | 2.600 s | 2.241 s | 3.039 s |
-
-Flash 使 Query 快 8.6%、Query+Prefix 快 1.6%，但使 Dense 慢 41.5%、Prefix 慢
-3.3%，且四种模式的输出 checksum 均改变。因此在要求四种算法共享同一后端的
-前提下固定使用 SDPA auto；Flash 已在性能门控阶段淘汰，不再增加论文方法参数。
-nsys 复查确认 cached attention 使用 `cudnn_generated_fort_native_sdpa`，KV 更新使用
-`_fused_kv_index_copy_kernel`。
+LLaDA 普通 attention 不再传入全零 mask，由 PyTorch 原生 GQA 与 SDPA auto 选择
+后端；LoSA 内部仍保留其状态合并所需的 mask。KV cache 保持原实现：Dense 和
+稀疏选择前使用 `DynamicCache`，Query 稀疏层使用 block cache。
 
 ### Block 64 实验
 

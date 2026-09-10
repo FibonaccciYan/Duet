@@ -7,7 +7,6 @@ import torch
 from transformers.cache_utils import DynamicCache
 
 from src.sparse.sparse_ops import (
-    _BlockDualCache,
     _apply_rotary,
     _block_attention_output_lse,
     _new_losa_state,
@@ -151,7 +150,8 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             ):
                 assert attention_mask is None
                 seen_key_lengths.append(
-                    past_key_value.key_cache[self.layer_idx].shape[-2]
+                    past_key_value.to_legacy_cache()[self.layer_idx][0].shape[-2]
+                    + hidden_states.shape[1]
                 )
                 return (hidden_states,)
 
@@ -181,22 +181,12 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             (torch.zeros(1, 1, 2, 1), torch.zeros(1, 1, 2, 1)),
             (torch.zeros(1, 1, 3, 1), torch.zeros(1, 1, 3, 1)),
         )
-        block_cache = _BlockDualCache(
-            [
-                (
-                    torch.cat((key, torch.zeros(1, 1, 2, 1)), dim=2),
-                    torch.cat((value, torch.zeros(1, 1, 2, 1)), dim=2),
-                )
-                for key, value in prefix_cache
-            ],
-            [2, 3],
-        )
         _sparse_cached_forward(
             model,
             torch.tensor([[1, 2]]),
             torch.arange(2).unsqueeze(0),
             prefix_cache,
-            {"sparse_cache": block_cache, "step": 0},
+            {"sparse_cache": None, "step": 0},
             mask_id=15,
             temperature=0.0,
             top_k=7,

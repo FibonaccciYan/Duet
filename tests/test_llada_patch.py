@@ -86,16 +86,6 @@ def _torch_kv_copy(key_cache, value_cache, positions, key, value, prefix_length)
     value_cache.index_copy_(2, positions, value)
 
 
-def _selection_state(dense, prefix_cache):
-    return {
-        "positions": None,
-        "step": 0,
-        "sparse_cache": _dual_cache_from_dense(
-            dense.past_key_values, prefix_cache, 4, 8
-        ),
-    }
-
-
 class BlockCacheSparsePatchTest(unittest.TestCase):
     def test_trim_to_first_eos_is_independent_of_early_stop(self):
         generated = torch.tensor([[5, 126, 7]])
@@ -442,8 +432,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
 
         self.assertEqual(indices.tolist(), [0, 1, 2])
 
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
-    def test_dense_cached_forward_matches_full_forward(self, _copy):
+    def test_dense_cached_forward_matches_full_forward(self):
         model = _tiny_model()
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
         positions = torch.arange(8).unsqueeze(0)
@@ -458,14 +447,13 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 return_dict=True,
             )
             prefix_cache = _prefix_from_dynamic_cache(dense.past_key_values, 4)
-            selection_state = _selection_state(dense, prefix_cache)
             cached_logits, selected, logit_positions = _cached_forward(
                 model,
                 tokens[:, 4:],
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
                 prefix_cache,
-                selection_state,
+                {"positions": None, "step": 0},
                 mask_id=127,
                 ratio=1.0,
                 top_k=8,
@@ -494,7 +482,13 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 return_dict=True,
             )
             prefix_cache = _prefix_from_dynamic_cache(dense.past_key_values, 4)
-            selection_state = _selection_state(dense, prefix_cache)
+            selection_state = {
+                "positions": None,
+                "step": 0,
+                "sparse_cache": _dual_cache_from_dense(
+                    dense.past_key_values, prefix_cache, 4, 8
+                ),
+            }
             _, selected, logit_positions = _cached_forward(
                 model,
                 tokens[:, 4:],
@@ -516,8 +510,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertLess(selected.numel(), 4)
         torch.testing.assert_close(logit_positions, selected)
 
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
-    def test_query_selection_runs_after_configured_layer(self, _copy):
+    def test_query_selection_runs_after_configured_layer(self):
         model = _tiny_model()
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
         positions = torch.arange(8).unsqueeze(0)
@@ -541,8 +534,6 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                     return_dict=True,
                 )
                 completed_layers.clear()
-                prefix_cache = _prefix_from_dynamic_cache(dense.past_key_values, 4)
-                selection_state = _selection_state(dense, prefix_cache)
                 with mock_patch(
                     "src.sparse.llada_patch._select_positions",
                     side_effect=lambda *args, **kwargs: observed_layers.append(
@@ -554,8 +545,8 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                         tokens[:, 4:],
                         attention_mask[:, :, 4:, :],
                         positions[:, 4:],
-                        prefix_cache,
-                        selection_state,
+                        _prefix_from_dynamic_cache(dense.past_key_values, 4),
+                        {"positions": None, "step": 0},
                         mask_id=127,
                         ratio=0.5,
                         top_k=8,
@@ -582,10 +573,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         "src.sparse.llada_patch._attention_output_lse",
         side_effect=_block_attention_output_lse,
     )
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
-    def test_losa_first_cached_forward_matches_dense_forward_exactly(
-        self, _copy, _attention
-    ):
+    def test_losa_first_cached_forward_matches_dense_forward_exactly(self, _attention):
         model = _tiny_model()
         patch_model(
             model,
@@ -598,6 +586,8 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
         positions = torch.arange(8).unsqueeze(0)
         attention_mask = _block_mask(2, 4, next(model.parameters()).dtype)
+        selection_state = {"positions": None, "step": 0, "sparse_cache": None}
+
         with torch.no_grad():
             dense = model._llada_block_cache_dense_forward(
                 tokens,
@@ -606,14 +596,12 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 use_cache=True,
                 return_dict=True,
             )
-            prefix_cache = _prefix_from_dynamic_cache(dense.past_key_values, 4)
-            selection_state = _selection_state(dense, prefix_cache)
             cached_logits, selected, logit_positions = _cached_forward(
                 model,
                 tokens[:, 4:],
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
-                prefix_cache,
+                _prefix_from_dynamic_cache(dense.past_key_values, 4),
                 selection_state,
                 mask_id=127,
                 ratio=1.0,
@@ -643,9 +631,8 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         "src.sparse.sparse_ops.losa_query_delta",
         side_effect=lambda query, *_args, **_kwargs: torch.zeros(query.shape[2]),
     )
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_losa_full_active_budget_uses_losa_after_dense_init(
-        self, _copy, _delta, _attention
+        self, _delta, _attention
     ):
         model = _tiny_model()
         patch_model(
@@ -659,6 +646,8 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
         positions = torch.arange(8).unsqueeze(0)
         attention_mask = _block_mask(2, 4, next(model.parameters()).dtype)
+        selection_state = {"positions": None, "step": 0, "sparse_cache": None}
+
         with mock_patch.object(
             model.model.layers[0].attention,
             "_llada_losa_dense_forward",
@@ -671,14 +660,12 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 use_cache=True,
                 return_dict=True,
             )
-            prefix_cache = _prefix_from_dynamic_cache(dense.past_key_values, 4)
-            selection_state = _selection_state(dense, prefix_cache)
             cached_logits, _, _ = _cached_forward(
                 model,
                 tokens[:, 4:],
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
-                prefix_cache,
+                _prefix_from_dynamic_cache(dense.past_key_values, 4),
                 selection_state,
                 mask_id=127,
                 ratio=1.0,
@@ -694,7 +681,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 tokens[:, 4:],
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
-                prefix_cache,
+                _prefix_from_dynamic_cache(dense.past_key_values, 4),
                 selection_state,
                 mask_id=127,
                 ratio=1.0,
@@ -711,8 +698,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             all(state["valid"].all().item() for state in selection_state["losa_states"].values())
         )
 
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
-    def test_compact_prefix_matches_dense_masked_prefix(self, _copy):
+    def test_compact_prefix_matches_dense_masked_prefix(self):
         model = _tiny_model()
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
         positions = torch.arange(8).unsqueeze(0)
@@ -736,14 +722,13 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 )
                 for key, value in dense.past_key_values.to_legacy_cache()
             )
-            selection_state = _selection_state(dense, prefix_cache)
             cached_logits, selected, logit_positions = _cached_forward(
                 model,
                 tokens[:, 4:],
                 attention_mask[:, :, 4:, :],
                 positions[:, 4:],
                 prefix_cache,
-                selection_state,
+                {"positions": None, "step": 0},
                 mask_id=127,
                 ratio=0.5,
                 top_k=8,
@@ -790,8 +775,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(output.shape, (1, 8))
         self.assertFalse(torch.any(output == 127).item())
 
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
-    def test_short_prefix_disables_query_sparse(self, _copy):
+    def test_short_prefix_disables_query_sparse(self):
         model = _tiny_model()
         patch_model(
             model,
@@ -819,8 +803,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             all(not call.kwargs["query_sparse"] for call in cached_forward.call_args_list)
         )
 
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
-    def test_short_prefix_disables_prefix_sparse(self, _copy):
+    def test_short_prefix_disables_prefix_sparse(self):
         model = _tiny_model()
         patch_model(
             model,
