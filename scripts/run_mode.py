@@ -74,7 +74,11 @@ def parse_bool(value: str | bool) -> bool:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=("llada", "sdar"), required=True)
-    parser.add_argument("--mode", choices=("dense", "losa", "focus", "focus_v2"), required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("dense", "losa", "losa_v2", "focus", "focus_v2"),
+        required=True,
+    )
     parser.add_argument("--model_path", default=None)
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--seed", type=int, default=42)
@@ -149,9 +153,9 @@ def main() -> int:
         dtype=args.dtype,
         attn_implementation=args.attn_implementation,
     )
-    if args.mode in {"dense", "losa", "focus_v2"}:
+    if args.mode in {"dense", "losa", "losa_v2", "focus_v2"}:
         runtime_kwargs["moe_expert_patch"] = args.moe_expert_patch
-    if args.mode == "losa":
+    if args.mode in {"losa", "losa_v2"}:
         runtime_kwargs.update(
             losa_page_size=args.losa_page_size,
             losa_token_budget=args.losa_token_budget,
@@ -237,7 +241,8 @@ def main() -> int:
             "eos_early_stop": bool(args.eos_early_stop),
         },
         "losa": {
-            "enabled": args.mode == "losa",
+            "enabled": args.mode in {"losa", "losa_v2"},
+            "variant": args.mode,
             "page_size": args.losa_page_size,
             "token_budget": args.losa_token_budget,
             "active_topk": args.losa_active_topk,

@@ -7,9 +7,10 @@ from .dense.api import DenseRuntime
 from .focus.api import FocusRuntime
 from .focus_v2.api import FocusV2Runtime
 from .losa.api import LoSARuntime
+from .losa_v2.api import LoSAV2Runtime
 
 
-RuntimeKind = Literal["dense", "losa", "focus", "focus_v2"]
+RuntimeKind = Literal["dense", "losa", "losa_v2", "focus", "focus_v2"]
 
 
 def load_runtime(kind: RuntimeKind, **kwargs):
@@ -17,6 +18,8 @@ def load_runtime(kind: RuntimeKind, **kwargs):
         return DenseRuntime(**kwargs)
     if kind == "losa":
         return LoSARuntime(**kwargs)
+    if kind == "losa_v2":
+        return LoSAV2Runtime(**kwargs)
     if kind == "focus":
         return FocusRuntime(**kwargs)
     if kind == "focus_v2":

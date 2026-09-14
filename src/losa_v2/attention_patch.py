@@ -99,6 +99,7 @@ def _run_losa_attention(
         token_budget=int(context["token_budget"]),
         active_count=int(context["active_count"]),
         mode=context["gqa_mode"],
+        backend=context["backend"],
         previous_state=previous_state,
     )
     context["states"][key] = result.next_state

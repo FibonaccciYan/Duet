@@ -14,6 +14,15 @@ import math
 
 import torch
 
+from .triton_ops import (
+    compact_prefix_attention_triton,
+    compact_selected_pages_triton,
+    dense_attention_triton,
+    quest_group_mean_scores_triton,
+    select_active_rows_triton,
+    use_triton_backend,
+)
+
 
 @dataclass(frozen=True)
 class GQAMode:
@@ -207,12 +216,15 @@ def compact_selected_pages(
     rows, heads, page_budget = selected_pages.shape
     if num_kv_heads is None:
         num_kv_heads = heads
-    max_pages = min(num_prefix_pages, rows * page_budget)
+    if heads % num_kv_heads:
+        raise ValueError("Hq must be divisible by Hkv")
+    selections_per_kv_head = heads // num_kv_heads
+    max_pages = min(
+        num_prefix_pages, rows * page_budget * selections_per_kv_head
+    )
     device = selected_pages.device
     mask_flat = torch.zeros(num_kv_heads * num_prefix_pages, dtype=torch.bool, device=device)
     if num_kv_heads != heads or group_size is not None:
-        if heads % num_kv_heads:
-            raise ValueError("Hq must be divisible by Hkv")
         kv_for_q = _kv_head_map(heads, num_kv_heads, device)
         target_kv = kv_for_q[None, :, None].expand(rows, heads, page_budget)
         flat_index = (target_kv * num_prefix_pages + selected_pages).reshape(-1)
@@ -287,6 +299,7 @@ def losa_v2_attention_step(
     token_budget: int,
     active_count: int,
     mode: str = GQAMode.GROUP_MEAN,
+    backend: str = "auto",
     metadata: V2PageMetadata | None = None,
     previous_state: V2LayerState | None = None,
 ) -> V2AttentionResult:
@@ -300,7 +313,15 @@ def losa_v2_attention_step(
     num_rows, num_q, dim = query.shape
     num_kv = k_prefix.shape[1]
     group = num_q // num_kv
-    block_output, block_lse = dense_attention(query, k_block, v_block)
+    step_triton_enabled = use_triton_backend(
+        backend, query, k_block, v_block
+    )
+    if step_triton_enabled and k_block.shape[0] <= 128:
+        block_output, block_lse = dense_attention_triton(
+            query, k_block, v_block
+        )
+    else:
+        block_output, block_lse = dense_attention(query, k_block, v_block)
 
     if previous_state is None:
         if metadata is None:
@@ -316,27 +337,65 @@ def losa_v2_attention_step(
         metadata = previous_state.metadata
         if metadata is None or metadata.prefix_length != k_prefix.shape[0] or metadata.page_size != page_size:
             metadata = build_page_metadata(k_prefix, page_size)
-        active_rows, locality = select_active_rows(query, previous_state.query, active_count)
+        triton_enabled = step_triton_enabled and all(
+            tensor.is_cuda
+            for tensor in (
+                previous_state.query,
+                metadata.k_min,
+                metadata.k_max,
+            )
+        )
+        if triton_enabled:
+            active_rows, locality = select_active_rows_triton(
+                query, previous_state.query, active_count
+            )
+        else:
+            active_rows, locality = select_active_rows(
+                query, previous_state.query, active_count
+            )
         q_active = query.index_select(0, active_rows).contiguous()
-        scores = quest_page_scores_v2(q_active, metadata, mode=mode)
+        if triton_enabled and mode == GQAMode.GROUP_MEAN:
+            scores = quest_group_mean_scores_triton(
+                q_active, metadata.k_min, metadata.k_max
+            )
+        else:
+            scores = quest_page_scores_v2(q_active, metadata, mode=mode)
         page_budget = min(metadata.num_pages, math.ceil(token_budget / page_size))
         selected = scores.topk(page_budget, dim=-1).indices
-        num_kv_heads = num_kv if mode != GQAMode.PER_QUERY_HEAD else None
-        group_size = group if mode != GQAMode.PER_QUERY_HEAD else None
-        compact_pages = compact_selected_pages(
-            selected,
-            metadata.num_pages,
-            num_kv_heads=num_kv_heads,
-            group_size=group_size,
-        )
-        prefix_output, prefix_lse = compact_prefix_attention(
-            q_active,
-            k_prefix,
-            v_prefix,
-            compact_pages,
-            page_size=page_size,
-            prefix_length=metadata.prefix_length,
-        )
+        num_kv_heads = num_kv
+        group_size = group
+        if triton_enabled:
+            compact_pages = compact_selected_pages_triton(
+                selected,
+                metadata.num_pages,
+                num_kv_heads=num_kv_heads,
+                group_size=group_size,
+            )
+        else:
+            compact_pages = compact_selected_pages(
+                selected,
+                metadata.num_pages,
+                num_kv_heads=num_kv_heads,
+                group_size=group_size,
+            )
+        if triton_enabled:
+            prefix_output, prefix_lse = compact_prefix_attention_triton(
+                q_active,
+                k_prefix,
+                v_prefix,
+                compact_pages,
+                page_size=page_size,
+                prefix_length=metadata.prefix_length,
+            )
+        else:
+            prefix_output, prefix_lse = compact_prefix_attention(
+                q_active,
+                k_prefix,
+                v_prefix,
+                compact_pages,
+                page_size=page_size,
+                prefix_length=metadata.prefix_length,
+            )
         state_prefix_output = previous_state.prefix_output
         state_prefix_lse = previous_state.prefix_lse
         state_prefix_output.index_copy_(0, active_rows, prefix_output)
