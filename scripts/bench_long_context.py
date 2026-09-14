@@ -35,6 +35,14 @@ MODEL_PATHS = {
     "sdar": "/data0/ysy/models/SDAR-8B-Chat-b32",
 }
 
+NARRATIVEQA_PROMPT = (
+    "You are given a story, which can be either a novel or a movie script, and a question. "
+    "Answer the question asconcisely as you can, using a single phrase if possible. Do not "
+    "provide any explanation.\n\nStory: {context}\n\nNow, answer the question based on the "
+    "story asconcisely as you can, using a single phrase if possible. Do not provide any "
+    "explanation.\n\nQuestion: {input}\n\nAnswer:"
+)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -44,6 +52,7 @@ def parse_args():
         "--mode",
         choices=(
             "dense",
+            "maskless_dense",
             "query",
             "prefix",
             "query_prefix",
@@ -55,6 +64,12 @@ def parse_args():
         help="combined enables Query Sparse, Prefix Sparse, and LoSA",
     )
     parser.add_argument("--contexts", type=int, nargs="+", default=(8192, 16384, 32768))
+    parser.add_argument(
+        "--prompt-lengths",
+        type=int,
+        nargs="+",
+        help="benchmark exact input lengths instead of prompt+generation windows",
+    )
     parser.add_argument("--gen-length", type=int, default=64)
     parser.add_argument("--block-length", type=int, default=32)
     parser.add_argument("--steps", type=int, default=None)
@@ -66,14 +81,22 @@ def parse_args():
     )
     parser.add_argument("--losa-key-samples", type=int, default=32)
     parser.add_argument("--prefix-token-budget", type=int, default=256)
+    parser.add_argument("--prefix-rescreen-full-kv", action="store_true")
     parser.add_argument(
         "--prefix-selector",
-        choices=("adamas", "qk", "hadamard_qk"),
-        default="adamas",
+        choices=("raw_l1", "hadamard_qk", "adamas", "qk"),
+        default="raw_l1",
     )
     parser.add_argument("--prefix-min-prefix-length", type=int, default=None)
     parser.add_argument("--prefix-chunk-size", type=int, default=None)
+    parser.add_argument(
+        "--prefix-share-layer-pairs",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     parser.add_argument("--query-ratio", type=float, default=None)
+    parser.add_argument("--query-selection-interval", type=int, default=None)
+    parser.add_argument("--query-selection-layer", type=int, default=None)
     parser.add_argument("--query-dense-threshold", type=int, default=None)
     parser.add_argument("--query-min-prefix-length", type=int, default=None)
     parser.add_argument(
@@ -89,8 +112,12 @@ def parse_args():
         ),
         default="sequential",
     )
+    parser.add_argument("--threshold", type=float)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument("--narrativeqa-data-file", type=Path)
+    parser.add_argument("--narrativeqa-index", type=int, default=0)
+    parser.add_argument("--narrativeqa-indices", type=int, nargs="+")
     parser.add_argument(
         "--paired",
         action="store_true",
@@ -103,6 +130,7 @@ def parse_args():
     )
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--phase-profile", action="store_true")
+    parser.add_argument("--llada-full-mask", action="store_true")
     return parser.parse_args()
 
 
@@ -207,21 +235,31 @@ def load(args):
             else (0.5 if is_sdar else 0.7)
         ),
         top_k=64,
-        selection_interval=1 if is_sdar else 4,
+        selection_interval=(
+            args.query_selection_interval
+            if args.query_selection_interval is not None
+            else (1 if is_sdar else 4)
+        ),
         query_dense_threshold=(
             args.query_dense_threshold
             if args.query_dense_threshold is not None
-            else (0 if is_sdar else 4)
+            else 0
         ),
         query_min_prefix_length=args.query_min_prefix_length,
         refresh_step=-1 if is_sdar else 2,
-        selection_layer=5 if is_sdar else 1,
+        selection_layer=(
+            args.query_selection_layer
+            if args.query_selection_layer is not None
+            else (5 if is_sdar else 1)
+        ),
         deep_only_transfer=args.deep_only_transfer,
         query_sparse=query_sparse,
         prefix_sparse=prefix_sparse,
         prefix_min_prefix_length=args.prefix_min_prefix_length,
         prefix_token_budget=args.prefix_token_budget,
         prefix_chunk_size=(args.prefix_chunk_size or 1024),
+        prefix_share_layer_pairs=args.prefix_share_layer_pairs,
+        prefix_rescreen_full_kv=args.prefix_rescreen_full_kv,
         losa=args.mode in {"losa", "combined"},
         losa_active_topk=args.losa_active_topk,
         losa_score_mode=args.losa_score_mode,
@@ -232,7 +270,16 @@ def load(args):
     return model, tokenizer
 
 
-def exact_prompt(tokenizer, length, device):
+def exact_prompt(tokenizer, length, device, source_ids=None):
+    if source_ids is not None:
+        if source_ids.shape[-1] < length:
+            raise ValueError(
+                f"NarrativeQA prompt has {source_ids.shape[-1]} tokens, needs {length}"
+            )
+        head = length // 2
+        return torch.cat(
+            (source_ids[:, :head], source_ids[:, -(length - head) :]), dim=-1
+        )
     tail = tokenizer.apply_chat_template(
         [{"role": "user", "content": "Summarize the preceding archive."}],
         add_generation_prompt=True,
@@ -248,6 +295,26 @@ def exact_prompt(tokenizer, length, device):
     prefix_length = length - len(tail)
     prefix = (filler * math.ceil(prefix_length / len(filler)))[:prefix_length]
     return torch.tensor(prefix + tail, dtype=torch.long, device=device).unsqueeze(0)
+
+
+def load_narrativeqa_prompt(tokenizer, path, index, device):
+    if index < 0:
+        raise ValueError("--narrativeqa-index must be non-negative")
+    with path.open(encoding="utf-8") as handle:
+        for current, line in enumerate(handle):
+            if current == index:
+                record = json.loads(line)
+                break
+        else:
+            raise ValueError(f"NarrativeQA index {index} not found in {path}")
+    prompt = NARRATIVEQA_PROMPT.format(**record)
+    input_ids = tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        add_generation_prompt=True,
+        tokenize=True,
+        return_tensors="pt",
+    )
+    return input_ids.to(device), record.get("_id", index)
 
 
 def checksum(tensor):
@@ -278,7 +345,11 @@ def generation_kwargs(args, tokenizer, input_ids):
         "gen_length": args.gen_length,
         "block_length": args.block_length,
         "steps": args.steps or args.block_length,
-        "threshold": 1.0 if is_sdar else 0.5,
+        "threshold": (
+            getattr(args, "threshold", None)
+            if getattr(args, "threshold", None) is not None
+            else (1.0 if is_sdar else 0.5)
+        ),
         "temperature": 0.0,
         "top_p": None,
         "top_k": None,
@@ -288,15 +359,30 @@ def generation_kwargs(args, tokenizer, input_ids):
     if is_sdar:
         kwargs.update(remasking_strategy=args.remasking_strategy, eb_threshold=0.35)
     else:
-        kwargs.update(editing_threshold=0.0, num_to_transfer=1)
+        runtime_mode = getattr(args, "runtime_mode", getattr(args, "mode", "dense"))
+        kwargs.update(
+            editing_threshold=0.0,
+            num_to_transfer=1,
+            maskless_attention=(
+                runtime_mode != "dense"
+                if args.ablation
+                else not args.llada_full_mask
+            ),
+        )
     return kwargs
 
 
 def run_once(args, model, tokenizer, context_length):
-    prompt_length = context_length - args.gen_length
+    prompt_length = (
+        context_length
+        if args.prompt_lengths is not None
+        else context_length - args.gen_length
+    )
     if prompt_length <= 0:
         raise ValueError("every context must be greater than --gen-length")
-    input_ids = exact_prompt(tokenizer, prompt_length, model.device)
+    input_ids = exact_prompt(
+        tokenizer, prompt_length, model.device, getattr(args, "prompt_ids", None)
+    )
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.synchronize()
@@ -315,7 +401,8 @@ def run_once(args, model, tokenizer, context_length):
             f"expected at most {args.gen_length} generated tokens, got {sequences.shape[-1]}"
         )
     result = {
-        "context_tokens": context_length,
+        "benchmark_tokens": context_length,
+        "context_tokens": prompt_length + args.gen_length,
         "prompt_tokens": prompt_length,
         "requested_output_tokens": args.gen_length,
         "generated_tokens": int(sequences.shape[-1]),
@@ -354,39 +441,57 @@ def main():
     if args.ablation and args.mode != "query_prefix":
         raise ValueError("--ablation requires --mode query_prefix")
     set_seed(args.seed)
-    if args.prefix_selector in {"qk", "hadamard_qk"}:
+    if args.prefix_selector != "raw_l1":
         import src.sparse.sparse_ops as sparse
 
-        def select_qk(query, key, token_budget, *_args, **_kwargs):
-            selector = (
-                sparse._hadamard_qk_prefix_indices
-                if args.prefix_selector == "hadamard_qk"
-                else sparse._qk_prefix_indices
+        if args.prefix_selector == "adamas":
+            sparse._prefix_indices = sparse._adamas_prefix_indices
+        elif args.prefix_selector == "qk":
+            sparse._prefix_indices = lambda query, key, budget, *_args, **_kwargs: (
+                sparse._qk_prefix_indices(query, key, budget)
             )
-            return selector(query, key, token_budget)
-
-        sparse._adamas_prefix_indices = select_qk
+        else:
+            sparse._prefix_indices = lambda query, key, budget, *_args, **_kwargs: (
+                sparse._hadamard_qk_prefix_indices(query, key, budget)
+            )
     model, tokenizer = load(args)
+    prompts = [(None, None, None)]
+    if args.narrativeqa_data_file is not None:
+        indices = args.narrativeqa_indices or [args.narrativeqa_index]
+        prompts = [
+            (
+                *load_narrativeqa_prompt(
+                    tokenizer, args.narrativeqa_data_file, index, model.device
+                ),
+                index,
+            )
+            for index in indices
+        ]
+    args.prompt_ids, args.prompt_id, _ = prompts[0]
     args.phase_profiler = PhaseProfiler(args.model) if args.phase_profile else None
     compared_modes = (
-        ("dense", "query", "prefix", "query_prefix")
+        ("dense", "maskless_dense", "query", "prefix", "query_prefix")
+        if args.ablation and args.model == "llada"
+        else ("dense", "query", "prefix", "query_prefix")
         if args.ablation
         else ("dense", args.mode)
         if args.paired
         else (args.mode,)
     )
+    lengths = args.prompt_lengths or args.contexts
 
     # Compile fixed-shape kernels and initialize caches outside the measurement.
     warmup_args = argparse.Namespace(**vars(args))
     warmup_args.gen_length = args.gen_length if args.paired or args.ablation else 32
     if args.paired or args.ablation:
-        for context_length in args.contexts:
+        for context_length in lengths:
             warmup_context = context_length - args.gen_length + warmup_args.gen_length
             for mode in compared_modes:
                 set_runtime_mode(model, args.model, mode)
+                warmup_args.runtime_mode = mode
                 run_once(warmup_args, model, tokenizer, warmup_context)
     else:
-        warmup_ids = exact_prompt(tokenizer, 480, model.device)
+        warmup_ids = exact_prompt(tokenizer, 480, model.device, args.prompt_ids)
         model.generate(**generation_kwargs(warmup_args, tokenizer, warmup_ids))
     torch.cuda.synchronize()
 
@@ -404,27 +509,36 @@ def main():
         flush=True,
     )
     for repeat in range(args.repeats):
-        contexts = args.contexts if repeat % 2 == 0 else reversed(args.contexts)
-        shift = repeat % len(compared_modes)
-        modes = compared_modes[shift:] + compared_modes[:shift]
-        for context_length in contexts:
-            for mode in modes:
-                set_runtime_mode(model, args.model, mode)
-                result = run_once(args, model, tokenizer, context_length)
-                result.update(repeat=repeat, mode=mode)
-                results.append(result)
-                print(json.dumps(result, sort_keys=True), flush=True)
+        for sample_position, (prompt_ids, prompt_id, prompt_index) in enumerate(prompts):
+            args.prompt_ids, args.prompt_id = prompt_ids, prompt_id
+            order = repeat * len(prompts) + sample_position
+            contexts = lengths if order % 2 == 0 else reversed(lengths)
+            shift = order % len(compared_modes)
+            modes = compared_modes[shift:] + compared_modes[:shift]
+            for context_length in contexts:
+                for mode in modes:
+                    set_runtime_mode(model, args.model, mode)
+                    args.runtime_mode = mode
+                    result = run_once(args, model, tokenizer, context_length)
+                    result.update(
+                        repeat=repeat,
+                        mode=mode,
+                        narrativeqa_index=prompt_index,
+                        narrativeqa_id=prompt_id,
+                    )
+                    results.append(result)
+                    print(json.dumps(result, sort_keys=True), flush=True)
 
     if args.paired or args.ablation:
-        for context_length in args.contexts:
+        for context_length in lengths:
             dense = statistics.median(
                 row["seconds"] for row in results
-                if row["context_tokens"] == context_length and row["mode"] == "dense"
+                if row["benchmark_tokens"] == context_length and row["mode"] == "dense"
             )
             for mode in compared_modes[1:]:
                 sparse = statistics.median(
                     row["seconds"] for row in results
-                    if row["context_tokens"] == context_length
+                    if row["benchmark_tokens"] == context_length
                     and row["mode"] == mode
                 )
                 print(
@@ -433,18 +547,25 @@ def main():
                     flush=True,
                 )
 
-    for context_length in args.contexts:
-        context_rows = [
-            row for row in results if row["context_tokens"] == context_length
-        ]
-        if len({row["input_checksum"] for row in context_rows}) != 1:
-            raise RuntimeError(f"input changed across runs at context {context_length}")
-        for mode in compared_modes:
-            mode_rows = [row for row in context_rows if row["mode"] == mode]
-            if len({row["output_checksum"] for row in mode_rows}) != 1:
+    for context_length in lengths:
+        for _, _, prompt_index in prompts:
+            context_rows = [
+                row for row in results
+                if row["benchmark_tokens"] == context_length
+                and row["narrativeqa_index"] == prompt_index
+            ]
+            if len({row["input_checksum"] for row in context_rows}) != 1:
                 raise RuntimeError(
-                    f"output changed across repeats for {mode} at context {context_length}"
+                    f"input changed across runs at context {context_length}, "
+                    f"sample {prompt_index}"
                 )
+            for mode in compared_modes:
+                mode_rows = [row for row in context_rows if row["mode"] == mode]
+                if len({row["output_checksum"] for row in mode_rows}) != 1:
+                    raise RuntimeError(
+                        f"output changed across repeats for {mode} at context "
+                        f"{context_length}, sample {prompt_index}"
+                    )
 
     report = {
         **repository_state(),
@@ -457,17 +578,34 @@ def main():
         "mode": args.mode,
         "dtype": "float16" if args.model == "sdar" else "bfloat16",
         "gen_length": args.gen_length,
+        "length_axis": "prompt" if args.prompt_lengths is not None else "context",
         "block_length": args.block_length,
         "steps": args.steps or args.block_length,
         "losa_active_topk": args.losa_active_topk,
         "losa_score_mode": args.losa_score_mode,
         "losa_key_samples": args.losa_key_samples,
         "prefix_token_budget": args.prefix_token_budget,
+        "prefix_rescreen_full_kv": args.prefix_rescreen_full_kv,
         "prefix_selector": args.prefix_selector,
+        "prompt_source": "narrativeqa" if prompts[0][0] is not None else "synthetic",
+        "narrativeqa_data_file": (
+            str(args.narrativeqa_data_file) if args.narrativeqa_data_file else None
+        ),
+        "narrativeqa_indices": [item[2] for item in prompts if item[0] is not None],
+        "narrativeqa_ids": [item[1] for item in prompts if item[0] is not None],
+        "original_prompt_tokens": [
+            int(item[0].shape[-1]) for item in prompts if item[0] is not None
+        ],
         "paired": args.paired,
         "ablation": args.ablation,
+        "llada_full_mask": args.llada_full_mask,
         "sparse_config": getattr(model.config, f"{args.model}_sparse_config"),
         "remasking_strategy": args.remasking_strategy,
+        "threshold": (
+            args.threshold
+            if args.threshold is not None
+            else (1.0 if args.model == "sdar" else 0.5)
+        ),
         "results": results,
     }
     if args.output:

@@ -10,6 +10,7 @@ from scripts.run_longbench_quality import (
     TASKS,
     answer_scores,
     load_completed,
+    rouge_l_score,
     summarize,
     truncate_middle,
 )
@@ -32,6 +33,12 @@ class LongBenchQualityRunnerTest(unittest.TestCase):
             path.write_text("not json\n" + json.dumps(row) + "\n", encoding="utf-8")
             self.assertEqual(load_completed(path), {("hotpotqa", 0): row})
         self.assertEqual(summarize([row])["overall"]["f1"], 1.0)
+
+    def test_gov_report_uses_rouge_l(self):
+        score = rouge_l_score("the cat sat", ["the cat sat", "unrelated"])
+        row = {"task": "gov_report", "rouge_l": score}
+        self.assertGreater(score, 0.99)
+        self.assertGreater(summarize([row], ("gov_report",))["overall"]["rouge_l"], 99)
 
 
 if __name__ == "__main__":

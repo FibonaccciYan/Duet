@@ -25,12 +25,14 @@ from src.sparse.llada_patch import patch_moe_experts
 
 
 TASKS = ("hotpotqa", "triviaqa", "narrativeqa", "qasper", "multifieldqa_en")
+AVAILABLE_TASKS = (*TASKS, "gov_report")
 GEN_LENGTHS = {
     "hotpotqa": 32,
     "triviaqa": 32,
     "narrativeqa": 128,
     "qasper": 128,
     "multifieldqa_en": 64,
+    "gov_report": 512,
 }
 
 
@@ -45,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--data_dir", type=Path, default=default_data)
     parser.add_argument("--output_dir", type=Path, required=True)
+    parser.add_argument("--tasks", nargs="+", choices=AVAILABLE_TASKS, default=TASKS)
     parser.add_argument("--model_path")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--seed", type=int, default=42)
@@ -52,6 +55,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--block_length", type=int, default=32)
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--query_dense_threshold", type=int)
+    parser.add_argument("--ratio", type=float)
+    parser.add_argument("--selection_layer", type=int)
+    parser.add_argument("--query_sparse", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--prefix_sparse", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--prefix_token_budget", type=int)
+    parser.add_argument(
+        "--prefix_rescreen_full_kv",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     parser.add_argument("--focus_alpha", type=float, default=1.5)
     parser.add_argument("--losa_token_budget", type=int, default=256)
     parser.add_argument("--threshold", type=float)
@@ -59,6 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--remasking_strategy")
     parser.add_argument("--dtype", choices=("bfloat16", "float16", "float32"))
     parser.add_argument("--moe_expert_patch", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--eos_early_stop", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--resume_from", type=Path, help="previous predictions.jsonl")
     return parser.parse_args()
 
@@ -106,6 +120,47 @@ def answer_scores(prediction: str, answers: list[str]) -> tuple[float, float]:
     return best_f1, best_em
 
 
+def rouge_l_score(prediction: str, answers: list[str]) -> float:
+    def lcs(left: list[str], right: list[str]) -> set[str]:
+        table = [[0] * (len(right) + 1) for _ in range(len(left) + 1)]
+        for i, left_word in enumerate(left, 1):
+            for j, right_word in enumerate(right, 1):
+                table[i][j] = (
+                    table[i - 1][j - 1] + 1
+                    if left_word == right_word
+                    else max(table[i - 1][j], table[i][j - 1])
+                )
+        words = set()
+        i, j = len(left), len(right)
+        while i and j:
+            if left[i - 1] == right[j - 1]:
+                words.add(left[i - 1])
+                i, j = i - 1, j - 1
+            elif table[i - 1][j] > table[i][j - 1]:
+                i -= 1
+            else:
+                j -= 1
+        return words
+
+    def score(answer: str) -> float:
+        candidate = [" ".join(part.split()) for part in prediction.split(".") if part]
+        reference = [" ".join(part.split()) for part in answer.split(".") if part]
+        if not candidate or not reference:
+            return 0.0
+        candidate_words = set(" ".join(candidate).split(" "))
+        reference_words = set(" ".join(reference).split(" "))
+        union = set()
+        for reference_sentence in reference:
+            reference_tokens = reference_sentence.split(" ")
+            for candidate_sentence in candidate:
+                union.update(lcs(reference_tokens, candidate_sentence.split(" ")))
+        precision = len(union) / len(candidate_words)
+        recall = len(union) / len(reference_words)
+        return 2 * precision * recall / (precision + recall + 1e-8)
+
+    return max((score(answer) for answer in answers), default=0.0)
+
+
 def load_completed(path: Path | None) -> dict[tuple[str, int], dict]:
     completed = {}
     if path is None:
@@ -120,12 +175,29 @@ def load_completed(path: Path | None) -> dict[tuple[str, int], dict]:
     return completed
 
 
-def summarize(rows: list[dict]) -> dict:
+def summarize(rows: list[dict], tasks=TASKS) -> dict:
     result = {}
-    for task in (*TASKS, "overall"):
-        selected = rows if task == "overall" else [row for row in rows if row["task"] == task]
-        if selected:
+    for task in tasks:
+        selected = [row for row in rows if row["task"] == task]
+        if not selected:
+            continue
+        if task == "gov_report":
             result[task] = {
+                "count": len(selected),
+                "rouge_l": 100 * sum(row["rouge_l"] for row in selected) / len(selected),
+            }
+        else:
+            result[task] = {
+                "count": len(selected),
+                "f1": sum(row["f1"] for row in selected) / len(selected),
+                "exact_match": sum(row["exact_match"] for row in selected) / len(selected),
+            }
+    if len(result) == 1:
+        result["overall"] = next(iter(result.values())).copy()
+    else:
+        selected = [row for row in rows if row["task"] != "gov_report"]
+        if selected:
+            result["overall"] = {
                 "count": len(selected),
                 "f1": sum(row["f1"] for row in selected) / len(selected),
                 "exact_match": sum(row["exact_match"] for row in selected) / len(selected),
@@ -146,8 +218,13 @@ def main() -> int:
     )
     moe_patch = args.family == "llada" if args.moe_expert_patch is None else args.moe_expert_patch
     options = {"moe_expert_patch": moe_patch} if args.method in {"sparse", "dense"} else {}
-    if args.method == "sparse" and args.query_dense_threshold is not None:
-        options["query_dense_threshold"] = args.query_dense_threshold
+    if args.method == "sparse":
+        for name in (
+            "query_dense_threshold", "ratio", "selection_layer", "query_sparse",
+            "prefix_sparse", "prefix_token_budget", "prefix_rescreen_full_kv",
+        ):
+            if getattr(args, name) is not None:
+                options[name] = getattr(args, name)
     if args.method == "focus":
         options["alpha"] = args.focus_alpha
     elif args.method == "losa":
@@ -177,7 +254,7 @@ def main() -> int:
     )
 
     with progress_path.open("a", encoding="utf-8") as progress:
-        for task in TASKS:
+        for task in args.tasks:
             path = args.data_dir / f"{task}.jsonl"
             if not path.exists():
                 raise FileNotFoundError(f"LongBench task file not found: {path}")
@@ -209,7 +286,7 @@ def main() -> int:
                     threshold=threshold,
                     mask_id=(tokenizer.mask_token_id or 151669) if args.family == "sdar" else 156895,
                     eos_id=None if args.family == "sdar" else 156892,
-                    eos_early_stop=True,
+                    eos_early_stop=args.eos_early_stop,
                 )
                 if args.family == "sdar":
                     generation_kwargs["remasking_strategy"] = remasking
@@ -242,6 +319,8 @@ def main() -> int:
                     "truncated": truncated,
                     "elapsed_seconds": time.perf_counter() - started,
                 }
+                if task == "gov_report":
+                    row["rouge_l"] = rouge_l_score(prediction, answers)
                 rows.append(row)
                 progress.write(json.dumps(row, ensure_ascii=False) + "\n")
                 progress.flush()
@@ -250,9 +329,19 @@ def main() -> int:
     report = {
         "family": args.family,
         "method": args.method,
+        "sparse_config": getattr(model.config, f"{args.family}_sparse_config", None),
+        "generation_config": {
+            "block_length": args.block_length,
+            "steps": args.steps,
+            "threshold": threshold,
+            "editing_threshold": editing_threshold,
+            "remasking_strategy": remasking if args.family == "sdar" else None,
+            "eos_early_stop": args.eos_early_stop,
+        },
         "data_dir": str(args.data_dir),
+        "tasks": args.tasks,
         "max_context_tokens": args.max_context_tokens,
-        "scores": summarize(rows),
+        "scores": summarize(rows, args.tasks),
         "rows": rows,
     }
     (args.output_dir / "report.json").write_text(

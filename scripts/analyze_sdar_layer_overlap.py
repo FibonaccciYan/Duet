@@ -17,8 +17,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.sparse.sdar_patch import (
+    _stop_ids,
     block_diffusion_generate,
     entropy_from_logits,
+    patch_sdar_model,
     sample_with_temperature_topk_topp,
     select_transfer,
 )
@@ -37,6 +39,49 @@ def overlap_metrics(predicted, actual):
         "recall": overlap / max(actual_count, 1),
         "jaccard": overlap / max(union, 1),
     }
+
+
+def token_prediction_metrics(
+    logits, transfer, final_tokens, final_log_probs, final_probs
+):
+    count = int(final_tokens.numel())
+    if not count:
+        return {"count": 0, "top1": None, "top5": None, "kl": None}
+    selected = logits[transfer].float()
+    shallow_log_probs = selected.log_softmax(dim=-1)
+    top1 = selected.argmax(dim=-1)
+    top5 = selected.topk(min(5, selected.shape[-1]), dim=-1).indices
+    return {
+        "count": count,
+        "top1": float((top1 == final_tokens).float().mean().item()),
+        "top5": float((top5 == final_tokens[:, None]).any(dim=-1).float().mean().item()),
+        "kl": float((final_probs * (final_log_probs - shallow_log_probs)).sum(-1).mean().item()),
+    }
+
+
+def sample_layer_summary(records):
+    grouped = defaultdict(lambda: defaultdict(list))
+    for record in records:
+        for layer in record["layers"]:
+            layer_id = layer["layer"]
+            token = layer["token_prediction"]
+            for key in ("top1", "top5", "kl"):
+                if token[key] is not None:
+                    grouped[layer_id][key].append(token[key])
+            for method, metrics in layer.items():
+                if method.startswith("candidate@"):
+                    grouped[layer_id][f"{method}_recall"].append(metrics["recall"])
+    return [
+        {
+            "layer": layer,
+            **{
+                key: sum(values) / len(values)
+                for key, values in metrics.items()
+                if values
+            },
+        }
+        for layer, metrics in sorted(grouped.items())
+    ]
 
 
 def summarize(values):
@@ -74,6 +119,13 @@ def prediction_scores(logits, args):
         else None
     )
     return scores, entropy
+
+
+def layer_logits(model, outputs, layer, num_layers):
+    hidden_states = outputs.hidden_states[layer]
+    if layer < num_layers:
+        hidden_states = model.model.norm(hidden_states)
+    return model.lm_head(hidden_states)
 
 
 def candidate_mask(mask, scores, ratio):
@@ -130,8 +182,13 @@ def parse_args():
     parser.add_argument("--attn_implementation", default="sdpa")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--samples_jsonl")
+    parser.add_argument("--sample_start", type=int, default=0)
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--eos_early_stop", action="store_true")
     parser.add_argument("--output_dir", default="experiments/layer_overlap_results/sdar")
     parser.add_argument("--plot_overlap_stats", action="store_true")
+    parser.add_argument("--no_exact", action="store_true")
     return parser.parse_args()
 
 
@@ -202,22 +259,33 @@ def main():
         torch_dtype=dtype,
         attn_implementation=args.attn_implementation,
     ).to(args.device).eval()
+    patch_sdar_model(model, query_sparse=False, prefix_sparse=False)
     num_layers = len(model.model.layers)
     layers = args.layers or list(range(1, num_layers + 1))
     if any(layer < 1 or layer > num_layers for layer in layers):
         raise ValueError(f"layers must be between 1 and {num_layers}")
     layers = sorted(set(layers))
+    samples = [(0, None, args.prompt, False)]
+    if args.samples_jsonl:
+        samples = []
+        with Path(args.samples_jsonl).open() as handle:
+            for line in handle:
+                row = json.loads(line)
+                generation = next(iter(row["arguments"].values()))
+                samples.append(
+                    (row["doc_id"], row["doc"].get("task_id"), generation["arg_0"], True)
+                )
+        samples = samples[args.sample_start :]
+        if args.limit is not None:
+            samples = samples[: args.limit]
+    if not samples:
+        raise ValueError("No prompts selected")
 
-    text = tokenizer.apply_chat_template(
-        [{"role": "user", "content": args.prompt}],
-        add_generation_prompt=True,
-        tokenize=False,
-    )
-    input_ids = tokenizer(
-        text, add_special_tokens=False, return_tensors="pt"
-    ).input_ids.to(model.device)
     step_records = []
     aggregate = defaultdict(list)
+    sample_summaries = []
+    generated_samples = []
+    current_sample = None
 
     @torch.no_grad()
     def measure_step(
@@ -251,7 +319,13 @@ def main():
             entropy=final_entropy,
             entropy_budget=args.eb_threshold,
         )
+        final_selected = outputs.logits[final_transfer].float()
+        final_log_probs = final_selected.log_softmax(dim=-1)
+        final_probs = final_log_probs.exp()
+        final_tokens = final_selected.argmax(dim=-1)
         record = {
+            "sample": current_sample[0],
+            "task_id": current_sample[1],
             "call": len(step_records),
             "block": block_start // args.block_length,
             "step": step,
@@ -262,21 +336,32 @@ def main():
         }
 
         for layer in layers:
-            layer_logits = model.lm_head(model.model.norm(outputs.hidden_states[layer]))
-            layer_scores, layer_entropy = prediction_scores(layer_logits, args)
-            layer_transfer = select_transfer(
-                mask,
-                torch.where(mask, layer_scores, -torch.inf),
-                minimum,
-                args.strategy,
-                args.threshold,
-                entropy=layer_entropy,
-                entropy_budget=args.eb_threshold,
-            )
-            exact = overlap_metrics(layer_transfer, final_transfer)
-            exact["positions"] = positions(layer_transfer, block_start)
-            aggregate[(layer, "exact")].append(exact)
-            layer_record = {"layer": layer, "exact": exact}
+            logits = layer_logits(model, outputs, layer, num_layers)
+            layer_scores, layer_entropy = prediction_scores(logits, args)
+            layer_record = {
+                "layer": layer,
+                "token_prediction": token_prediction_metrics(
+                    logits,
+                    final_transfer,
+                    final_tokens,
+                    final_log_probs,
+                    final_probs,
+                ),
+            }
+            if not args.no_exact:
+                layer_transfer = select_transfer(
+                    mask,
+                    torch.where(mask, layer_scores, -torch.inf),
+                    minimum,
+                    args.strategy,
+                    args.threshold,
+                    entropy=layer_entropy,
+                    entropy_budget=args.eb_threshold,
+                )
+                exact = overlap_metrics(layer_transfer, final_transfer)
+                exact["positions"] = positions(layer_transfer, block_start)
+                aggregate[(layer, "exact")].append(exact)
+                layer_record["exact"] = exact
 
             for ratio in args.layer_candidate_ratio:
                 method = f"candidate@{ratio:g}"
@@ -295,23 +380,51 @@ def main():
         step_records.append(record)
         return outputs.logits, None
 
-    output = block_diffusion_generate(
-        model,
-        prompt={"input_ids": input_ids},
-        mask_id=args.mask_id,
-        gen_length=args.gen_length,
-        block_length=args.block_length,
-        denoising_steps=args.steps,
-        temperature=args.temperature,
-        top_k=args.top_k,
-        top_p=args.top_p,
-        remasking_strategy=args.strategy,
-        confidence_threshold=args.threshold,
-        eb_threshold=args.eb_threshold,
-        stopping_criteria_idx=None,
-        denoise_fn=measure_step,
-    )
-    generated = output[:, input_ids.shape[1] : input_ids.shape[1] + args.gen_length]
+    prompt_tokens = []
+    for current_sample in samples:
+        sample_start = len(step_records)
+        if current_sample[3]:
+            text = current_sample[2]
+        else:
+            text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": current_sample[2]}],
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+        input_ids = tokenizer(
+            text, add_special_tokens=False, return_tensors="pt"
+        ).input_ids.to(model.device)
+        prompt_tokens.append(int(input_ids.shape[1]))
+        output = block_diffusion_generate(
+            model,
+            prompt={"input_ids": input_ids},
+            mask_id=args.mask_id,
+            gen_length=args.gen_length,
+            block_length=args.block_length,
+            denoising_steps=args.steps,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            remasking_strategy=args.strategy,
+            confidence_threshold=args.threshold,
+            eb_threshold=args.eb_threshold,
+            stopping_criteria_idx=(
+                _stop_ids(model, None) if args.eos_early_stop else None
+            ),
+            denoise_fn=measure_step,
+        )
+        generated = output[:, input_ids.shape[1] : input_ids.shape[1] + args.gen_length]
+        rows = sample_layer_summary(step_records[sample_start:])
+        for row in rows:
+            row.update(sample=current_sample[0], task_id=current_sample[1])
+            sample_summaries.append(row)
+        generated_samples.append(
+            {
+                "sample": current_sample[0],
+                "task_id": current_sample[1],
+                "text": tokenizer.decode(generated[0], skip_special_tokens=True),
+            }
+        )
     summary = []
     for (layer, method), values in sorted(aggregate.items()):
         summary.append({"layer": layer, "method": method, **summarize(values)})
@@ -320,9 +433,11 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     result = {
         "config": vars(args),
-        "prompt_tokens": int(input_ids.shape[1]),
-        "generated_text": tokenizer.decode(generated[0], skip_special_tokens=True),
+        "prompt_tokens": prompt_tokens,
+        "generated_text": generated_samples[0]["text"],
+        "generated_samples": generated_samples,
         "summary": summary,
+        "sample_summary": sample_summaries,
         "steps": step_records,
     }
     (output_dir / "overlap_stats.json").write_text(
@@ -332,6 +447,10 @@ def main():
         writer = csv.DictWriter(handle, fieldnames=summary[0].keys())
         writer.writeheader()
         writer.writerows(summary)
+    with (output_dir / "sample_summary.csv").open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=sample_summaries[0].keys())
+        writer.writeheader()
+        writer.writerows(sample_summaries)
     if args.plot_overlap_stats:
         plot_results(summary, step_records, output_dir)
 

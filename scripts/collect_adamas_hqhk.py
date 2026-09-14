@@ -219,7 +219,7 @@ def main():
         return production_indices
 
     sparse._compact_prefix_cache = compact
-    sparse._adamas_prefix_indices = collect
+    sparse._prefix_indices = collect
     if args.model == "llada":
         import src.sparse.llada_patch as model_patch
     else:
