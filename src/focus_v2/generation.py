@@ -1,4 +1,4 @@
-"""Block-diffusion generation using the integrated portable FOCUS model path."""
+"""Block-diffusion generation driver for FOCUS v2."""
 
 from __future__ import annotations
 
@@ -9,94 +9,17 @@ import torch
 
 from src.losa.generation import get_num_transfer_tokens, sample_with_confidence
 
-from .algorithm import FocusDecodeState
-from .model import focus_forward
+from src.focus.algorithm import FocusDecodeState
+from src.focus.generation import (
+    _selected_llada_transfer,
+    _selected_sdar_transfer,
+)
 
-
-def _selected_llada_transfer(
-    block_tokens,
-    old_tokens,
-    active_mask,
-    prompt_mask,
-    logits,
-    positions,
-    *,
-    temperature,
-    top_p,
-    top_k,
-    threshold,
-    editing_threshold,
-    num_to_transfer,
-):
-    predicted, confidence = sample_with_confidence(
-        logits, temperature=temperature, top_p=top_p, top_k=top_k
-    )
-    selected_active = active_mask[0].index_select(0, positions)
-    mask_scores = torch.where(selected_active, confidence[0], -torch.inf)
-    high = selected_active & (mask_scores > float(threshold))
-    selected_mask = torch.zeros_like(selected_active)
-    if int(high.sum().item()) >= int(num_to_transfer):
-        selected_mask = high
-    else:
-        available = int(selected_active.sum().item())
-        if available:
-            indices = torch.topk(mask_scores, min(int(num_to_transfer), available)).indices
-            selected_mask[indices] = True
-
-    current_selected = old_tokens[0].index_select(0, positions)
-    selected_prompt = prompt_mask.index_select(0, positions)
-    selected_edit = (
-        ~selected_active
-        & ~selected_prompt
-        & (confidence[0] > float(editing_threshold))
-        & (predicted[0] != current_selected)
-    )
-    selected_transfer = selected_mask | selected_edit
-    transfer = torch.zeros_like(active_mask)
-    transfer[0, positions[selected_transfer]] = True
-    if bool(selected_transfer.any().item()):
-        block_tokens[0, positions[selected_transfer]] = predicted[0, selected_transfer]
-    return transfer, int(selected_mask.sum().item()), bool(selected_edit.any().item())
-
-
-def _selected_sdar_transfer(
-    block_tokens,
-    active_mask,
-    logits,
-    positions,
-    *,
-    count,
-    temperature,
-    top_p,
-    top_k,
-    strategy,
-    threshold,
-):
-    predicted, confidence = sample_with_confidence(
-        logits, temperature=temperature, top_p=top_p, top_k=top_k
-    )
-    selected_active = active_mask[0].index_select(0, positions)
-    available = torch.where(selected_active)[0]
-    transfer = torch.zeros_like(active_mask)
-    if available.numel() == 0:
-        return transfer, 0
-    count = min(max(1, int(count)), int(available.numel()))
-    scores = confidence[0].index_select(0, available)
-    if strategy == "low_confidence_dynamic":
-        high = available[scores > float(threshold)]
-        chosen = high if high.numel() >= count else available[torch.topk(scores, count).indices]
-    elif strategy == "low_confidence_static":
-        chosen = available[torch.topk(scores, count).indices]
-    else:
-        raise ValueError("FOCUS SDAR supports low_confidence_dynamic or low_confidence_static")
-    absolute = positions.index_select(0, chosen)
-    transfer[0, absolute] = True
-    block_tokens[0, absolute] = predicted[0].index_select(0, chosen)
-    return transfer, int(chosen.numel())
+from .model import focus_v2_forward
 
 
 @torch.inference_mode()
-def focus_generate(
+def focus_v2_generate(
     model,
     *,
     family: str,
@@ -119,9 +42,9 @@ def focus_generate(
     eos_id=None,
 ):
     if inputs.shape[0] != 1:
-        raise ValueError("FOCUS patch currently requires batch_size=1")
+        raise ValueError("FOCUS v2 currently requires batch_size=1")
     if alpha < 1:
-        raise ValueError("FOCUS alpha must be at least 1")
+        raise ValueError("FOCUS v2 alpha must be at least 1")
     if block_length <= 0 or gen_length < 0:
         raise ValueError("block_length must be positive and gen_length non-negative")
     if gen_length == 0:
@@ -163,7 +86,7 @@ def focus_generate(
     for block_idx in range(prefill_blocks):
         start = block_idx * block_length
         end = start + block_length
-        dense = focus_forward(
+        dense = focus_v2_forward(
             model,
             family=family,
             input_ids=x[:, start:end],
@@ -196,7 +119,7 @@ def focus_generate(
             if family == "sdar" and step >= steps:
                 break
 
-            result = focus_forward(
+            result = focus_v2_forward(
                 model,
                 family=family,
                 input_ids=x[:, start:end],
@@ -226,7 +149,7 @@ def focus_generate(
                 )
                 resolved = int(active.sum().item()) - int((x[:, start:end] == mask_id).sum().item())
                 if bool(active.any().item()) and resolved <= 0:
-                    raise RuntimeError("FOCUS LLaDA mask-to-token step made no progress")
+                    raise RuntimeError("FOCUS v2 LLaDA mask-to-token step made no progress")
                 state.record_transfer(resolved)
                 if not bool(active.any().item()) and not edited:
                     break
@@ -245,7 +168,7 @@ def focus_generate(
                 )
                 resolved = int(active.sum().item()) - int((x[:, start:end] == mask_id).sum().item())
                 if bool(active.any().item()) and resolved <= 0:
-                    raise RuntimeError("FOCUS SDAR mask-to-token step made no progress")
+                    raise RuntimeError("FOCUS v2 SDAR mask-to-token step made no progress")
                 state.record_transfer(resolved)
             traces.append(
                 {
@@ -263,7 +186,7 @@ def focus_generate(
 
         # Persist exact full-block K/V for the next block, matching the final
         # cache-only pass in the SDAR reference decoder.
-        final = focus_forward(
+        final = focus_v2_forward(
             model,
             family=family,
             input_ids=x[:, start:end],
@@ -290,4 +213,4 @@ def focus_generate(
     return SimpleNamespace(tokens=generated, trace=traces)
 
 
-__all__ = ["focus_generate"]
+__all__ = ["focus_v2_generate"]

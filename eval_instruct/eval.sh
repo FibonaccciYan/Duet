@@ -156,6 +156,9 @@ case "${benchmark}" in
   math)
     run_eval math "${minerva_tasks}" 512 0 "$@"
     ;;
+  math500)
+    run_eval math500 math_500 2048 0 "$@"
+    ;;
   humaneval)
     run_eval humaneval humaneval_instruct 768 0 "$@"
     ;;

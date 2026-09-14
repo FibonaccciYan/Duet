@@ -174,6 +174,12 @@ class LLaDA(LM):
                 model_name=self.MODEL_NAME,
                 alpha=float(focus_alpha),
             )
+            if self.MODEL_NAME == "llada" and _as_bool(moe_expert_patch):
+                patched_count = patch_moe_experts(self.model)
+                eval_logger.info(
+                    "Applied LLaDA MoE expert patch to %s blocks (focus)",
+                    patched_count,
+                )
             eval_logger.info("Applied integrated FOCUS runtime for %s", self.MODEL_NAME)
         elif self.MODEL_NAME == "sdar" or sparse_enabled:
             patch_model(
