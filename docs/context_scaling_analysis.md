@@ -47,6 +47,26 @@ Query 与 Query+Prefix 将 cached attention 的全零 mask 省略，以启用 Py
 SDPA 的原生 GQA；Dense、Prefix-only 与 LoSA 保留原 mask。该 attention 优化是
 Query 方法实现的一部分，质量变化由完整评测门控。
 
+### 8K/16K 组合退化诊断
+
+强制 `query_min_prefix_length=0`、`prefix_min_prefix_length=0` 的 8K/生成 512
+阶段测量中，Dense、Query、Prefix、Query+Prefix 分别执行 49、45、39、56 次
+cached forward。Prefix 已将 K/V 压缩到 256 token 后，继续裁剪 Query 行只把
+平均单次耗时从 23.84 ms 降到 23.55 ms，节省 1.2%；但近似叠加改变置信度与
+收敛轨迹，多出的 17 次调用使组合总耗时达到 2.254 秒，慢于 Prefix 的 1.840 秒。
+16K 也出现 39 次对 49 次的同类现象。
+
+提高稠密阈值、改变保留比例、选择层或选择间隔都没有稳定收益。最终自适应配置
+因此将两个可独立获益的动作拆开：Query 请求始终使用 maskless attention，仅在
+固定前缀达到 24K 后启用行裁剪；Prefix 最短前缀从 4096 提高到 8192。名义 8K
+于是跳过 Prefix 和 Query 行裁剪，只保留稳定获益的 maskless attention。
+
+提交 `00ee7bf` 的独占 H800 五次中位数如下。8K 的组合输出与 Query-only 完全
+一致；组合从旧强制配置的 0.921/0.942/0.936 倍提高到
+1.225/1.220/1.120 倍（生成 256/512/768）。16K 为
+1.210/1.583/1.216 倍。这里的门控是成本模型的一部分，不把两个近似的理论收益
+相乘，也不要求组合在每条生成轨迹上严格快于最佳单项。
+
 ### Block 64 实验
 
 为隔离 block 大小，固定 `query_dense_threshold=0`、Query-only，并让 steps 等于
