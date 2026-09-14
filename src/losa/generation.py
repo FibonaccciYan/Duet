@@ -8,6 +8,7 @@ package.
 from __future__ import annotations
 
 import math
+import logging
 import os
 import random
 import sys
@@ -22,6 +23,8 @@ from transformers.cache_utils import DynamicCache
 
 from .attention_patch import install_paper_losa_attention
 
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATHS = {
     "llada": "/data0/ysy/models/LLaDA2.1-mini",
@@ -44,16 +47,65 @@ def load_model_and_tokenizer(
     dtype: str | None = None,
     attn_implementation: str = "sdpa",
 ):
+    """Load a supported model using project-managed, version-adapted code.
+
+    ``SPARSEDLM_MODEL_CODE=remote`` restores the legacy checkpoint
+    ``trust_remote_code=True`` behavior.  In ``auto`` mode supported checkpoints
+    use :mod:`src.model`; unknown checkpoint types still fall back to remote
+    code so the loader remains extensible.
+    """
     # Keep this in the shared loader so dense, LoSA, and FOCUS v2 get the same
-    # checkpoint-remote-code compatibility behavior.
+    # runtime compatibility behavior.
     try:
         from src.focus_v2.compat import install_runtime_compat
 
         install_runtime_compat()
     except ImportError:
         pass
+
     model_path = model_path or DEFAULT_MODEL_PATHS[family]
     dtype = dtype or ("bfloat16" if family == "llada" else "float16")
+    source_mode = os.getenv("SPARSEDLM_MODEL_CODE", "auto").strip().lower()
+    if source_mode not in {"auto", "bundled", "remote"}:
+        raise ValueError(f"invalid SPARSEDLM_MODEL_CODE: {source_mode!r}")
+
+    if source_mode != "remote":
+        try:
+            from src.model.registry import resolve_model_code
+
+            code = resolve_model_code(family=family, model_path=model_path)
+        except Exception as exc:
+            if source_mode == "bundled":
+                raise
+            logger.warning("falling back to checkpoint remote code: %s", exc)
+        else:
+            config = code.config_cls.from_pretrained(
+                model_path,
+                local_files_only=True,
+            )
+            if family == "sdar" and getattr(config, "pad_token_id", None) is None:
+                # Some SDAR checkpoints omit pad_token_id, but their modeling
+                # code unconditionally reads it while constructing embeddings.
+                config.pad_token_id = 151643
+            model = code.model_cls.from_pretrained(
+                model_path,
+                config=config,
+                device_map="auto",
+                torch_dtype=getattr(torch, dtype),
+                attn_implementation=attn_implementation,
+                trust_remote_code=False,
+            ).eval()
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_path,
+                trust_remote_code=True,
+            )
+            actual = getattr(model.config, "model_type", None)
+            if family == "llada" and actual != "llada2_moe":
+                raise ValueError(f"expected llada2_moe, got {actual!r}")
+            if family == "sdar" and actual != "sdar":
+                raise ValueError(f"expected sdar, got {actual!r}")
+            return model, tokenizer
+
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     if family == "sdar" and getattr(config, "pad_token_id", None) is None:
         # Some SDAR checkpoints omit pad_token_id, but their remote modeling
