@@ -25,11 +25,7 @@ for method in "${methods[@]}"; do
       continue
     fi
     if [[ "${benchmark}" == "longbench" ]]; then
-      if [[ "${model_type}" == "sdar" ]]; then
-        python_bin="${PYTHON:-/home/ysy/anaconda3/envs/dream/bin/python}"
-      else
-        python_bin="${PYTHON:-/home/ysy/anaconda3/envs/llada/bin/python}"
-      fi
+      python_bin="${PYTHON:-/home/ysy/anaconda3/envs/sparse/bin/python}"
       args=(
         "${repo_root}/scripts/run_longbench_quality.py"
         --family "${model_type}"

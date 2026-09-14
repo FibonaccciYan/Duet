@@ -2,7 +2,7 @@
 set -euo pipefail
 
 output_root="${OUTPUT_DIR:-experiments/layer_overlap_results/sdar_block32}"
-python_bin="${PYTHON_BIN:-/home/ysy/anaconda3/envs/dream/bin/python}"
+python_bin="${PYTHON_BIN:-/home/ysy/anaconda3/envs/sparse/bin/python}"
 
 for strategy in \
   low_confidence_dynamic \

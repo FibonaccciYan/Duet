@@ -11,7 +11,7 @@ model_type="${MODEL_TYPE:-llada}"
 case "${model_type}" in
   llada)
     default_model_path=/data0/ysy/models/LLaDA2.1-mini
-    default_python=/home/ysy/anaconda3/envs/llada/bin/python
+    default_python=/home/ysy/anaconda3/envs/sparse/bin/python
     default_ratio=0.7
     default_selection_interval=4
     default_query_dense_threshold=0
@@ -22,7 +22,7 @@ case "${model_type}" in
     ;;
   sdar)
     default_model_path=/data0/ysy/models/SDAR-8B-Chat-b32
-    default_python=/home/ysy/anaconda3/envs/dream/bin/python
+    default_python=/home/ysy/anaconda3/envs/sparse/bin/python
     default_refresh_step=-1
     default_moe_expert_patch=false
     default_ratio=0.5

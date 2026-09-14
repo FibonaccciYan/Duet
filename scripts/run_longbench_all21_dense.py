@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse, json, sys, time
 from pathlib import Path
 import torch
-ROOT=Path('/data0/gs/SparseDLM_LLaDA_SDAR')
+ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from src.runtime import load_runtime
 

@@ -63,17 +63,6 @@ compares retained positions on the first selection step.
 
 ### FOCUS v2 model matrix
 
-- LLaDA2.0-mini: . Use
-   to keep the LLaDA2.0 mask-to-token-only behavior.
-- LLaDA2.1-mini: .
-  Speed profile uses .
-- SDAR-8B-Chat-b32: . The loader fills the checkpoint-missing
-   with its EOS id when required.
-
-All three have smoke coverage through .
-
-### FOCUS v2 model matrix
-
 - LLaDA2.0-mini: `--family llada --model_path /data0/gs/models/LLaDA2.0-mini`.
   Use `--editing_threshold 1.0` to keep LLaDA2.0 mask-to-token-only behavior.
 - LLaDA2.1-mini: `--family llada --model_path /data0/ysy/models/LLaDA2.1-mini`.

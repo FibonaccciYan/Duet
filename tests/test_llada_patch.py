@@ -1,3 +1,4 @@
+import importlib.util
 import unittest
 import sys
 from pathlib import Path
@@ -42,6 +43,7 @@ from src.sparse.triton_kernels import fused_kv_index_copy_
 
 
 MODEL_PATH = "/data0/ysy/models/LLaDA2.1-mini"
+HAS_FAST_HADAMARD = importlib.util.find_spec("faster_hadamard_transform") is not None
 
 
 def _tiny_model(layers=6):
@@ -395,6 +397,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         torch.testing.assert_close(actual_value, expected_value)
 
     @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    @unittest.skipUnless(HAS_FAST_HADAMARD, "requires optional faster_hadamard_transform")
     def test_adamas_selector_returns_sorted_indices(self):
         values = torch.arange(8, dtype=torch.float16, device="cuda")
         transformed = _hadamard_transform(values)
@@ -423,6 +426,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertTrue(torch.all((0 <= indices) & (indices < 11)).item())
 
     @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    @unittest.skipUnless(HAS_FAST_HADAMARD, "requires optional faster_hadamard_transform")
     def test_adamas_selector_preserves_union_beyond_budget(self):
         query = torch.tensor(
             [[[[2.0, 0.0], [-2.0, 0.0], [0.0, 2.0]]]],
@@ -451,6 +455,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(actual.tolist(), expected.tolist())
 
     @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    @unittest.skipUnless(HAS_FAST_HADAMARD, "requires optional faster_hadamard_transform")
     def test_hadamard_qk_selector_matches_transformed_reference(self):
         torch.manual_seed(0)
         query = torch.randn(1, 4, 3, 8, device="cuda", dtype=torch.float16)

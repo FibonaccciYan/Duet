@@ -302,7 +302,7 @@ dot-product keys. Current Raw L1 uses neither transform nor quantization and
 minimizes exact L1 in learned Q/K coordinates. Evidence:
 `src/sparse/sparse_ops.py::_adamas_prefix_indices,
 _hadamard_qk_prefix_indices, _qk_prefix_indices, _raw_l1_prefix_indices`;
-historical measurements in `docs/adamas.md`.
+historical measurements remain in local `results/hqhk_*.json` artifacts.
 
 ### Integrated experimental LoSA
 
@@ -384,25 +384,19 @@ evidence and must wait for literature review and matched experiments.
 | Full HumanEval selector validation | LLaDA + SDAR; 164 problems | LLaDA Raw-L1 Query+Prefix passes; current SDAR sequential per-layer Prefix and Query+Prefix pass at budgets 256/512/1024; SDAR dynamic Query and Query+Prefix fail | README HumanEval table; external `/data0/ysy/sparse/{llada_exp,sdar_exp}` outputs; `eval_instruct/eval.sh` |
 | Length/phase diagnosis | LLaDA + SDAR; H800; one NarrativeQA sample; exact 8K/16K/32K input; generation 256; no gates; four repeats | Separates measured prefill, cached-forward, and compaction phases; exposes trajectory/call-count differences | `results/raw_l1_no_cost_gate_narrativeqa_phase_{llada,sdar}_g256_r4.json` |
 | Maskless Query component | LLaDA; H800; current exact-prompt/no-gate protocol; generation 256/768; plus earlier HumanEval quality result | Mask removal lowers paired Query latency about 13--20%; earlier quality gate passed | `results/raw_l1_no_cost_gate_narrativeqa_llada_fullmask_g{256,768}_r4.json`; current Raw-L1 reports; README quality table |
-| Cost-gate search | LLaDA threshold 4 vs 20; long context and LongBench 50-example subset | Threshold 20 improved tested latency/quality but was not adopted to avoid dataset-tuned gate | `results/query_gate_*.json`, `results/longbench_query_gate_t*/report.json`; context analysis doc |
+| Cost-gate search | LLaDA threshold 4 vs 20; long context and LongBench 50-example subset | Threshold 20 improved tested latency/quality but was not adopted to avoid dataset-tuned gate | local `results/query_gate_*.json`, `results/longbench_query_gate_t*/report.json` |
 | Block-size ablation | LLaDA Query; current protocol; block 32 vs 64; generation 256/768 | Block 64 is faster than dense but materially weaker at 32K than block 32 | `results/raw_l1_no_cost_gate_narrativeqa_llada_block64_g{256,768}_r4.json`; current Raw-L1 reports |
 | Unit/correctness checks | CPU/GPU where available | Cache alignment, selector budgets, dense equivalence at ratio 1, LoSA merge, Triton kernels | `tests/test_llada_patch.py`, `tests/test_sdar_patch.py`, `tests/test_triton_sparse_kernels.py` |
 
 ### Historical or non-current evidence (do not mix into the main method table)
 
-- `RESULTS.md` summarizes August instruct runs for an earlier block-cache
-  SparseDLM configuration (`ratio=0.5`) and legacy `sparse_kv`. Its high MMLU and
-  HumanEval numbers are not evidence for the current Raw-L1 adaptive method.
 - Adamas calibration, selector microbenchmarks, and older throughput/memory
   results remain useful component evidence but use a superseded selector.
-  Evidence: `docs/adamas.md`, README sections explicitly labeled “历史 Adamas”,
-  and `results/hqhk_*.json`.
+  Evidence: local `results/hqhk_*.json` artifacts.
 - `results/raw_l1_final_{llada,sdar}_g{256,768}_r4.json` is the superseded
   headline grid: it uses repetitive synthetic prompts, prompt-plus-generation
   context lengths, and production cost gates. It remains a production-gated
   comparison but must not be pooled with the exact-prompt, no-gate grid.
-- The earliest layer-prediction recall table uses one prompt only and is
-  exploratory. Evidence: `RESULTS.md`, “历史 Early-Layer 选位实验”.
 - `results/` is Git-ignored, so the raw reports are present locally but are not
   versioned by the repository. Evidence: `.gitignore` rule for `results/` and
   `git ls-files results` returning no tracked files at brief creation time.
@@ -444,7 +438,7 @@ complete current Raw-L1 four-method matrix. Evidence: `eval_instruct/eval.sh`,
 4. **Sparsity changes outputs and denoising trajectories.** Different modes can
    return different checksums, generated lengths, confidence transfers, and
    cached-call counts. Requested-token latency is not pure kernel throughput.
-   Evidence: raw result JSON fields; `docs/context_scaling_analysis.md`.
+   Evidence: raw result JSON fields and `scripts/bench_long_context.py` phase metrics.
 
 5. **Raw-L1 “chunk size” is currently ineffective for the distance scan.**
    `_raw_l1_prefix_indices` calls `_distance_prefix_indices` with
@@ -479,15 +473,15 @@ complete current Raw-L1 four-method matrix. Evidence: `eval_instruct/eval.sh`,
 
 10. **The HumanEval “normalized” metric is a custom post-processing diagnostic.**
     It repairs indentation/code extraction and should not replace official pass@1.
-    Both must be reported. Evidence: `eval_instruct/reevaluate_humaneval.py`;
-    `RESULTS.md`, “HumanEval 代码抽取修正”; README quality gate.
+    Both must be reported. Evidence: `eval_instruct/reevaluate_humaneval.py`
+    and the README quality gate.
 
 11. **HumanEval evidence locations are partly external and configurations have
     evolved.** Current scores are summarized in README, but raw current outputs
     are outside Git and some older result directories refer to earlier selectors
     and policies. Reproducibility requires copying immutable raw outputs and full
     configs into a versioned artifact. Evidence: README paths, `.gitignore`,
-    `RESULTS.md` dates, recent commits `257406c`–`03297b5`.
+    and recent commits `257406c`–`03297b5`.
 
 12. **Hardware/software evidence is narrow.** Current headline timing reports
     record NVIDIA H800 PCIe, PyTorch 2.5.0+cu124/CUDA 12.4 in artifacts. No

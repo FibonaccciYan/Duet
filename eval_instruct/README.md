@@ -5,11 +5,11 @@ Dream's `eval_instruct`, with generation-only adapters for LLaDA2.1 and SDAR.
 
 ## Install
 
-Install the harness and the task extras into the LLaDA environment:
+Install the repository environment, then install the harness in editable mode:
 
 ```bash
 cd eval_instruct
-/home/ysy/anaconda3/envs/llada/bin/python -m pip install -e ".[ifeval,math]"
+python -m pip install -e ".[ifeval,math]"
 ```
 
 ## Run

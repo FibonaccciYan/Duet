@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python_bin="${PYTHON_BIN:-/home/ysy/anaconda3/envs/llada/bin/python}"
+python_bin="${PYTHON_BIN:-/home/ysy/anaconda3/envs/sparse/bin/python}"
 output_dir="${OUTPUT_DIR:-experiments/query_losa_correlation/llada_layer1_topk5}"
 
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-5}" "${python_bin}" \

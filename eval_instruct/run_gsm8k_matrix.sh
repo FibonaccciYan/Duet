@@ -11,12 +11,12 @@ output_root="${OUTPUT_ROOT:-${repo_root}/../${model_type}_exp/${benchmark}_matri
 base_port="${BASE_PROCESS_PORT:-12350}"
 case "${model_type}" in
   llada)
-    python_bin="${PYTHON:-/home/ysy/anaconda3/envs/llada/bin/python}"
+    python_bin="${PYTHON:-/home/ysy/anaconda3/envs/sparse/bin/python}"
     block_length="${BLOCK_LENGTH:-32}"
     steps="${STEPS:-32}"
     ;;
   sdar)
-    python_bin="${PYTHON:-/home/ysy/anaconda3/envs/dream/bin/python}"
+    python_bin="${PYTHON:-/home/ysy/anaconda3/envs/sparse/bin/python}"
     block_length="${BLOCK_LENGTH:-32}"
     steps="${STEPS:-32}"
     ;;

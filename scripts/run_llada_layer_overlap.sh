@@ -2,7 +2,7 @@
 set -euo pipefail
 
 output_root="${OUTPUT_DIR:-experiments/layer_overlap_results/llada_block32}"
-python_bin="${PYTHON_BIN:-/home/ysy/anaconda3/envs/llada/bin/python}"
+python_bin="${PYTHON_BIN:-/home/ysy/anaconda3/envs/sparse/bin/python}"
 
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-5}" "${python_bin}" scripts/analyze_llada_layer_overlap.py \
   --block_length 32 --steps 32 --gen_length 32 \

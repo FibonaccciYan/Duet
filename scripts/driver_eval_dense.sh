@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Sequential dense quality driver for eval_instruct/eval.sh.
 # Usage: driver_eval_dense.sh MODEL_TYPE OUTPUT_NAME GPU_INDEX PORT
-set -u
+set -euo pipefail
 
-# Cluster egress proxy (from ~/.bashrc); datasets download needs it
-export http_proxy=http://114.212.80.7:21087
-export https_proxy=http://114.212.80.7:21087
+if [[ "$#" -ne 4 ]]; then
+  echo "usage: $0 MODEL_TYPE OUTPUT_NAME GPU_INDEX PORT" >&2
+  exit 2
+fi
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
 HF_HUB_DOWNLOAD_TIMEOUT=60; export HF_HUB_DOWNLOAD_TIMEOUT
 model_type="$1"
 out_name="$2"
@@ -16,7 +19,7 @@ export CUDA_VISIBLE_DEVICES="$gpu"
 export MODEL_TYPE="$model_type"
 export RUNTIME_MODE=dense
 export MAIN_PROCESS_PORT="$port"
-export OUTPUT_ROOT="/data0/gs/eval_results/${out_name}"
+export OUTPUT_ROOT="${OUTPUT_ROOT:-${repo_root}/../eval_results/${out_name}}"
 
 case "$model_type" in
   llada)
@@ -44,12 +47,10 @@ case "$model_type" in
     ;;
 esac
 
-# Isolated datasets cache per pipeline: the llada and dream envs ship
-# incompatible `datasets` versions (5.0.1 vs 3.6.0) and must not share one.
-# Respect a caller-provided (warm) cache; default to an isolated one.
-export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-/data0/gs/.hf_cache_${out_name}}"
+# Respect a caller-provided warm cache; otherwise isolate each pipeline.
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${repo_root}/../.hf_cache_${out_name}}"
 mkdir -p "$OUTPUT_ROOT" "$HF_DATASETS_CACHE"
-cd /data0/gs/SparseDLM_LLaDA_SDAR/eval_instruct || exit 1
+cd "${repo_root}/eval_instruct"
 
 started=$([[ -n "${START_BENCH:-}" ]] && echo 0 || echo 1)
 for b in ${BENCHMARKS:-gsm8k humaneval mmlu math}; do

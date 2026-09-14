@@ -14,7 +14,7 @@ method="${METHOD:-${RUNTIME_MODE:-}}"
 case "${model_type}" in
   llada)
     default_model=/data0/ysy/models/LLaDA2.1-mini
-    default_python=/home/ysy/anaconda3/envs/llada/bin/python
+    default_python=/home/ysy/anaconda3/envs/sparse/bin/python
     block_length="${BLOCK_LENGTH:-32}"
     steps="${STEPS:-32}"
     mask_id="${MASK_ID:-156895}"
@@ -29,7 +29,7 @@ case "${model_type}" in
     ;;
   sdar)
     default_model=/data0/ysy/models/SDAR-8B-Chat-b32
-    default_python=/home/ysy/anaconda3/envs/dream/bin/python
+    default_python=/home/ysy/anaconda3/envs/sparse/bin/python
     block_length="${BLOCK_LENGTH:-32}"
     steps="${STEPS:-32}"
     mask_id="${MASK_ID:-151669}"
