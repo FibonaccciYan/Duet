@@ -79,7 +79,11 @@ def parse_bool(value: str | bool) -> bool:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=("llada", "sdar"), required=True)
-    parser.add_argument("--mode", choices=("dense", "losa", "focus"), required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("dense", "losa", "losa_v2", "focus", "focus_v2"),
+        required=True,
+    )
     parser.add_argument("--model_path", default=None)
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--seed", type=int, default=42)
@@ -118,18 +122,24 @@ def parse_args() -> argparse.Namespace:
 
 def tokenize_chat(tokenizer, prompt: str) -> torch.Tensor:
     messages = [{"role": "user", "content": prompt}]
+    encoded = None
     if hasattr(tokenizer, "apply_chat_template"):
         try:
-            return tokenizer.apply_chat_template(
+            encoded = tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
                 tokenize=True,
                 return_tensors="pt",
             )
         except Exception:
-            pass
-    return tokenizer(prompt, return_tensors="pt").input_ids
-
+            encoded = None
+    if encoded is None:
+        encoded = tokenizer(prompt, return_tensors="pt")
+    if hasattr(encoded, "input_ids"):
+        encoded = encoded.input_ids
+    if not torch.is_tensor(encoded):
+        encoded = torch.tensor(encoded)
+    return encoded
 
 def token_checksum(tokens: torch.Tensor) -> str:
     data = json.dumps(tokens.detach().cpu().tolist(), separators=(",", ":")).encode()
@@ -147,9 +157,10 @@ def main() -> int:
         model_path=args.model_path,
         dtype=args.dtype,
         attn_implementation=args.attn_implementation,
-        moe_expert_patch=args.moe_expert_patch,
     )
-    if args.mode == "losa":
+    if args.mode in {"dense", "losa", "losa_v2", "focus_v2"}:
+        runtime_kwargs["moe_expert_patch"] = args.moe_expert_patch
+    if args.mode in {"losa", "losa_v2"}:
         runtime_kwargs.update(
             losa_page_size=args.losa_page_size,
             losa_token_budget=args.losa_token_budget,
@@ -158,7 +169,7 @@ def main() -> int:
             losa_backend=args.losa_backend,
             losa_trace_detail=args.losa_trace_detail,
         )
-    elif args.mode == "focus":
+    elif args.mode in {"focus", "focus_v2"}:
         runtime_kwargs.update(alpha=args.focus_alpha)
     runtime = load_runtime(args.mode, **runtime_kwargs)
     model, tokenizer = runtime.load()
@@ -189,7 +200,7 @@ def main() -> int:
     if args.family == "sdar":
         generation_kwargs.update(
             remasking_strategy=(
-                "low_confidence_dynamic" if args.mode == "focus" else "sequential"
+                "low_confidence_dynamic" if args.mode in {"focus", "focus_v2"} else "sequential"
             )
         )
     else:
@@ -235,7 +246,8 @@ def main() -> int:
             "eos_early_stop": bool(args.eos_early_stop),
         },
         "losa": {
-            "enabled": args.mode == "losa",
+            "enabled": args.mode in {"losa", "losa_v2"},
+            "variant": args.mode,
             "page_size": args.losa_page_size,
             "token_budget": args.losa_token_budget,
             "active_topk": args.losa_active_topk,
@@ -245,11 +257,17 @@ def main() -> int:
             "trace_events": len(generation.trace),
         },
         "focus": {
-            "enabled": args.mode == "focus",
+            "enabled": args.mode in {"focus", "focus_v2"},
+            "variant": args.mode,
             "alpha": args.focus_alpha,
-            "trace_events": len(generation.trace) if args.mode == "focus" else 0,
+            "trace_events": len(generation.trace) if args.mode in {"focus", "focus_v2"} else 0,
         },
         "moe_expert_patch": bool(args.moe_expert_patch),
+        "moe_patch_report": (
+            dict(getattr(runtime, "moe_patch_report", None))
+            if isinstance(getattr(runtime, "moe_patch_report", None), dict)
+            else getattr(getattr(runtime, "moe_patch_report", None), "__dict__", None)
+        ),
         "input_tokens": int(input_ids.shape[-1]),
         "generated_shape": list(generated.shape),
         "checksum": token_checksum(generated),

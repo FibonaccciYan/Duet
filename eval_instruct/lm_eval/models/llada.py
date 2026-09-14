@@ -70,6 +70,7 @@ class LLaDA(LM):
         mask_id: int = 156895,
         eos_id: int = 156892,
         method: Optional[str] = None,
+        runtime_mode: Optional[str] = None,
         sparse_dlm: bool = True,
         sparse_dlm_ratio: Optional[float] = None,
         sparse_dlm_top_k: Optional[int] = None,
@@ -107,7 +108,9 @@ class LLaDA(LM):
             eval_logger.warning("Ignoring unsupported model arguments: %s", sorted(kwargs))
 
         sparse_enabled = _as_bool(sparse_dlm)
-        self.method = str(method or ("sparse" if sparse_enabled else "dense")).lower()
+        self.method = str(
+            method or runtime_mode or ("sparse" if sparse_enabled else "dense")
+        ).lower()
         if self.method not in {"sparse", "dense", "focus", "losa"}:
             raise ValueError(f"Unsupported evaluation method: {self.method!r}")
 

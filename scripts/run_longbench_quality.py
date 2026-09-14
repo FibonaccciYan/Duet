@@ -67,6 +67,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--focus_alpha", type=float, default=1.5)
     parser.add_argument("--losa_token_budget", type=int, default=256)
+    parser.add_argument("--losa_page_size", type=int, default=16)
+    parser.add_argument("--losa_active_topk", type=int, default=5)
+    parser.add_argument(
+        "--losa_gqa_mode",
+        choices=("per_query_head", "group_mean", "group_max_score"),
+        default="per_query_head",
+    )
+    parser.add_argument("--losa_backend", choices=("torch", "triton", "auto"), default="auto")
     parser.add_argument("--threshold", type=float)
     parser.add_argument("--editing_threshold", type=float)
     parser.add_argument("--remasking_strategy")
@@ -206,6 +214,7 @@ def summarize(rows: list[dict], tasks=TASKS) -> dict:
 
 
 def main() -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args()
     if args.limit is not None and args.limit <= 0:
         raise ValueError("--limit must be positive")
@@ -228,7 +237,13 @@ def main() -> int:
     if args.method == "focus":
         options["alpha"] = args.focus_alpha
     elif args.method == "losa":
-        options["token_budget"] = args.losa_token_budget
+        options.update(
+            token_budget=args.losa_token_budget,
+            page_size=args.losa_page_size,
+            active_topk=args.losa_active_topk,
+            gqa_mode=args.losa_gqa_mode,
+            backend=args.losa_backend,
+        )
     patch_method(model, args.method, model_name=args.family, **options)
     if moe_patch and args.family == "llada" and args.method in {"focus", "losa"}:
         patch_moe_experts(model)
@@ -337,6 +352,7 @@ def main() -> int:
             "editing_threshold": editing_threshold,
             "remasking_strategy": remasking if args.family == "sdar" else None,
             "eos_early_stop": args.eos_early_stop,
+            "losa": options if args.method == "losa" else None,
         },
         "data_dir": str(args.data_dir),
         "tasks": args.tasks,

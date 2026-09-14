@@ -319,6 +319,17 @@ confidence-based Query 策略，SDAR 默认继续使用顺序策略。
 这些结果说明动态策略的误差来自多层状态、候选排序与逐步迁移的耦合，不能靠单层
 修补或局部“更精确”恢复。生产配置继续使用顺序策略。
 
+## 一键环境安装
+
+在 A800 机器上 clone 本仓库后执行：
+
+```bash
+bash install.sh
+conda activate sparse
+```
+
+详见 [`README.install.md`](README.install.md)。
+
 ## 使用方法
 
 仓库预期使用已有 CUDA、PyTorch、Triton 环境。默认 Raw L1 不需要 Hadamard

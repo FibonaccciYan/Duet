@@ -10,7 +10,7 @@ model_type="${MODEL_TYPE:-llada}"
 port="${MAIN_PROCESS_PORT:-12335}"
 benchmark="${BENCHMARK:-gsm8k}"
 sparse_dlm="${SPARSE_DLM:-true}"
-method="${METHOD:-}"
+method="${METHOD:-${RUNTIME_MODE:-}}"
 case "${model_type}" in
   llada)
     default_model=/data0/ysy/models/LLaDA2.1-mini
@@ -200,6 +200,9 @@ case "${benchmark}" in
     ;;
   math)
     run_eval math "${minerva_tasks}" 512 0 "$@"
+    ;;
+  math500)
+    run_eval math500 math_500 2048 0 "$@"
     ;;
   humaneval)
     run_eval humaneval humaneval_instruct 768 0 "$@"

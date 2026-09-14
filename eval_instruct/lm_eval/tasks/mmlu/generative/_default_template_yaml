@@ -4,7 +4,7 @@ fewshot_split: dev
 fewshot_config:
   sampler: first_n
 output_type: generate_until
-doc_to_text: "{{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nAnswer:"
+doc_to_text: "There is a single choice question about {{subject}}. Answer the question by replying A, B, C or D.\nQuestion: {{question.strip()}}\nA. {{choices[0]}}\nB. {{choices[1]}}\nC. {{choices[2]}}\nD. {{choices[3]}}\nAnswer:"
 doc_to_target: "{{['A', 'B', 'C', 'D'][answer]}}"
 generation_kwargs:
   until:
@@ -19,9 +19,11 @@ metric_list:
 filter_list:
   - name: get_response
     filter:
-      # Filter everything after the first letter
+      # Official protocol (OpenCompass first_option_postprocess): the prompt
+      # instructs a bare letter reply, so take the FIRST standalone A-D letter.
       - function: "regex"
-        regex_pattern: "^([A-Z]).*"
+        regex_pattern: "\\b([A-D])\\b"
+        group_select: 0
       - function: take_first
 metadata:
   version: 3.0

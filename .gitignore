@@ -221,3 +221,5 @@ pyrightconfig.json
 experiments/
 results/
 .hf_cache/
+
+third_party/

@@ -1,4 +1,4 @@
-"""Self-contained dense / paper-LoSA block diffusion generation.
+"""Self-contained dense / LoSA-v2 block diffusion generation.
 
 Model weights and their remote-code model classes are loaded from the supplied
 checkpoint path.  All generation and LoSA implementation code lives in this
@@ -8,7 +8,6 @@ package.
 from __future__ import annotations
 
 import math
-import logging
 import os
 import random
 import sys
@@ -21,10 +20,8 @@ from torch.nn import functional as F
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.cache_utils import DynamicCache
 
-from .attention_patch import install_paper_losa_attention
+from .attention_patch import install_losa_v2_attention as install_paper_losa_attention
 
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_PATHS = {
     "llada": "/data0/ysy/models/LLaDA2.1-mini",
@@ -47,65 +44,16 @@ def load_model_and_tokenizer(
     dtype: str | None = None,
     attn_implementation: str = "sdpa",
 ):
-    """Load a supported model using project-managed, version-adapted code.
-
-    ``SPARSEDLM_MODEL_CODE=remote`` restores the legacy checkpoint
-    ``trust_remote_code=True`` behavior.  In ``auto`` mode supported checkpoints
-    use :mod:`src.model`; unknown checkpoint types still fall back to remote
-    code so the loader remains extensible.
-    """
     # Keep this in the shared loader so dense, LoSA, and FOCUS v2 get the same
-    # runtime compatibility behavior.
+    # checkpoint-remote-code compatibility behavior.
     try:
         from src.focus_v2.compat import install_runtime_compat
 
         install_runtime_compat()
     except ImportError:
         pass
-
     model_path = model_path or DEFAULT_MODEL_PATHS[family]
     dtype = dtype or ("bfloat16" if family == "llada" else "float16")
-    source_mode = os.getenv("SPARSEDLM_MODEL_CODE", "auto").strip().lower()
-    if source_mode not in {"auto", "bundled", "remote"}:
-        raise ValueError(f"invalid SPARSEDLM_MODEL_CODE: {source_mode!r}")
-
-    if source_mode != "remote":
-        try:
-            from src.model.registry import resolve_model_code
-
-            code = resolve_model_code(family=family, model_path=model_path)
-        except Exception as exc:
-            if source_mode == "bundled":
-                raise
-            logger.warning("falling back to checkpoint remote code: %s", exc)
-        else:
-            config = code.config_cls.from_pretrained(
-                model_path,
-                local_files_only=True,
-            )
-            if family == "sdar" and getattr(config, "pad_token_id", None) is None:
-                # Some SDAR checkpoints omit pad_token_id, but their modeling
-                # code unconditionally reads it while constructing embeddings.
-                config.pad_token_id = 151643
-            model = code.model_cls.from_pretrained(
-                model_path,
-                config=config,
-                device_map="auto",
-                torch_dtype=getattr(torch, dtype),
-                attn_implementation=attn_implementation,
-                trust_remote_code=False,
-            ).eval()
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_path,
-                trust_remote_code=True,
-            )
-            actual = getattr(model.config, "model_type", None)
-            if family == "llada" and actual != "llada2_moe":
-                raise ValueError(f"expected llada2_moe, got {actual!r}")
-            if family == "sdar" and actual != "sdar":
-                raise ValueError(f"expected sdar, got {actual!r}")
-            return model, tokenizer
-
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     if family == "sdar" and getattr(config, "pad_token_id", None) is None:
         # Some SDAR checkpoints omit pad_token_id, but their remote modeling
@@ -200,7 +148,7 @@ def build_sdar_prefix_cache(
     position_ids: torch.Tensor,
     *,
     block_length: int,
-    query_chunk_length: int = 256,
+    query_chunk_length: int = 512,
 ) -> tuple:
     """Build SDAR prefix KV without a full-length quadratic query batch.
 
@@ -394,7 +342,7 @@ def paper_losa_context(
         model._paper_losa_context = None
 
 
-def model_forward(model, family, input_ids, attention_mask, position_ids, *, prefix_cache=(), losa_context_kwargs=None):
+def model_forward(model, family, input_ids, attention_mask, position_ids, *, prefix_cache=(), losa_context_kwargs=None, store_kv=True):
     if prefix_cache:
         return layerwise_cached_forward(
             model,
@@ -415,7 +363,7 @@ def model_forward(model, family, input_ids, attention_mask, position_ids, *, pre
         "return_dict": True,
     }
     if family == "sdar":
-        kwargs["store_kv"] = True
+        kwargs["store_kv"] = bool(store_kv)
     if losa_context_kwargs is None:
         return model(**kwargs), []
     with paper_losa_context(model, **losa_context_kwargs) as trace:
@@ -431,6 +379,7 @@ def layerwise_cached_forward(
     *,
     prefix_cache,
     losa_context_kwargs=None,
+    store_kv=True,
 ):
     """Forward only the current block with a prefix KV cache.
 
@@ -471,7 +420,7 @@ def layerwise_cached_forward(
                     past_key_value=cache,
                     output_attentions=False,
                     use_cache=True,
-                    store_kv=True,
+                    store_kv=store_kv,
                     position_embeddings=position_embeddings,
                 )[0]
 
@@ -555,8 +504,12 @@ def block_diffusion_generate(
     full_mask = block_causal_mask(num_blocks, block_length, device, dtype, family)
     prefill_blocks = prompt_length // block_length
     traces = []
-    transfer_counts = get_num_transfer_tokens(block_length, steps).to(device)
+    transfer_counts = get_num_transfer_tokens(block_length, steps)
     threshold = threshold if threshold is not None else (0.85 if family == "sdar" else 0.95)
+
+    # The immutable prefix cache is finalized once at the end of every block and
+    # reused by the next block.  v1 rebuilt all previous blocks from scratch.
+    persistent_prefix_cache = None
 
     for block_idx in range(prefill_blocks, num_blocks):
         block_start = block_idx * block_length
@@ -569,7 +522,9 @@ def block_diffusion_generate(
         cur_x = x[:, :current_window_end]
         cur_mask = full_mask[..., :current_window_end, :current_window_end] if family == "llada" else full_mask[:, :current_window_end, :current_window_end]
         cur_pos = position_ids[:, :current_window_end]
-        if family == "sdar":
+        if persistent_prefix_cache is not None:
+            prefix_cache = persistent_prefix_cache
+        elif family == "sdar":
             # Avoid SDAR's full-window prefill OOM; this produces the same
             # block-causal prefix KV that the removed full forward provided.
             prefix_cache = build_sdar_prefix_cache(
@@ -584,6 +539,7 @@ def block_diffusion_generate(
                 all_visible_mask(block_length, block_end, device, dtype, family),
                 position_ids[:, block_start:block_end],
                 prefix_cache=prefix_cache,
+                store_kv=False,
             )
         elif family == "llada":
             # Same bounded-prefix construction for LLaDA.  This avoids the
@@ -641,6 +597,7 @@ def block_diffusion_generate(
                     block_pos,
                     prefix_cache=prefix_cache,
                     losa_context_kwargs=losa_kwargs,
+                    store_kv=False,
                 )
             traces.extend({"block": block_idx, "step": step, **item} for item in trace)
             logits = outputs.logits[:, -block_length:, :]
@@ -680,6 +637,19 @@ def block_diffusion_generate(
                 )
                 x[:, block_start:block_end] = new_block
             step += 1
+
+        # Finalize the block's KV once its tokens are fixed.  This forward is
+        # required because the last denoising forward saw the pre-transfer block.
+        final_outputs, _ = model_forward(
+            model,
+            family,
+            x[:, block_start:block_end],
+            all_visible_mask(block_length, block_end, device, dtype, family),
+            position_ids[:, block_start:block_end],
+            prefix_cache=prefix_cache,
+            store_kv=True,
+        )
+        persistent_prefix_cache = final_outputs.past_key_values.to_legacy_cache()
 
         if eos_early_stop and eos_id is not None:
             generated_part = x[0, prompt_length:block_end]

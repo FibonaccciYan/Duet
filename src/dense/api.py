@@ -86,9 +86,17 @@ class DenseRuntime:
             model_name=self.family,
             moe_expert_patch=self.moe_expert_patch,
         )
-        self.moe_patch_report = getattr(
-            self.model, "_llada_moe_expert_patch_count", None
-        )
+        if self.moe_expert_patch:
+            # The sparse compatibility patch installs the packed routed-MoE
+            # backend and sets _llada_moe_expert_patch_count.  Do not run the
+            # LoSA patcher again: it would see already-packed weights and make
+            # the benchmark report a false patched_blocks=0.
+            count = int(getattr(self.model, "_llada_moe_expert_patch_count", 0))
+            self.moe_patch_report = {
+                "requested": True,
+                "patched_blocks": count,
+                "backend": "triton_packed_routed_moe",
+            }
         return self.model, self.tokenizer
 
     def generate(self, inputs: torch.Tensor, **kwargs):
