@@ -3,7 +3,6 @@
 import math
 
 import torch
-import faster_hadamard_transform
 
 from .triton_kernels import (
     adamas_distances,
@@ -261,6 +260,8 @@ def _hadamard_transform(x):
         raise ValueError(f"Adamas requires a power-of-two head dimension, got {size}")
     if not x.is_cuda:
         raise ValueError("Faster Hadamard requires a CUDA tensor")
+    import faster_hadamard_transform
+
     return faster_hadamard_transform.hadamard_transform(
         x.contiguous(), inplace=False
     )
@@ -391,6 +392,28 @@ def _hadamard_qk_prefix_indices(query, key, token_budget):
     )
 
 
+def _raw_l1_prefix_indices(query, key, token_budget):
+    """Select by exact L1 distance without a Hadamard transform."""
+    prefix_length = key.shape[-2]
+    budget = min(int(token_budget), prefix_length)
+    if budget >= prefix_length:
+        return torch.arange(prefix_length, device=key.device)
+    if budget <= 0:
+        return torch.empty(0, dtype=torch.long, device=key.device)
+    return _distance_prefix_indices(query, key, budget, prefix_length)
+
+
+def _prefix_indices(
+    query,
+    key,
+    token_budget,
+    chunk_size=256,
+    bucket_thresholds=None,
+):
+    """Select prefix tokens with exact L1 distance in the learned Q/K basis."""
+    return _raw_l1_prefix_indices(query, key, token_budget)
+
+
 def _compact_prefix_cache(
     model,
     cache,
@@ -415,7 +438,12 @@ def _compact_prefix_cache(
         indices = torch.arange(prefix_length, device=prefix_cache[0][0].device)
         return prefix_cache, tuple(indices for _ in prefix_cache)
 
-    group_size = 2 if model.config.model_type == "sdar" else 1
+    group_size = (
+        2
+        if model.config.model_type == "sdar"
+        and getattr(model.config, "sdar_prefix_share_layer_pairs", False)
+        else 1
+    )
     cos, sin = model.model.rotary_emb(
         captured_queries[group_size - 1], block_position_ids
     )
@@ -437,7 +465,7 @@ def _compact_prefix_cache(
                 )
             )
             key = key.index_select(2, candidates)
-        indices = _adamas_prefix_indices(
+        indices = _prefix_indices(
             _apply_rotary(query, cos, sin),
             key,
             token_budget,

@@ -92,6 +92,7 @@ def parse_args():
     parser.add_argument("--prefix_min_prefix_length", type=int, default=None)
     parser.add_argument("--prefix_token_budget", type=int, default=256)
     parser.add_argument("--prefix_chunk_size", type=int, default=None)
+    parser.add_argument("--prefix_share_layer_pairs", type=parse_bool, default=False)
     parser.add_argument("--losa", type=parse_bool, default=False)
     parser.add_argument("--losa_active_topk", type=int, default=5)
     parser.add_argument(
@@ -143,7 +144,7 @@ def load_model_and_tokenizer(args):
         args.sparse_dlm_selection_interval or (1 if is_sdar else 4)
     )
     if args.query_dense_threshold is None:
-        args.query_dense_threshold = 0 if is_sdar else 4
+        args.query_dense_threshold = 0
     args.prefix_sparse = (
         not is_sdar if args.prefix_sparse is None else args.prefix_sparse
     )
@@ -164,6 +165,7 @@ def load_model_and_tokenizer(args):
             prefix_min_prefix_length=args.prefix_min_prefix_length,
             prefix_token_budget=args.prefix_token_budget,
             prefix_chunk_size=args.prefix_chunk_size,
+            prefix_share_layer_pairs=args.prefix_share_layer_pairs,
             losa=args.losa,
             losa_active_topk=args.losa_active_topk,
             losa_score_mode=args.losa_score_mode,

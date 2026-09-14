@@ -14,8 +14,8 @@ case "${model_type}" in
     default_python=/home/ysy/anaconda3/envs/llada/bin/python
     default_ratio=0.7
     default_selection_interval=4
-    default_query_dense_threshold=4
-    default_query_min_prefix_length=24576
+    default_query_dense_threshold=0
+    default_query_min_prefix_length=0
     default_selection_layer=1
     default_refresh_step=2
     default_prefix_chunk_size=1024
@@ -29,7 +29,7 @@ case "${model_type}" in
     default_selection_interval=1
     default_query_dense_threshold=0
     default_query_min_prefix_length=0
-    default_prefix_min_prefix_length=24576
+    default_prefix_min_prefix_length=0
     default_selection_layer=5
     default_prefix_chunk_size=1024
     ;;
@@ -41,7 +41,7 @@ esac
 if [[ "${model_type}" == "llada" ]]; then
   default_refresh_step=2
   default_moe_expert_patch=true
-  default_prefix_min_prefix_length=4096
+  default_prefix_min_prefix_length=0
 fi
 model_path="${MODEL_PATH:-${default_model_path}}"
 if [[ -n "${PYTHON:-}" ]]; then
@@ -76,6 +76,7 @@ args=(
   --prefix_min_prefix_length "${PREFIX_MIN_PREFIX_LENGTH:-${default_prefix_min_prefix_length}}"
   --prefix_token_budget "${PREFIX_TOKEN_BUDGET:-256}"
   --prefix_chunk_size "${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}}"
+  --prefix_share_layer_pairs "${PREFIX_SHARE_LAYER_PAIRS:-false}"
   --losa "${LOSA:-false}"
   --losa_active_topk "${LOSA_ACTIVE_TOPK:-5}"
   --losa_score_mode "${LOSA_SCORE_MODE:-query}"

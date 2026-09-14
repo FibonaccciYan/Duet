@@ -28,7 +28,7 @@ from .sparse_ops import (
     _queue_losa_active_update,
     _prefix_from_dynamic_cache,
 )
-from .triton_kernels import block_causal_prefill, fused_swiglu, rms_norm
+from .triton_kernels import block_causal_prefill
 # Zero-based decoder layer after which Query Sparse chooses mask candidates.
 # Layer 4 is too early for SDAR-b32: its candidate ranking diverges sharply
 # from the final-layer transfer positions.
@@ -139,7 +139,10 @@ def _project_qkv(attention, hidden_states, model):
         batch_size, query_length, attention.num_attention_heads, attention.head_dim
     ))
     captured = getattr(model, "_sdar_captured_queries", None)
-    if captured is not None and attention.layer_idx % 2:
+    share_pairs = getattr(
+        getattr(model, "config", None), "sdar_prefix_share_layer_pairs", False
+    )
+    if captured is not None and (not share_pairs or attention.layer_idx % 2):
         captured[attention.layer_idx] = query.transpose(1, 2).contiguous()
     key = attention.k_norm(key.view(
         batch_size, query_length, attention.num_key_value_heads, attention.head_dim
@@ -148,31 +151,6 @@ def _project_qkv(attention, hidden_states, model):
         batch_size, query_length, attention.num_key_value_heads, attention.head_dim
     )
     return query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
-
-
-def _sdar_mlp_forward(self, hidden_states):
-    model = self._sdar_model_ref()
-    if getattr(model, "_sdar_decode_attention", False) and hidden_states.shape[-2] < 32:
-        return self.down_proj(
-            fused_swiglu(
-                hidden_states,
-                self.gate_proj.weight,
-                self.up_proj.weight,
-            )
-        )
-    return self._sdar_dense_forward(hidden_states)
-
-
-def _sdar_rms_norm_forward(self, hidden_states):
-    model = self._sdar_model_ref()
-    query_length = (
-        hidden_states.shape[1]
-        if hidden_states.ndim == 4
-        else hidden_states.shape[-2]
-    )
-    if getattr(model, "_sdar_decode_attention", False) and query_length < 32:
-        return rms_norm(hidden_states, self.weight, self.variance_epsilon)
-    return self._sdar_dense_forward(hidden_states)
 
 
 def _sdar_attention_forward(
@@ -711,7 +689,11 @@ def _block_diffusion_generate(self, *args, **kwargs):
                     position_ids,
                     prefix_token_budget,
                     prefix_chunk_size,
-                    previous_prefix_indices,
+                    (
+                        None
+                        if model.config.sdar_prefix_rescreen_full_kv
+                        else previous_prefix_indices
+                    ),
                     previous_prefix_length,
                 )
                 previous_prefix_length = block_start
@@ -819,9 +801,11 @@ def patch_sdar_model(
     deep_only_transfer=False,
     query_sparse=True,
     prefix_sparse=False,
-    prefix_min_prefix_length=24576,
+    prefix_min_prefix_length=0,
     prefix_token_budget=256,
     prefix_chunk_size=1024,
+    prefix_share_layer_pairs=False,
+    prefix_rescreen_full_kv=False,
     losa=False,
     losa_active_topk=5,
     losa_score_mode="query",
@@ -860,6 +844,8 @@ def patch_sdar_model(
     model.config.sdar_prefix_min_prefix_length = int(prefix_min_prefix_length)
     model.config.sdar_prefix_token_budget = int(prefix_token_budget)
     model.config.sdar_prefix_chunk_size = int(prefix_chunk_size)
+    model.config.sdar_prefix_share_layer_pairs = bool(prefix_share_layer_pairs)
+    model.config.sdar_prefix_rescreen_full_kv = bool(prefix_rescreen_full_kv)
     model.config.sdar_losa = bool(losa)
     model.config.sdar_losa_active_topk = int(losa_active_topk)
     model.config.sdar_losa_score_mode = losa_score_mode
@@ -888,23 +874,6 @@ def patch_sdar_model(
             attention.forward = types.MethodType(
                 _sdar_attention_forward, attention
             )
-        mlp = layer.mlp
-        if not hasattr(mlp, "_sdar_dense_forward"):
-            mlp._sdar_dense_forward = mlp.forward
-            mlp._sdar_model_ref = weakref.ref(model)
-            mlp.forward = types.MethodType(_sdar_mlp_forward, mlp)
-        for norm in (
-            getattr(layer, "input_layernorm", None),
-            getattr(layer, "post_attention_layernorm", None),
-            getattr(attention, "q_norm", None),
-            getattr(attention, "k_norm", None),
-        ):
-            if norm is not None and hasattr(norm, "weight") and not hasattr(
-                norm, "_sdar_dense_forward"
-            ):
-                norm._sdar_dense_forward = norm.forward
-                norm._sdar_model_ref = weakref.ref(model)
-                norm.forward = types.MethodType(_sdar_rms_norm_forward, norm)
     if losa:
         for layer in model.model.layers:
             attention = layer.self_attn

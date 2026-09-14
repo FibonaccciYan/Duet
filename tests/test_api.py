@@ -30,9 +30,9 @@ class SparseApiTest(unittest.TestCase):
         self.assertTrue(kwargs["prefix_sparse"])
         self.assertTrue(kwargs["losa"])
         self.assertEqual(kwargs["selection_layer"], 3)
-        self.assertEqual(kwargs["query_dense_threshold"], 4)
-        self.assertEqual(kwargs["query_min_prefix_length"], 24576)
-        self.assertEqual(kwargs["prefix_min_prefix_length"], 4096)
+        self.assertEqual(kwargs["query_dense_threshold"], 0)
+        self.assertEqual(kwargs["query_min_prefix_length"], 0)
+        self.assertEqual(kwargs["prefix_min_prefix_length"], 0)
         self.assertEqual(kwargs["prefix_chunk_size"], 1024)
         self.assertEqual(model.config.llada_sparse_config["prefix_chunk_size"], 1024)
         patch_moe.assert_called_once_with(model)
@@ -54,6 +54,7 @@ class SparseApiTest(unittest.TestCase):
                 query_sparse=False,
                 prefix_sparse=True,
                 prefix_token_budget=128,
+                prefix_rescreen_full_kv=True,
                 losa=True,
                 losa_active_topk=7,
             )
@@ -62,11 +63,13 @@ class SparseApiTest(unittest.TestCase):
         self.assertFalse(kwargs["query_sparse"])
         self.assertTrue(kwargs["prefix_sparse"])
         self.assertEqual(kwargs["prefix_token_budget"], 128)
+        self.assertTrue(kwargs["prefix_rescreen_full_kv"])
         self.assertTrue(kwargs["losa"])
         self.assertEqual(kwargs["losa_active_topk"], 7)
         self.assertEqual(kwargs["selection_layer"], 5)
         self.assertEqual(kwargs["refresh_step"], -1)
-        self.assertEqual(kwargs["prefix_min_prefix_length"], 24576)
+        self.assertEqual(kwargs["prefix_min_prefix_length"], 0)
+        self.assertFalse(kwargs["prefix_share_layer_pairs"])
         self.assertEqual(kwargs["prefix_chunk_size"], 1024)
         self.assertEqual(model.config.sdar_sparse_config["prefix_chunk_size"], 1024)
         patch_moe.assert_not_called()

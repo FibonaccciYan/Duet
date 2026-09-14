@@ -534,7 +534,10 @@ def _cached_forward(
     threshold=0.95,
     prefix_indices=None,
     original_prefix_length=None,
+    maskless_attention=None,
 ):
+    if maskless_attention is None:
+        maskless_attention = query_sparse
     base = model.model
     inputs_embeds = base.word_embeddings(input_ids)
     position_embeddings = base.rotary_emb(inputs_embeds, position_ids)
@@ -597,7 +600,7 @@ def _cached_forward(
                 losa_context["query_positions"] = layer_query_positions
 
             layer_attention_mask = None
-            if not query_sparse or losa_context is not None:
+            if not maskless_attention or losa_context is not None:
                 layer_prefix_positions = (
                     prefix_indices[layer_idx]
                     if prefix_indices is not None
@@ -719,6 +722,7 @@ def _block_cache_generate(self, *args, **kwargs):
     eos_id = int(kwargs.pop("eos_id", 156892))
     mask_id = int(kwargs.pop("mask_id", 156895))
     num_to_transfer = int(kwargs.pop("num_to_transfer", 1))
+    maskless_attention = kwargs.pop("maskless_attention", None)
     if kwargs:
         raise TypeError(f"Unsupported block-cache generation arguments: {sorted(kwargs)}")
     if block_length <= 0 or gen_length < 0 or num_to_transfer <= 0:
@@ -740,7 +744,7 @@ def _block_cache_generate(self, *args, **kwargs):
     selection_top_k = self.config.llada_sparse_dlm_top_k
     selection_layer = self.config.llada_query_selection_layer
     query_dense_threshold = self.config.llada_query_dense_threshold
-    query_sparse = self.config.llada_query_sparse
+    query_requested = self.config.llada_query_sparse
     prefix_sparse = self.config.llada_prefix_sparse
     prefix_token_budget = self.config.llada_prefix_token_budget
     prefix_chunk_size = self.config.llada_prefix_chunk_size
@@ -751,7 +755,7 @@ def _block_cache_generate(self, *args, **kwargs):
         and fixed_prefix_length >= self.config.llada_prefix_min_prefix_length
     )
     query_sparse = (
-        query_sparse
+        query_requested
         and fixed_prefix_length >= self.config.llada_query_min_prefix_length
     )
     fixed_prefix_cache = None
@@ -835,7 +839,11 @@ def _block_cache_generate(self, *args, **kwargs):
                 cur_positions[:, block_start:block_end],
                 prefix_token_budget,
                 prefix_chunk_size,
-                previous_prefix_indices,
+                (
+                    None
+                    if self.config.llada_prefix_rescreen_full_kv
+                    else previous_prefix_indices
+                ),
                 previous_prefix_length,
             )
             previous_prefix_indices = prefix_indices
@@ -891,6 +899,11 @@ def _block_cache_generate(self, *args, **kwargs):
                 temperature=temperature,
                 top_p=top_p,
                 query_sparse=query_sparse,
+                maskless_attention=(
+                    query_requested
+                    if maskless_attention is None
+                    else bool(maskless_attention)
+                ),
                 selection_layer=selection_layer,
                 threshold=threshold,
                 prefix_indices=prefix_indices,
@@ -945,14 +958,15 @@ def patch_llada_model(
     ratio=0.5,
     top_k=64,
     selection_interval=4,
-    query_dense_threshold=4,
-    query_min_prefix_length=24576,
+    query_dense_threshold=0,
+    query_min_prefix_length=0,
     selection_layer=1,
     query_sparse=True,
     prefix_sparse=True,
-    prefix_min_prefix_length=4096,
+    prefix_min_prefix_length=0,
     prefix_token_budget=256,
     prefix_chunk_size=1024,
+    prefix_rescreen_full_kv=False,
     losa=False,
     losa_active_topk=5,
     losa_score_mode="query",
@@ -991,6 +1005,7 @@ def patch_llada_model(
     model.config.llada_prefix_min_prefix_length = int(prefix_min_prefix_length)
     model.config.llada_prefix_token_budget = int(prefix_token_budget)
     model.config.llada_prefix_chunk_size = int(prefix_chunk_size)
+    model.config.llada_prefix_rescreen_full_kv = bool(prefix_rescreen_full_kv)
     model.config.llada_losa = bool(losa)
     model.config.llada_losa_active_topk = int(losa_active_topk)
     model.config.llada_losa_score_mode = losa_score_mode

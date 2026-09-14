@@ -74,8 +74,8 @@ class LLaDA(LM):
         sparse_dlm_ratio: Optional[float] = None,
         sparse_dlm_top_k: Optional[int] = None,
         sparse_dlm_selection_interval: int = 4,
-        query_dense_threshold: int = 4,
-        query_min_prefix_length: int = 24576,
+        query_dense_threshold: int = 0,
+        query_min_prefix_length: int = 0,
         sparse_dlm_refresh_step: int = 2,
         sparse_dlm_selection_layer: Optional[int] = None,
         sparse_dlm_deep_only_transfer: Optional[bool] = None,
@@ -85,7 +85,8 @@ class LLaDA(LM):
         prefix_min_prefix_length: Optional[int] = None,
         prefix_token_budget: int = 256,
         prefix_chunk_size: Optional[int] = None,
-        prefix_selector: str = "adamas",
+        prefix_share_layer_pairs: bool = False,
+        prefix_selector: str = "raw_l1",
         losa: bool = False,
         losa_active_topk: int = 5,
         losa_score_mode: str = "query",
@@ -146,20 +147,21 @@ class LLaDA(LM):
 
         resolve_model_family(self.model, self.MODEL_NAME)
         prefix_selector = str(prefix_selector).lower()
-        if prefix_selector not in {"adamas", "qk", "hadamard_qk"}:
+        if prefix_selector not in {"raw_l1", "hadamard_qk", "adamas", "qk"}:
             raise ValueError(f"Unsupported prefix selector: {prefix_selector!r}")
-        if prefix_selector in {"qk", "hadamard_qk"}:
+        if prefix_selector != "raw_l1":
             import src.sparse.sparse_ops as sparse
 
-            def select_qk(query, key, token_budget, *_args, **_kwargs):
-                selector = (
-                    sparse._hadamard_qk_prefix_indices
-                    if prefix_selector == "hadamard_qk"
-                    else sparse._qk_prefix_indices
+            if prefix_selector == "adamas":
+                sparse._prefix_indices = sparse._adamas_prefix_indices
+            elif prefix_selector == "qk":
+                sparse._prefix_indices = lambda query, key, budget, *_args, **_kwargs: (
+                    sparse._qk_prefix_indices(query, key, budget)
                 )
-                return selector(query, key, token_budget)
-
-            sparse._adamas_prefix_indices = select_qk
+            else:
+                sparse._prefix_indices = lambda query, key, budget, *_args, **_kwargs: (
+                    sparse._hadamard_qk_prefix_indices(query, key, budget)
+                )
         prefix_sparse_enabled = sparse_enabled and (
             self.MODEL_NAME == "llada"
             if prefix_sparse is None
@@ -199,6 +201,7 @@ class LLaDA(LM):
                 ),
                 prefix_token_budget=int(prefix_token_budget),
                 prefix_chunk_size=_optional_number(prefix_chunk_size, int),
+                prefix_share_layer_pairs=_as_bool(prefix_share_layer_pairs),
                 losa=sparse_enabled and _as_bool(losa),
                 losa_active_topk=int(losa_active_topk),
                 losa_score_mode=losa_score_mode,

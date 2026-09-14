@@ -14,7 +14,6 @@ from src.sparse.sparse_ops import (
 from src.sparse.sdar_patch import (
     _sdar_attention_forward,
     _sdar_losa_attention_forward,
-    _sdar_rms_norm_forward,
     _project_qkv,
     _select_positions,
     _sparse_cached_forward,
@@ -63,25 +62,11 @@ class _FakeSDAR(torch.nn.Module):
 
 
 class SDARBlockDiffusionPatchTest(unittest.TestCase):
-    @mock.patch("src.sparse.sdar_patch.rms_norm", side_effect=lambda x, *_: x + 1)
-    def test_short_query_uses_triton_rms_norm(self, triton_norm):
-        model = types.SimpleNamespace(_sdar_decode_attention=True)
-        norm = types.SimpleNamespace(
-            _sdar_model_ref=lambda: model,
-            _sdar_dense_forward=lambda x: x + 2,
-            weight=torch.ones(4),
-            variance_epsilon=1e-6,
+    def test_qkv_capture_respects_prefix_layer_pair_sharing(self):
+        model = types.SimpleNamespace(
+            config=types.SimpleNamespace(sdar_prefix_share_layer_pairs=False),
+            _sdar_captured_queries=[None, None],
         )
-
-        short = _sdar_rms_norm_forward(norm, torch.zeros(1, 31, 4))
-        full = _sdar_rms_norm_forward(norm, torch.zeros(1, 32, 4))
-
-        self.assertTrue(torch.equal(short, torch.ones_like(short)))
-        self.assertTrue(torch.equal(full, torch.full_like(full, 2)))
-        triton_norm.assert_called_once()
-
-    def test_qkv_capture_keeps_only_prefix_representative_layers(self):
-        model = types.SimpleNamespace(_sdar_captured_queries=[None, None])
         attention = types.SimpleNamespace(
             _sdar_qkv_weight=torch.eye(2).repeat(3, 1),
             q_norm=torch.nn.Identity(), k_norm=torch.nn.Identity(),
@@ -91,6 +76,13 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             attention.layer_idx = layer_idx
             _project_qkv(attention, torch.ones(1, 2, 2), model)
 
+        self.assertIsNotNone(model._sdar_captured_queries[0])
+        self.assertIsNotNone(model._sdar_captured_queries[1])
+        model.config.sdar_prefix_share_layer_pairs = True
+        model._sdar_captured_queries = [None, None]
+        for layer_idx in range(2):
+            attention.layer_idx = layer_idx
+            _project_qkv(attention, torch.ones(1, 2, 2), model)
         self.assertIsNone(model._sdar_captured_queries[0])
         self.assertIsNotNone(model._sdar_captured_queries[1])
 
@@ -203,12 +195,15 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             prefix_sparse=True,
             prefix_token_budget=17,
             prefix_chunk_size=9,
+            prefix_rescreen_full_kv=True,
         )
 
         self.assertTrue(model.config.sdar_prefix_sparse)
-        self.assertEqual(model.config.sdar_prefix_min_prefix_length, 24576)
+        self.assertEqual(model.config.sdar_prefix_min_prefix_length, 0)
+        self.assertFalse(model.config.sdar_prefix_share_layer_pairs)
         self.assertEqual(model.config.sdar_prefix_token_budget, 17)
         self.assertEqual(model.config.sdar_prefix_chunk_size, 9)
+        self.assertTrue(model.config.sdar_prefix_rescreen_full_kv)
 
     def test_short_prefix_disables_prefix_sparse(self):
         model = patch_model(

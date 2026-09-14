@@ -21,10 +21,10 @@ case "${model_type}" in
     eos_id="${EOS_ID:-156892}"
     default_ratio=0.7
     default_selection_interval=4
-    default_query_dense_threshold=4
+    default_query_dense_threshold=0
     default_refresh_step=2
     default_selection_layer=1
-    default_prefix_min_length=4096
+    default_prefix_min_length=0
     default_prefix_chunk_size=1024
     ;;
   sdar)
@@ -38,7 +38,7 @@ case "${model_type}" in
     default_query_dense_threshold=0
     default_refresh_step=-1
     default_selection_layer=5
-    default_prefix_min_length=24576
+    default_prefix_min_length=0
     default_prefix_chunk_size=1024
     ;;
   *)
@@ -122,9 +122,9 @@ fi
 
 case "${method}" in
   sparse)
-    model_args+=",sparse_dlm_ratio=${SPARSE_DLM_RATIO:-${default_ratio}},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-${default_selection_interval}},query_dense_threshold=${QUERY_DENSE_THRESHOLD:-${default_query_dense_threshold}},sparse_dlm_refresh_step=${SPARSE_DLM_REFRESH_STEP:-${default_refresh_step}},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-${default_selection_layer}},sparse_dlm_deep_only_transfer=${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_min_prefix_length=${PREFIX_MIN_PREFIX_LENGTH:-${default_prefix_min_length}},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}},prefix_selector=${PREFIX_SELECTOR:-adamas},losa=${losa},losa_active_topk=${losa_active_topk},losa_score_mode=${losa_score_mode},losa_key_samples=${losa_key_samples}"
+    model_args+=",sparse_dlm_ratio=${SPARSE_DLM_RATIO:-${default_ratio}},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-${default_selection_interval}},query_dense_threshold=${QUERY_DENSE_THRESHOLD:-${default_query_dense_threshold}},sparse_dlm_refresh_step=${SPARSE_DLM_REFRESH_STEP:-${default_refresh_step}},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-${default_selection_layer}},sparse_dlm_deep_only_transfer=${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_min_prefix_length=${PREFIX_MIN_PREFIX_LENGTH:-${default_prefix_min_length}},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}},prefix_share_layer_pairs=${PREFIX_SHARE_LAYER_PAIRS:-false},prefix_selector=${PREFIX_SELECTOR:-raw_l1},losa=${losa},losa_active_topk=${losa_active_topk},losa_score_mode=${losa_score_mode},losa_key_samples=${losa_key_samples}"
     if [[ "${model_type}" == "llada" ]]; then
-      model_args+=",query_min_prefix_length=${QUERY_MIN_PREFIX_LENGTH:-24576},query_losa_union=${QUERY_LOSA_UNION:-false}"
+      model_args+=",query_min_prefix_length=${QUERY_MIN_PREFIX_LENGTH:-0},query_losa_union=${QUERY_LOSA_UNION:-false}"
     fi
     ;;
   focus)

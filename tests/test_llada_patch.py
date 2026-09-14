@@ -33,6 +33,8 @@ from src.sparse.sparse_ops import (
     _compact_prefix_cache,
     _hadamard_transform,
     _hadamard_qk_prefix_indices,
+    _prefix_indices,
+    _raw_l1_prefix_indices,
     _merge_attention_states,
     _new_losa_state,
 )
@@ -113,7 +115,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         )
         queries = [torch.randn(1, 1, 2, 2) for _ in range(2)]
         with mock_patch(
-            "src.sparse.sparse_ops._adamas_prefix_indices",
+            "src.sparse.sparse_ops._prefix_indices",
             side_effect=(torch.tensor([1, 3]), torch.tensor([0, 2])),
         ) as selector:
             compact, indices = _compact_prefix_cache(
@@ -137,7 +139,9 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             )
         )
         model = SimpleNamespace(
-            config=SimpleNamespace(model_type="sdar"),
+            config=SimpleNamespace(
+                model_type="sdar", sdar_prefix_share_layer_pairs=True
+            ),
             model=SimpleNamespace(
                 rotary_emb=lambda query, positions: (
                     torch.ones(1, positions.shape[-1], query.shape[-1]),
@@ -147,7 +151,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         )
         queries = [torch.randn(1, 1, 2, 2) for _ in range(4)]
         with mock_patch(
-            "src.sparse.sparse_ops._adamas_prefix_indices",
+            "src.sparse.sparse_ops._prefix_indices",
             side_effect=(torch.tensor([1, 3]), torch.tensor([0, 2])),
         ) as selector:
             _, indices = _compact_prefix_cache(
@@ -175,7 +179,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             ),
         )
         with mock_patch(
-            "src.sparse.sparse_ops._adamas_prefix_indices",
+            "src.sparse.sparse_ops._prefix_indices",
             return_value=torch.tensor([0, 3]),
         ) as selector:
             _, indices = _compact_prefix_cache(
@@ -458,6 +462,21 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         ).abs().sum(-1)
         expected = distances.reshape(-1, 11).argmin(-1).unique().sort().values
         self.assertEqual(actual.tolist(), expected.tolist())
+
+    @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA")
+    def test_raw_l1_selector_matches_reference(self):
+        torch.manual_seed(3)
+        query = torch.randn(1, 4, 3, 8, device="cuda", dtype=torch.float16)
+        key = torch.randn(1, 2, 11, 8, device="cuda", dtype=torch.float16)
+        raw = (
+            query.reshape(2, 2, 3, 8)[..., None, :] - key[:, :, None, None]
+        ).abs().float().sum(-1)
+        expected = raw.reshape(-1, 11).argmin(-1).unique().sort().values
+        actual = _raw_l1_prefix_indices(query, key, 4)
+        torch.testing.assert_close(_prefix_indices(query, key, 4), actual)
+        self.assertEqual(
+            actual.tolist(), expected.tolist()
+        )
 
     def test_dense_cached_forward_matches_full_forward(self):
         model = _tiny_model()
@@ -830,6 +849,9 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertTrue(cached_forward.called)
         self.assertTrue(
             all(not call.kwargs["query_sparse"] for call in cached_forward.call_args_list)
+        )
+        self.assertTrue(
+            all(call.kwargs["maskless_attention"] for call in cached_forward.call_args_list)
         )
 
     def test_short_prefix_disables_prefix_sparse(self):

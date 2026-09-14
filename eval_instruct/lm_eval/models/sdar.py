@@ -21,6 +21,7 @@ class SDAR(LLaDA):
         mask_id: int = 151669,
         eos_id: Optional[int] = None,
         prefix_sparse: bool = False,
+        prefix_share_layer_pairs: bool = False,
         sparse_dlm_selection_interval: int = 1,
         query_dense_threshold: int = 0,
         sparse_dlm_refresh_step: int = -1,
@@ -36,6 +37,7 @@ class SDAR(LLaDA):
             mask_id=mask_id,
             eos_id=eos_id,
             prefix_sparse=prefix_sparse,
+            prefix_share_layer_pairs=prefix_share_layer_pairs,
             sparse_dlm_selection_interval=sparse_dlm_selection_interval,
             query_dense_threshold=(
                 query_dense_threshold
