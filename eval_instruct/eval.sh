@@ -148,6 +148,7 @@ run_eval() {
   local default_gen_length="$3"
   local default_fewshot="$4"
   shift 4
+  if [[ "${model_type}" == "llada" ]]; then default_gen_length=16384; fi
   local gen_length="${GEN_LENGTH:-${default_gen_length}}"
   local num_fewshot="${NUM_FEWSHOT:-${default_fewshot}}"
   local args=(
