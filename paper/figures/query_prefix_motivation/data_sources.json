@@ -1,0 +1,42 @@
+{
+  "query": {
+    "source": "/data0/ysy/sparse/LLaDA/experiments/layer_overlap_results/llada_block32/overlap_summary.csv",
+    "model": "LLaDA2.1-mini",
+    "experiment": "llada_block32",
+    "steps": 5,
+    "layers": "1-based 1--20",
+    "kept_ratios": [
+      0.5,
+      0.7,
+      0.9
+    ],
+    "selection_layer": 2
+  },
+  "prefix": {
+    "source": "/data0/ysy/sparse/llada_exp/attention_mass_8k_5tasks_10samples_eos_20260915/figures_budget/hotpotqa/attention_mass_by_budget.npz",
+    "dataset": "hotpotqa",
+    "samples": 10,
+    "blocks_per_sample": [
+      1,
+      1,
+      2,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "total_blocks": 11,
+    "budgets": [
+      128,
+      256,
+      512
+    ],
+    "block_length": 32,
+    "eos_early_stop": true,
+    "aggregation": "layers -> blocks within prompt -> equal-weight prompts",
+    "uncertainty": "standard deviation across prompts"
+  }
+}
