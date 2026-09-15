@@ -1,97 +1,56 @@
-# Query-resolved prefix attention-mass visualization
+# First-block dense attention-mass experiment
 
-This experiment captures full-attention mass from a controlled LLaDA block-diffusion
-trajectory and renders one query-row × prefix-column matrix for every layer and
-denoising step. It is intended for paper motivation figures and visual inspection;
-it does not run a sparse inference method.
+The experiment uses ten real 8K-token contexts and up to the first eight complete
+generation blocks per requested task. At each block's initial all-mask state,
+dense prefix attention averaged
+over all block queries ranks the prefix KV tokens independently for every layer.
+The top 128, 256, and 512 KV sets remain fixed for the rest of that block.
 
-## Directory layout
+For each later step, the reported value is the attention mass on that fixed set,
+averaged over all block queries and then over layers. Attention is normalized
+within the prefix, so every curve is in `[0, 1]`.
 
-```text
-scripts/attention_mass/
-├── collect_attention_mass.py   # Run eager dense LLaDA and reduce attention to NPZ
-├── plot_attention_mass.py      # Render individual PNGs and contact sheets
-└── README.md
-```
+## Context selection
 
-Generated data and figures are intentionally kept outside the repository. On the
-A800 host, the convention used by the recent runs is:
-
-```text
-/root/gs/attention_mass_<dataset>_<context>/
-├── data/<task>.jsonl
-├── run/manifest.json
-├── run/sample_XX_<task>.npz
-└── figures_<cmap>/<task>/layer_XX/step_XX.png
-```
-
-## Input records
-
-Each `<task>.jsonl` record must contain:
-
-```json
-{
-  "idx": 0,
-  "prompt": "Question: ...",
-  "answer": "..."
-}
-```
-
-A `length` field is used as a cheap prefilter when present. The collector then
-tokenizes candidate prompts with the model tokenizer and selects the record whose
-actual tokenized length is closest to `--prompt_tokens` while still being at least
-that long. Longer prompts are middle-truncated to the exact requested context.
+The collector reads `<data_dir>/<task>.jsonl`, deterministically chooses ten
+distinct real records whose tokenized prompt lengths are closest to but not
+shorter than 8192, and middle-truncates each to exactly 8192 tokens.
 
 ## Collect
 
-Example for the 64-token, token-level setting (`page_size=1`):
-
 ```bash
-cd /root/gs/SparseDLM_LLaDA_SDAR
-CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. \
-/root/miniforge3/envs/sparse/bin/python scripts/attention_mass/collect_attention_mass.py \
-  --data_dir /root/gs/attention_mass_gsm8k_64/data \
-  --tasks gsm8k \
-  --prompt_tokens 64 \
-  --page_size 1 \
-  --output_dir /root/gs/attention_mass_gsm8k_64/run
+CUDA_VISIBLE_DEVICES=4 PYTHONPATH=. python scripts/attention_mass/collect_attention_mass.py \
+  --data_dir /path/to/longbench \
+  --tasks narrativeqa \
+  --output_dir /path/to/attention_mass_8k/run \
+  --samples_per_task 10 --max_blocks 8 \
+  --page_size 1
 ```
 
-Use `--page_size 16` to aggregate every 16 prefix KV tokens into one column.
-Use `--page_size 1` when no KV aggregation is desired.
-
-The NPZ matrix shape is:
-
-```text
-[layers, steps, block_queries, prefix_tokens / page_size]
-```
-
-For the default block size and a 64-token token-level run this is:
-
-```text
-[20, 32, 32, 64]
-```
-
-The visualization uses `threshold=1.1` by default so one token is revealed per
-iteration. This is deliberately controlled for a complete step axis; it is not a
-normal-quality decoding configuration.
+The collector uses the current SparseDLM transfer policy (`threshold=0.5`,
+`editing_threshold=0.0`, `num_to_transfer=1`) with EOS early stopping enabled.
+Each sample therefore contributes however many complete blocks occur before EOS,
+up to eight.
+One forward may therefore resolve multiple tokens. The raw NPZ shape is
+`[layers, all observed forwards, 32 queries, padded prefix tokens]`.
 
 ## Plot
 
 ```bash
-cd /root/gs/SparseDLM_LLaDA_SDAR
-/root/miniforge3/envs/sparse/bin/python scripts/attention_mass/plot_attention_mass.py \
-  --base_dir /root/gs/attention_mass_gsm8k_64 \
+python scripts/attention_mass/plot_attention_mass.py \
+  --base_dir /path/to/attention_mass_8k \
   --parts run \
-  --cmap viridis \
-  --scale 4
+  --budgets 128 256 512
 ```
 
-`--parts` accepts one or more run directories under `--base_dir`, such as
-`full_a full_b` for a sharded LongBench collection. The renderer writes:
-
-- `layer_XX/step_XX.png`: one matrix per layer and step
-- `contact_sheet_layers_by_steps.png`: layers by steps overview
-
-Color normalization is global within each task across all layers and steps.
-The default colormap is `viridis`; `magma` remains available through `--cmap magma`.
+Outputs are `attention_mass_by_budget.png` and a compact NPZ containing both
+per-layer curves and their mean. KV indices are selected only in the initial all-mask state; they
+are never recalculated at later steps. The x-axis is the number of resolved
+tokens on entry to each forward, not the denoising-step index. Each block is
+expanded over the tokens resolved by its forward. Blocks are averaged within
+each sample first, then the ten sample curves are averaged with equal weight.
+For example, a forward that moves the block from 0 to 18 resolved tokens
+contributes its measured attention value to token progress 0--17. This gives every
+token position one value from every complete block without interpolating
+unobserved attention states. Shading is one standard deviation across samples. A final 32-token
+point is not synthesized because there is no attention forward after completion.
