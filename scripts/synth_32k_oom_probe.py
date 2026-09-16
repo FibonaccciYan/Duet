@@ -70,12 +70,12 @@ def main() -> int:
         result = runtime.generate(
             ids, gen_length=gen_length, block_length=a.block_length,
             steps=a.steps, temperature=0.0,
-            threshold=(0.85 if a.family == "sdar" else 0.95),
+            threshold=(0.85 if a.family == "sdar" else 0.7),
             mask_id=(tokenizer.mask_token_id or 151669) if a.family == "sdar" else 156895,
             eos_id=None if a.family == "sdar" else 156892,
             eos_early_stop=True,
             **({"remasking_strategy": "sequential"} if a.family == "sdar" else
-               {"editing_threshold": 0.9, "num_to_transfer": 1}),
+               {"editing_threshold": 0.5, "num_to_transfer": 1}),
         )
     elapsed = time.perf_counter() - started
     report = {
