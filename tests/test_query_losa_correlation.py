@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import torch
 
-from scripts.analyze_llada_query_losa_correlation import summarize_records
+from scripts.legacy.llada_query_losa_correlation import summarize_records
 from src.sparse.sparse_ops import (
     _losa_active_indices,
     _losa_key_energy,

@@ -80,8 +80,8 @@ SparseDLM 生成：
 
 ```bash
 conda activate sparse
-MODEL_TYPE=llada PYTHON="$CONDA_PREFIX/bin/python" bash scripts/generate.sh
-MODEL_TYPE=sdar PYTHON="$CONDA_PREFIX/bin/python" bash scripts/generate.sh
+MODEL_TYPE=llada PYTHON="$CONDA_PREFIX/bin/python" bash scripts/smoke/generate.sh
+MODEL_TYPE=sdar PYTHON="$CONDA_PREFIX/bin/python" bash scripts/smoke/generate.sh
 ```
 
 Python 接口：
@@ -101,11 +101,11 @@ patch_model(
 Dense、LoSA 与 FOCUS runtime：
 
 ```bash
-python scripts/run_mode.py --family llada --mode dense
-python scripts/run_mode.py --family llada --mode losa
-python scripts/run_mode.py --family llada --mode focus
-python scripts/run_mode.py --family llada --mode losa_v2
-python scripts/run_mode.py --family llada --mode focus_v2
+python scripts/smoke/runtime_mode.py --family llada --mode dense
+python scripts/smoke/runtime_mode.py --family llada --mode losa
+python scripts/smoke/runtime_mode.py --family llada --mode focus
+python scripts/smoke/runtime_mode.py --family llada --mode losa_v2
+python scripts/smoke/runtime_mode.py --family llada --mode focus_v2
 ```
 
 HumanEval 或 GSM8K 四模式矩阵：
@@ -131,7 +131,7 @@ MODEL_TYPE=llada CUDA_VISIBLE_DEVICES=3,4,5 bash eval_instruct/run_gsm8k_matrix.
 长上下文四模式配对入口：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python scripts/bench_long_context.py \
+CUDA_VISIBLE_DEVICES=0 python scripts/performance/long_context_benchmark.py \
   --model llada --mode query_prefix --ablation \
   --contexts 8192 16384 32768 --gen-length 256 \
   --prefix-token-budget 256 --prefix-selector raw_l1 --repeats 4 \

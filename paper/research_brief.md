@@ -91,7 +91,7 @@ Evidence: `src/sparse/api.py::MODEL_TYPES, resolve_model_family`;
    Evidence: ignored raw reports
    `results/raw_l1_no_cost_gate_narrativeqa_llada_g{256,768}_r4.json` and
    `results/raw_l1_per_layer_dynamic_b512_narrativeqa_sdar_g{256,768}_r4.json`;
-   benchmark implementation `scripts/bench_long_context.py::main`.
+   benchmark implementation `scripts/performance/long_context_benchmark.py::main`.
 
 6. **Long-context latency is not explained by FLOPs alone.** In the current
    generation-256 phase profile, LLaDA dense-prefill GPU time grows from about
@@ -174,7 +174,7 @@ scripts switch selectors by monkey-patching module-level `_prefix_indices`.
 
 Evidence: `src/sparse/sparse_ops.py::_qk_prefix_indices,
 _hadamard_qk_prefix_indices, _adamas_prefix_indices, _prefix_indices`;
-`scripts/bench_long_context.py::main` lines selecting the function;
+`scripts/performance/long_context_benchmark.py::main` lines selecting the function;
 `eval_instruct/lm_eval/models/llada.py` `prefix_selector` handling.
 
 ### 3.3 LLaDA Query sparsity
@@ -217,7 +217,7 @@ Evidence: `src/sparse/sdar_patch.py::_select_positions` sequential branch;
 Other SDAR remasking strategies are implemented but are not the current speed
 candidate: `low_confidence_static`, `low_confidence_dynamic`, and
 `entropy_bounded`. Evidence: `src/sparse/sdar_patch.py::select_transfer,
-block_diffusion_generate`; choices in `scripts/bench_long_context.py::parse_args`.
+block_diffusion_generate`; choices in `scripts/performance/long_context_benchmark.py::parse_args`.
 
 ### 3.5 Attention and cache execution
 
@@ -240,7 +240,7 @@ optimization rather than the sparse algorithmic contribution.
 
 Evidence: `src/sparse/llada_patch.py::_packed_weights, _pack_block,
 patch_moe_experts`; `src/dense/api.py::patch_model`;
-`scripts/bench_long_context.py::load`.
+`scripts/performance/long_context_benchmark.py::load`.
 
 ## 4. Differences from full attention
 
@@ -327,7 +327,7 @@ evidence and must wait for literature review and matched experiments.
 
 | Parameter | LLaDA | SDAR | Scientific role / source |
 | --- | ---: | ---: | --- |
-| dtype | BF16 | FP16 | Runtime numerical regime; `scripts/bench_long_context.py::load`, `eval_instruct/eval.sh` |
+| dtype | BF16 | FP16 | Runtime numerical regime; `scripts/performance/long_context_benchmark.py::load`, `eval_instruct/eval.sh` |
 | block length | 32 | 32 | Current denoising block; evaluation defaults in `eval_instruct/eval.sh` |
 | steps | 32 | 32 | Denoising budget per block; same source |
 | query ratio | 0.7 | 0.5 | Approximate unresolved rows retained; `src/sparse/config.py` |
@@ -364,7 +364,7 @@ evidence and must wait for literature review and matched experiments.
   defaults threshold 0.85. Evidence: `eval_instruct/eval.sh`.
 - Benchmark axes: exact prompt/context length, requested generation length,
   repeats, seed 42, early-EOS behavior, warmup, mode order, and context order.
-  Evidence: `scripts/bench_long_context.py::parse_args, generation_kwargs, main`.
+  Evidence: `scripts/performance/long_context_benchmark.py::parse_args, generation_kwargs, main`.
 - Quality-task generation limits and few-shot counts differ by task; the current
   wrapper is the authoritative invocation. Evidence: `eval_instruct/eval.sh`
   and task YAML under `eval_instruct/lm_eval/tasks/`.
@@ -378,7 +378,7 @@ evidence and must wait for literature review and matched experiments.
 
 | Evidence | Scope | Main recorded result | Artifact / runner |
 | --- | --- | --- | --- |
-| Paired real-prompt long-context ablation | LLaDA plus current per-layer SDAR dynamic/budget-512; H800; one NarrativeQA sample; exact 8K/16K/32K input; requested generation 256/768 added on top; all cost gates zero; four repeats; dense/query/prefix/query+prefix | Raw-L1 Query+Prefix faster at all 12 model/shape points: LLaDA 1.005–1.619x, current SDAR dynamic 1.269–1.475x; SDAR dynamic Query+Prefix fails quality | `results/raw_l1_no_cost_gate_narrativeqa_llada_g{256,768}_r4.json`; `results/raw_l1_per_layer_dynamic_b512_narrativeqa_sdar_g{256,768}_r4.json`; `scripts/bench_long_context.py` |
+| Paired real-prompt long-context ablation | LLaDA plus current per-layer SDAR dynamic/budget-512; H800; one NarrativeQA sample; exact 8K/16K/32K input; requested generation 256/768 added on top; all cost gates zero; four repeats; dense/query/prefix/query+prefix | Raw-L1 Query+Prefix faster at all 12 model/shape points: LLaDA 1.005–1.619x, current SDAR dynamic 1.269–1.475x; SDAR dynamic Query+Prefix fails quality | `results/raw_l1_no_cost_gate_narrativeqa_llada_g{256,768}_r4.json`; `results/raw_l1_per_layer_dynamic_b512_narrativeqa_sdar_g{256,768}_r4.json`; `scripts/performance/long_context_benchmark.py` |
 | Matched selector speed ablation | Same protocol as above; Raw L1, floating Hadamard L1, Adamas, and direct QK | No selector is uniformly fastest. Raw L1 is generally fastest on LLaDA and direct QK is materially slower there; SDAR selector differences are small, with direct QK fastest or tied at generation 768 | `results/{raw_l1,adamas,float_l1,qk}_no_cost_gate_narrativeqa_*_r4.json` |
 | Real 32K NarrativeQA selector comparison | LLaDA; 91 examples ≥32640 input tokens; generation cap 128; natural EOS; budgets 256/1024 | Raw L1 best F1 among tested sparse selectors; Prefix-1024 F1 0.2575 vs dense 0.2525 | `results/e2e_narrativeqa_32k_*/report.json`; `scripts/profile_longbench_query_steps.py` |
 | Full HumanEval selector validation | LLaDA + SDAR; 164 problems | LLaDA Raw-L1 Query+Prefix passes; current SDAR sequential per-layer Prefix and Query+Prefix pass at budgets 256/512/1024; SDAR dynamic Query and Query+Prefix fail | README HumanEval table; external `/data0/ysy/sparse/{llada_exp,sdar_exp}` outputs; `eval_instruct/eval.sh` |
@@ -406,12 +406,12 @@ evidence and must wait for literature review and matched experiments.
 The repository can run GSM8K, Minerva Math, HumanEval, MMLU, and a five-task
 LongBench subset for sparse/dense/FOCUS/LoSA. However, README does not report a
 complete current Raw-L1 four-method matrix. Evidence: `eval_instruct/eval.sh`,
-`eval_instruct/run_matrix.sh`, `scripts/run_longbench_quality.py`.
+`eval_instruct/run_matrix.sh`, `scripts/quality/longbench_quality.py`.
 
 ## 8. Implementation details that may affect scientific claims
 
 1. **The fixed-work LLaDA benchmark still truncates the returned tensor at EOS.**
-   `scripts/bench_long_context.py::generation_kwargs` sets
+   `scripts/performance/long_context_benchmark.py::generation_kwargs` sets
    `eos_early_stop=False`, which prevents stopping future blocks, but
    `src/sparse/llada_patch.py::_block_cache_generate` unconditionally calls
    `_trim_to_first_eos` before returning. Raw reports therefore contain, e.g.,
@@ -419,26 +419,26 @@ complete current Raw-L1 four-method matrix. Evidence: `eval_instruct/eval.sh`,
    generation work, but `generated_tokens_per_second`, output checksum, and any
    statement of equal actual output length do not represent 256 returned tokens.
    The benchmark only checks `<= gen_length`, not equality
-   (`scripts/bench_long_context.py::run_once`).
+   (`scripts/performance/long_context_benchmark.py::run_once`).
 
 2. **Synthetic “context length” historically means prompt plus requested
    generation window.** Unless `--prompt-lengths` is used, prompt length is
    `context_length - gen_length`; recent commit `7fda9ee` added exact prompt
    lengths. Cross-paper comparisons must say which axis was used. Evidence:
-   `scripts/bench_long_context.py::run_once, parse_args`; recent git history.
+   `scripts/performance/long_context_benchmark.py::run_once, parse_args`; recent git history.
 
 3. **The current headline grid uses one real prompt, not a representative prompt
    sample.** One NarrativeQA example is middle-truncated to exact 8K/16K/32K
    inputs. This removes repetitive synthetic filler from the headline result but
    does not establish robustness across documents or domains. The older synthetic
    grid remains only a protocol countercheck. Evidence:
-   `scripts/bench_long_context.py::exact_prompt, load_narrativeqa_prompt` and
+   `scripts/performance/long_context_benchmark.py::exact_prompt, load_narrativeqa_prompt` and
    `results/raw_l1_no_cost_gate_narrativeqa_*_r4.json`.
 
 4. **Sparsity changes outputs and denoising trajectories.** Different modes can
    return different checksums, generated lengths, confidence transfers, and
    cached-call counts. Requested-token latency is not pure kernel throughput.
-   Evidence: raw result JSON fields and `scripts/bench_long_context.py` phase metrics.
+   Evidence: raw result JSON fields and `scripts/performance/long_context_benchmark.py` phase metrics.
 
 5. **Raw-L1 “chunk size” is currently ineffective for the distance scan.**
    `_raw_l1_prefix_indices` calls `_distance_prefix_indices` with
@@ -491,13 +491,13 @@ complete current Raw-L1 four-method matrix. Evidence: `eval_instruct/eval.sh`,
 13. **Peak memory uses allocated memory after one loaded model and shared
     process.** It is useful within the benchmark but is not a clean model-plus-
     runtime residency measurement across independent processes. Evidence:
-    `scripts/bench_long_context.py::run_once` (`reset_peak_memory_stats`,
+    `scripts/performance/long_context_benchmark.py::run_once` (`reset_peak_memory_stats`,
     `max_memory_allocated`) and `main` (one loaded model, modes toggled).
 
 14. **Selector switching is global monkey-patching.** It is adequate for a
     single-process experiment but is not persisted in `SparseDLMConfig`; saved
     config plus selector field in the report must both be used to reproduce a
-    run. Evidence: `scripts/bench_long_context.py::main`;
+    run. Evidence: `scripts/performance/long_context_benchmark.py::main`;
     `src/sparse/config.py`; report construction in benchmark `main`.
 
 15. **The method is inference-only and checkpoint-specific.** There is no
@@ -570,6 +570,6 @@ and systems changes, so results before each change should not be pooled blindly:
 - `325d266`, `7fda9ee`: added real NarrativeQA prompts and exact prompt-length
   benchmarking.
 
-Evidence: `git log -- src/sparse README.md scripts/bench_long_context.py` and the
+Evidence: `git log -- src/sparse README.md scripts/performance/long_context_benchmark.py` and the
 named commits. The brief itself was prepared from a clean worktree before this
 file was added.

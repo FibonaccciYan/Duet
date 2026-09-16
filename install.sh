@@ -132,5 +132,5 @@ Activate it with:
     conda activate $ENV_NAME
 
 Run from the repository root:
-    PYTHONPATH=. python scripts/run_longbench_quality.py --help
+    PYTHONPATH=. python scripts/quality/longbench_quality.py --help
 EOF

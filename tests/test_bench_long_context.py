@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from scripts.bench_long_context import exact_prompt, generation_kwargs
+from scripts.performance.long_context_benchmark import exact_prompt, generation_kwargs
 
 
 class NarrativePromptTest(unittest.TestCase):
