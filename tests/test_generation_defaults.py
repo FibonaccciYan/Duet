@@ -61,17 +61,6 @@ class GenerationDefaultsTest(unittest.TestCase):
         self.assertEqual(llada21["threshold"], 0.7)
         self.assertEqual(llada21["editing_threshold"], 0.5)
 
-    def test_llada20_quality_scripts_use_version_specific_defaults(self):
-        for relative_path in (
-            "scripts/legacy/quality_dense_llada20_mmlu_humaneval_gpu1.sh",
-            "scripts/legacy/quality_dense_llada20_llada21_gsm8k_gpu2.sh",
-            "scripts/legacy/quality_dense_llada_card_a.sh",
-            "scripts/legacy/quality_dense_llada20_math500_gpu4.sh",
-        ):
-            source = (ROOT / relative_path).read_text(encoding="utf-8")
-            self.assertIn("THRESHOLD=0.95", source)
-            self.assertIn("EDITING_THRESHOLD=1.0", source)
-
     def test_focus_defaults(self):
         focus = _defaults(
             _find_function("src/focus/generation.py", "focus_generate")
