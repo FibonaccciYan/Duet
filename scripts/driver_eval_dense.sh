@@ -23,7 +23,8 @@ export OUTPUT_ROOT="${OUTPUT_ROOT:-${repo_root}/../eval_results/${out_name}}"
 
 case "$model_type" in
   llada)
-    # Unified quality-mode defaults; overridable per experiment.
+    # LLaDA 2.1 quality defaults. LLaDA 2.0 callers must override with
+    # threshold=0.95 and editing_threshold=1.0.
     export THRESHOLD="${THRESHOLD:-0.7}"
     export EDITING_THRESHOLD="${EDITING_THRESHOLD:-0.5}"
     # Official recommended output length (README: 16384 for most scenarios).
