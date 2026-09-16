@@ -35,6 +35,7 @@ def finish(fig: plt.Figure, ax: plt.Axes, name: str) -> None:
 
 def main() -> None:
     query_rows = read_rows(HERE / "query_position_recall.csv")
+    exact_rows = read_rows(HERE / "query_position_recall_exact_no_norm.csv")
     prefix_rows = read_rows(HERE / "hotpotqa_prefix_attention_mass.csv")
 
     plt.rcParams.update({
@@ -66,6 +67,25 @@ def main() -> None:
     query_ax.set_xticks([1, 5, 10, 15, 20])
     query_ax.legend(loc="lower right", frameon=False)
     finish(query_fig, query_ax, "query_position_recall")
+
+    exact_fig, exact_ax = plt.subplots(figsize=(3.5, 3.0))
+    for color, ratio in zip(COLORS, (0.5, 0.7, 0.9)):
+        rows = [row for row in exact_rows if float(row["keep_ratio"]) == ratio]
+        layers = np.asarray([int(row["layer"]) for row in rows])
+        recall = np.asarray([float(row["recall"]) for row in rows])
+        if not np.array_equal(layers, np.arange(1, 21)):
+            raise ValueError(f"Exact {ratio:.0%}: expected layers 1--20")
+        exact_ax.plot(layers, recall, color=color, linewidth=2.2,
+                      label=f"Exact {ratio:.0%}")
+    exact_ax.axvline(2, color="0.45", linestyle="--", linewidth=0.9)
+    exact_ax.text(2.35, 0.32, "Selection layer", rotation=90,
+                  color="0.3", fontsize=6.5, va="bottom")
+    exact_ax.set(xlabel="Transformer layer",
+                 ylabel="Recall of final update positions",
+                 xlim=(1, 20), ylim=(0.3, 1.01))
+    exact_ax.set_xticks([1, 5, 10, 15, 20])
+    exact_ax.legend(loc="lower right", frameon=False)
+    finish(exact_fig, exact_ax, "query_position_recall_exact_no_norm")
 
     prefix_fig, prefix_ax = plt.subplots(figsize=(3.5, 3.0))
     for color, budget in zip(COLORS, (128, 256, 512)):
