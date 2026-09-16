@@ -12,6 +12,21 @@
     ],
     "selection_layer": 2
   },
+  "query_exact_no_norm": {
+    "source": "/data0/ysy/sparse/LLaDA/experiments/layer_overlap_results/llada_block32_no_norm/overlap_stats.json",
+    "model": "LLaDA2.1-mini",
+    "experiment": "llada_block32_no_norm",
+    "steps": 5,
+    "layers": "1-based 1--20",
+    "exact_ratios": [
+      0.5,
+      0.7,
+      0.9
+    ],
+    "layer_norm": false,
+    "selection_layer": 2,
+    "derivation": "Exact 0.7/0.9 are reconstructed from saved per-step exact 0.5 threshold sets and candidate rankings; this is equivalent to rerunning the same threshold-plus-minimum-ratio selector."
+  },
   "prefix": {
     "source": "/data0/ysy/sparse/llada_exp/attention_mass_8k_5tasks_10samples_eos_20260915/figures_budget/hotpotqa/attention_mass_by_budget.npz",
     "dataset": "hotpotqa",

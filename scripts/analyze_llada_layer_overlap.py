@@ -37,17 +37,21 @@ def block_attention_mask(total_length, block_length, dtype, device):
     )
 
 
-def prediction_scores(model, logits, args):
+def prediction_scores(model, logits, args, top_k=None):
     _, confidence = _sample_with_confidence(
-        model, logits, args.temperature, args.top_p, args.top_k
+        model,
+        logits,
+        args.temperature,
+        args.top_p,
+        args.top_k if top_k is None else top_k,
     )
     return confidence
 
 
 def layer_logits(model, outputs, layer, num_layers):
+    # Match SparseDLM's shallow selector: LM head directly on the layer output.
+    # outputs.hidden_states[num_layers] already contains the model's final norm.
     hidden_states = outputs.hidden_states[layer]
-    if layer < num_layers:
-        hidden_states = model.model.norm(hidden_states)
     return model.lm_head(hidden_states).float()
 
 
@@ -78,13 +82,16 @@ def parse_args():
     parser.add_argument("--mask_id", type=int, default=156895)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top_k", type=int, default=0)
+    parser.add_argument("--selection_top_k", type=int, default=64)
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--editing_threshold", type=float, default=0.0)
     parser.add_argument("--num_to_transfer", type=int, default=1)
     parser.add_argument("--max_post_steps", type=int, default=16)
-    parser.add_argument("--query_ratio", type=float, default=0.5)
-    parser.add_argument("--layer_candidate_ratio", type=float, nargs="+", default=(0.5,))
+    parser.add_argument(
+        "--query_ratio", type=float, nargs="+", default=(0.5, 0.7, 0.9)
+    )
+    parser.add_argument("--layer_candidate_ratio", type=float, nargs="+", default=())
     parser.add_argument("--layers", type=int, nargs="+", help="1-based layers; defaults to all.")
     parser.add_argument("--dtype", choices=("float16", "bfloat16"), default="bfloat16")
     parser.add_argument("--attn_implementation", default="sdpa")
@@ -103,8 +110,8 @@ def main():
         raise ValueError("gen_length, block_length, and steps must be positive")
     if args.num_to_transfer <= 0 or args.max_post_steps < 0:
         raise ValueError("num_to_transfer must be positive and max_post_steps non-negative")
-    if not 0 < args.query_ratio <= 1:
-        raise ValueError("query_ratio must be in (0, 1]")
+    if any(not 0 < ratio <= 1 for ratio in args.query_ratio):
+        raise ValueError("query_ratio values must be in (0, 1]")
     if any(not 0 < ratio <= 1 for ratio in args.layer_candidate_ratio):
         raise ValueError("layer_candidate_ratio values must be in (0, 1]")
 
@@ -175,33 +182,38 @@ def main():
                         args.num_to_transfer,
                         args.threshold,
                     )
-                    query_minimum = math.ceil(
-                        int(mask.sum().item()) * args.query_ratio
-                    )
                     record = {
                         "call": len(records),
                         "block": block,
                         "step": step,
                         "mask_count": int(mask.sum().item()),
                         "minimum_transfer": args.num_to_transfer,
-                        "minimum_query": query_minimum,
+                        "minimum_query": {
+                            f"{ratio:g}": math.ceil(int(mask.sum().item()) * ratio)
+                            for ratio in args.query_ratio
+                        },
                         "final_positions": positions(final_transfer, block_start),
                         "layers": [],
                     }
                     for layer in layers:
                         logits = layer_logits(model, outputs, layer, num_layers)
                         logits = logits[:, -args.block_length:]
-                        scores = prediction_scores(model, logits, args)
-                        predicted = selector_mask(
-                            mask,
-                            scores,
-                            query_minimum,
-                            args.threshold,
+                        scores = prediction_scores(
+                            model, logits, args, top_k=args.selection_top_k
                         )
-                        exact = overlap_metrics(predicted, final_transfer)
-                        exact["positions"] = positions(predicted, block_start)
-                        aggregate[(layer, "exact")].append(exact)
-                        layer_record = {"layer": layer, "exact": exact}
+                        layer_record = {"layer": layer}
+                        for ratio in args.query_ratio:
+                            method = f"exact@{ratio:g}"
+                            predicted = selector_mask(
+                                mask,
+                                scores,
+                                math.ceil(int(mask.sum().item()) * ratio),
+                                args.threshold,
+                            )
+                            exact = overlap_metrics(predicted, final_transfer)
+                            exact["positions"] = positions(predicted, block_start)
+                            aggregate[(layer, method)].append(exact)
+                            layer_record[method] = exact
                         for ratio in args.layer_candidate_ratio:
                             method = f"candidate@{ratio:g}"
                             candidate = candidate_mask(mask, scores, ratio)
