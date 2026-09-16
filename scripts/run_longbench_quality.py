@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_context_tokens", type=int, default=32768)
     parser.add_argument("--block_length", type=int, default=32)
     parser.add_argument("--steps", type=int, default=32)
-    parser.add_argument("--query_dense_threshold", type=int)
+    parser.add_argument("--query_dense_threshold", type=int, default=4)
     parser.add_argument("--ratio", type=float)
     parser.add_argument("--selection_layer", type=int)
     parser.add_argument("--query_sparse", action=argparse.BooleanOptionalAction, default=None)
@@ -264,7 +264,6 @@ def main() -> int:
     threshold = args.threshold if args.threshold is not None else (
         LLADA_THRESHOLD if args.family == "llada" else
         0.95 if remasking == "low_confidence_dynamic" else
-        1.0 if args.method == "sparse" else
         0.85
     )
     editing_threshold = args.editing_threshold if args.editing_threshold is not None else (

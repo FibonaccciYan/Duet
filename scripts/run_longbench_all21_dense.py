@@ -36,7 +36,10 @@ def main():
  rows=list(completed.values()); skipped=0
  runtime=load_runtime('dense',family='llada',model_path=a.model_path,dtype='bfloat16',moe_expert_patch=True)
  model,tok=runtime.load()
- print(json.dumps({'moe_patched_blocks':runtime.moe_patch_report['patched_blocks'],'tasks':len(manifest),'resumed':len(rows)}),flush=True)
+ patched_blocks=getattr(runtime.moe_patch_report,'patched_blocks',None)
+ if patched_blocks is None and isinstance(runtime.moe_patch_report,dict):
+  patched_blocks=runtime.moe_patch_report.get('patched_blocks')
+ print(json.dumps({'moe_patched_blocks':patched_blocks,'tasks':len(manifest),'resumed':len(rows)}),flush=True)
  for item in manifest:
   task=item['task']; path=a.data_dir/f'{task}.jsonl'
   with path.open(encoding='utf-8') as f: records=[json.loads(x) for x in f if x.strip()][:a.limit]
@@ -57,8 +60,10 @@ def main():
         'prediction':tok.decode(out.tokens[0],skip_special_tokens=True),'answer':rec.get('answer'),
         'answers':rec.get('answers'),'all_classes':rec.get('all_classes'),'trace_events':len(out.trace)}
    rows.append(row);print(json.dumps(row,ensure_ascii=False),flush=True)
-   report={'family':'llada','model':'LLaDA2.1','model_path':a.model_path,'mode':'dense','config':'Q Mode thr0.7/edit0.5',
-     'block_length':a.block_length,'steps':a.steps,'moe_expert_patch':True,'moe_patched_blocks':runtime.moe_patch_report['patched_blocks'],
+   report={'family':'llada','model':Path(a.model_path).name,'model_path':a.model_path,'mode':'dense',
+     'config':f'Q Mode thr{a.threshold}/edit{a.editing_threshold}',
+     'threshold':a.threshold,'editing_threshold':a.editing_threshold,
+     'block_length':a.block_length,'steps':a.steps,'moe_expert_patch':True,'moe_patched_blocks':patched_blocks,
      'data_dir':str(a.data_dir),'max_context_tokens':a.max_context_tokens,'rows':rows}
    (a.output_dir/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
  print(json.dumps({'done_rows':len(rows),'skipped':skipped}),flush=True)

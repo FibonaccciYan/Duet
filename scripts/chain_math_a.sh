@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Card A (GPU 4): LLaDA 2.0 MATH-500 full
 set -u
-cd /data0/gs/SparseDLM_LLaDA_SDAR/eval_instruct || exit 1
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+cd "${repo_root}/eval_instruct" || exit 1
 export CUDA_VISIBLE_DEVICES=4
 export RUNTIME_MODE=dense
 export BENCHMARK=math500

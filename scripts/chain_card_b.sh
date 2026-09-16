@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Card B chain: SDAR (mmlu, humaneval) -> LLaDA 2.1 (mmlu, gsm8k)
 set -u
-DRIVER=/data0/gs/SparseDLM_LLaDA_SDAR/scripts/driver_eval_dense.sh
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DRIVER="${script_dir}/driver_eval_dense.sh"
 
 echo "=== chain B: SDAR 8B ==="
-env HF_DATASETS_CACHE=/data0/gs/.hf_cache_sdar_dense_b32_thr095 \
+env HF_DATASETS_CACHE=/data0/gs/.hf_cache_sdar_dense_b32_thr085 \
   BENCHMARKS="mmlu humaneval" "$DRIVER" sdar retest_sdar 3 12339 \
   || { echo "sdar chain FAILED"; exit 1; }
 

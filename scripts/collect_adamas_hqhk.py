@@ -96,7 +96,7 @@ def main():
         prefix_min_prefix_length=0,
         prefix_chunk_size=1024,
         query_ratio=None,
-        query_dense_threshold=None,
+        query_dense_threshold=4,
         query_min_prefix_length=None,
         deep_only_transfer=False,
         remasking_strategy="sequential",

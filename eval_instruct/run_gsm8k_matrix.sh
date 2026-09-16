@@ -34,27 +34,34 @@ run_lane() {
   local losa_enabled="$3"
   local losa_topk="$4"
   local port="$5"
-  local combo query_sparse prefix_sparse combo_root log_path
+  local combo method query_sparse prefix_sparse combo_root log_path
 
   for combo in dense prefix query prefix_query; do
     case "${combo}" in
       dense)
+        method=dense
         query_sparse=false
         prefix_sparse=false
         ;;
       prefix)
+        method=sparse
         query_sparse=false
         prefix_sparse=true
         ;;
       query)
+        method=sparse
         query_sparse=true
         prefix_sparse=false
         ;;
       prefix_query)
+        method=sparse
         query_sparse=true
         prefix_sparse=true
         ;;
     esac
+    if [[ "${losa_enabled}" == "true" ]]; then
+      method=sparse
+    fi
 
     combo_root="${output_root}/${losa_name}/${combo}"
     log_path="${output_root}/logs/${losa_name}_${combo}.log"
@@ -75,6 +82,7 @@ run_lane() {
       BENCHMARK="${benchmark}" \
       BLOCK_LENGTH="${block_length}" \
       STEPS="${steps}" \
+      METHOD="${method}" \
       SPARSE_DLM=true \
       QUERY_SPARSE="${query_sparse}" \
       PREFIX_SPARSE="${prefix_sparse}" \
