@@ -7,6 +7,8 @@ import torch
 
 from scripts.run_longbench_quality import (
     GEN_LENGTHS,
+    LLADA_EDITING_THRESHOLD,
+    LLADA_THRESHOLD,
     TASKS,
     answer_scores,
     load_completed,
@@ -17,6 +19,10 @@ from scripts.run_longbench_quality import (
 
 
 class LongBenchQualityRunnerTest(unittest.TestCase):
+    def test_llada_uses_remote_q_mode_defaults(self):
+        self.assertEqual(LLADA_THRESHOLD, 0.7)
+        self.assertEqual(LLADA_EDITING_THRESHOLD, 0.5)
+
     def test_tasks_and_middle_truncation(self):
         self.assertEqual(len(TASKS), 5)
         self.assertEqual(GEN_LENGTHS["narrativeqa"], 128)

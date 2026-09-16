@@ -21,7 +21,7 @@ case "${model_type}" in
     eos_id="${EOS_ID:-156892}"
     default_ratio=0.7
     default_selection_interval=4
-    default_query_dense_threshold=0
+    default_query_dense_threshold=4
     default_refresh_step=2
     default_selection_layer=1
     default_prefix_min_length=0
@@ -35,7 +35,7 @@ case "${model_type}" in
     mask_id="${MASK_ID:-151669}"
     default_ratio=0.5
     default_selection_interval=1
-    default_query_dense_threshold=0
+    default_query_dense_threshold=4
     default_refresh_step=-1
     default_selection_layer=5
     default_prefix_min_length=0
@@ -66,19 +66,21 @@ case "${method}" in
 esac
 
 if [[ "${method}" == "sparse" ]]; then
-  default_llada_threshold=0.5
   default_sdar_threshold=1.0
-  default_editing_threshold=0.0
   default_sdar_remasking=sequential
 else
-  default_llada_threshold=0.95
   default_sdar_threshold=0.85
-  default_editing_threshold=0.9
   if [[ "${method}" == "focus" ]]; then
     default_sdar_remasking=low_confidence_dynamic
   else
     default_sdar_remasking=sequential
   fi
+fi
+default_llada_threshold=0.7
+default_editing_threshold=0.5
+resolved_sdar_remasking="${REMASKING_STRATEGY:-${default_sdar_remasking}}"
+if [[ "${resolved_sdar_remasking}" == "low_confidence_dynamic" ]]; then
+  default_sdar_threshold=0.95
 fi
 model="${MODEL:-${default_model}}"
 python_bin="${PYTHON:-${default_python}}"
@@ -112,7 +114,7 @@ default_output_root="${repo_root}/../${model_type}_exp/${output_path}"
 output_root="${OUTPUT_ROOT:-${default_output_root}}"
 
 if [[ "${model_type}" == "sdar" ]]; then
-  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-float16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-false},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_sdar_threshold}},remasking_strategy=${REMASKING_STRATEGY:-${default_sdar_remasking}},eb_threshold=${EB_THRESHOLD:-0.35},mask_id=${mask_id}"
+  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-float16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-false},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_sdar_threshold}},remasking_strategy=${resolved_sdar_remasking},eb_threshold=${EB_THRESHOLD:-0.35},mask_id=${mask_id}"
   if [[ -n "${EOS_ID:-}" ]]; then
     model_args+=",eos_id=${EOS_ID}"
   fi

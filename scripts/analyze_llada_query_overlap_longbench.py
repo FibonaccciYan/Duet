@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--ratios", type=float, nargs="+", default=(0.5, 0.7, 0.9))
-    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--threshold", type=float, default=0.7)
     parser.add_argument("--selection_top_k", type=int, default=64)
     parser.add_argument("--seed", type=int, default=1234)
     return parser.parse_args()

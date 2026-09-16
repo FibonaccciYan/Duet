@@ -1254,8 +1254,8 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
         top_k: Optional[int] = None,
         eos_early_stop: bool = False,
         minimal_topk: int = 1,
-        threshold: float = 0.95,
-        editing_threshold: float = 0.9,
+        threshold: float = 0.7,
+        editing_threshold: float = 0.5,
         max_post_steps: int = 16,
         eos_id: int = 156892,
         mask_id: int = 156895,
@@ -1297,7 +1297,7 @@ class LLaDA2MoeModelLM(LLaDA2MoePreTrainedModel, GenerationMixin):
             minimal_topk (`int`, *optional*, defaults to 1):
                 A parameter used to dynamically adjust the number of refinement `steps`. The effective number of steps
                 is capped at `gen_length // minimal_topk`.
-            threshold (`float`, *optional*, defaults to 0.95):
+            threshold (`float`, *optional*, defaults to 0.7):
                 The confidence probability threshold for accepting a sampled token. During each refinement step, a
                 sampled token is only kept if its probability is above this threshold. If not enough tokens meet the
                 threshold, the ones with the highest confidence are chosen.

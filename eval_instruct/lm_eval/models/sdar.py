@@ -23,12 +23,19 @@ class SDAR(LLaDA):
         prefix_sparse: bool = False,
         prefix_share_layer_pairs: bool = False,
         sparse_dlm_selection_interval: int = 1,
-        query_dense_threshold: int = 0,
+        query_dense_threshold: int = 4,
         sparse_dlm_refresh_step: int = -1,
         sparse_dlm_selection_layer: int = 5,
         moe_expert_patch: bool = False,
         **kwargs,
     ) -> None:
+        resolved_remasking = remasking_strategy or (
+            "low_confidence_dynamic"
+            if (kwargs.get("method") or kwargs.get("runtime_mode")) == "focus"
+            else "sequential"
+        )
+        if threshold is None and resolved_remasking == "low_confidence_dynamic":
+            threshold = 0.95
         super().__init__(
             pretrained=pretrained,
             block_length=block_length,
@@ -47,10 +54,7 @@ class SDAR(LLaDA):
             moe_expert_patch=moe_expert_patch,
             **kwargs,
         )
-        self.remasking_strategy = str(
-            remasking_strategy
-            or ("low_confidence_dynamic" if self.method == "focus" else "sequential")
-        )
+        self.remasking_strategy = str(resolved_remasking)
         self.eb_threshold = float(eb_threshold)
 
     def _extra_generation_kwargs(self) -> dict:

@@ -47,7 +47,7 @@ def _select_positions(
     cached_positions=None,
     selection_step=0,
     selection_interval=1,
-    query_dense_threshold=0,
+    query_dense_threshold=4,
     minimum_mask_candidates=1,
     strategy="low_confidence_static",
     threshold=1.0,
@@ -379,12 +379,14 @@ def _sparse_cached_forward(
     top_p,
     minimum_mask_candidates=1,
     strategy="sequential",
-    threshold=0.85,
+    threshold=None,
     entropy_budget=None,
     refresh_late_kv=False,
     deep_only_transfer=False,
     query_sparse=True,
 ):
+    if threshold is None:
+        threshold = 0.95 if strategy == "low_confidence_dynamic" else 0.85
     base = model.model
     hidden_states = base.embed_tokens(input_ids)
     position_embeddings = base.rotary_emb(hidden_states, position_ids)
@@ -615,7 +617,12 @@ def _block_diffusion_generate(self, *args, **kwargs):
     top_k = kwargs.pop("top_k", 0) or 0
     top_p = kwargs.pop("top_p", 1.0)
     strategy = kwargs.pop("remasking_strategy", "sequential")
-    threshold = float(kwargs.pop("threshold", 0.85))
+    threshold_arg = kwargs.pop("threshold", None)
+    threshold = float(
+        threshold_arg
+        if threshold_arg is not None
+        else (0.95 if strategy == "low_confidence_dynamic" else 0.85)
+    )
     eb_threshold = kwargs.pop("eb_threshold", None)
     mask_id = int(kwargs.pop("mask_id", 151669))
     eos_id = kwargs.pop("eos_id", None)
@@ -795,7 +802,7 @@ def patch_sdar_model(
     ratio=0.5,
     top_k=64,
     selection_interval=1,
-    query_dense_threshold=0,
+    query_dense_threshold=4,
     refresh_step=-1,
     selection_layer=QUERY_SELECTION_LAYER,
     deep_only_transfer=False,
@@ -1036,13 +1043,17 @@ def block_diffusion_generate(
         top_k=0,
         top_p=1.0,
         remasking_strategy='sequential',
-        confidence_threshold=0.85,
+        confidence_threshold=None,
         eb_threshold=None,
         stopping_criteria_idx=None,
         denoise_fn=None,
     ):
 
     model.eval()
+    if confidence_threshold is None:
+        confidence_threshold = (
+            0.95 if remasking_strategy == "low_confidence_dynamic" else 0.85
+        )
     if remasking_strategy == "entropy_bounded" and eb_threshold is None:
         raise ValueError("eb_threshold is required for entropy_bounded transfer")
     input_ids = prompt['input_ids']

@@ -8,7 +8,7 @@ class LLaDASparseConfig:
     ratio: float = 0.7
     top_k: int = 64
     selection_interval: int = 4
-    query_dense_threshold: int = 0
+    query_dense_threshold: int = 4
     query_min_prefix_length: int = 0
     selection_layer: int = 1
     query_sparse: bool = True
@@ -30,7 +30,7 @@ class SDARSparseConfig:
     ratio: float = 0.5
     top_k: int = 64
     selection_interval: int = 1
-    query_dense_threshold: int = 0
+    query_dense_threshold: int = 4
     refresh_step: int = -1
     selection_layer: int = 5
     deep_only_transfer: bool = False

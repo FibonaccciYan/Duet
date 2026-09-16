@@ -243,7 +243,7 @@ def load(args):
         query_dense_threshold=(
             args.query_dense_threshold
             if args.query_dense_threshold is not None
-            else 0
+            else 4
         ),
         query_min_prefix_length=args.query_min_prefix_length,
         refresh_step=-1 if is_sdar else 2,
@@ -348,7 +348,13 @@ def generation_kwargs(args, tokenizer, input_ids):
         "threshold": (
             getattr(args, "threshold", None)
             if getattr(args, "threshold", None) is not None
-            else (1.0 if is_sdar else 0.5)
+            else (
+                0.95
+                if is_sdar and args.remasking_strategy == "low_confidence_dynamic"
+                else 1.0
+                if is_sdar
+                else 0.7
+            )
         ),
         "temperature": 0.0,
         "top_p": None,
@@ -361,7 +367,7 @@ def generation_kwargs(args, tokenizer, input_ids):
     else:
         runtime_mode = getattr(args, "runtime_mode", getattr(args, "mode", "dense"))
         kwargs.update(
-            editing_threshold=0.0,
+            editing_threshold=0.5,
             num_to_transfer=1,
             maskless_attention=(
                 runtime_mode != "dense"
@@ -604,7 +610,14 @@ def main():
         "threshold": (
             args.threshold
             if args.threshold is not None
-            else (1.0 if args.model == "sdar" else 0.5)
+            else (
+                0.95
+                if args.model == "sdar"
+                and args.remasking_strategy == "low_confidence_dynamic"
+                else 1.0
+                if args.model == "sdar"
+                else 0.7
+            )
         ),
         "results": results,
     }

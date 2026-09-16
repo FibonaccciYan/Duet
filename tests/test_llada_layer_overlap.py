@@ -28,7 +28,7 @@ class LLaDALayerOverlapTest(unittest.TestCase):
 
         self.assertEqual(transfer.tolist(), [[True, True, False, True]])
 
-    def test_final_hidden_state_is_not_normalized_twice(self):
+    def test_layer_hidden_states_are_not_normalized(self):
         class CountingNorm(torch.nn.Module):
             def __init__(self):
                 super().__init__()
@@ -48,7 +48,7 @@ class LLaDALayerOverlapTest(unittest.TestCase):
         layer_logits(model, outputs, layer=1, num_layers=2)
         layer_logits(model, outputs, layer=2, num_layers=2)
 
-        self.assertEqual(norm.calls, 1)
+        self.assertEqual(norm.calls, 0)
 
 
 if __name__ == "__main__":

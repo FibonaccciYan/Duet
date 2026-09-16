@@ -75,7 +75,7 @@ class LLaDA(LM):
         sparse_dlm_ratio: Optional[float] = None,
         sparse_dlm_top_k: Optional[int] = None,
         sparse_dlm_selection_interval: int = 4,
-        query_dense_threshold: int = 0,
+        query_dense_threshold: int = 4,
         query_min_prefix_length: int = 0,
         sparse_dlm_refresh_step: int = 2,
         sparse_dlm_selection_layer: Optional[int] = None,
@@ -251,17 +251,13 @@ class LLaDA(LM):
         self.top_p = _optional_number(top_p, float)
         self.top_k = _optional_number(top_k, int)
         if threshold is None:
-            threshold = (
-                0.5
-                if self.method == "sparse" and self.MODEL_NAME == "llada"
-                else 1.0
-                if self.method == "sparse"
-                else 0.95
-                if self.MODEL_NAME == "llada"
-                else 0.85
+            threshold = 0.7 if self.MODEL_NAME == "llada" else (
+                1.0 if self.method == "sparse" else 0.85
             )
         if editing_threshold is None:
-            editing_threshold = 0.0 if self.method == "sparse" else 0.9
+            editing_threshold = 0.5 if self.MODEL_NAME == "llada" else (
+                0.0 if self.method == "sparse" else 0.9
+            )
         self.threshold = float(threshold)
         self.editing_threshold = float(editing_threshold)
         self.max_post_steps = int(max_post_steps)

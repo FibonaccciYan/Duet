@@ -11,7 +11,7 @@ EVAL_ROOT = Path(__file__).parents[1] / "eval_instruct"
 if str(EVAL_ROOT) not in sys.path:
     sys.path.insert(0, str(EVAL_ROOT))
 
-from lm_eval.models import llada
+from lm_eval.models import llada, sdar
 
 
 class LLaDAEvalAdapterTest(unittest.TestCase):
@@ -68,8 +68,8 @@ class LLaDAEvalAdapterTest(unittest.TestCase):
         moe_patch.assert_called_once_with(model)
         self.assertEqual(method_patch.call_args.kwargs["method"], "dense")
         self.assertEqual(adapter.method, "dense")
-        self.assertEqual(adapter.threshold, 0.95)
-        self.assertEqual(adapter.editing_threshold, 0.9)
+        self.assertEqual(adapter.threshold, 0.7)
+        self.assertEqual(adapter.editing_threshold, 0.5)
 
     def test_focus_method_uses_its_own_defaults(self):
         model = MagicMock()
@@ -97,8 +97,33 @@ class LLaDAEvalAdapterTest(unittest.TestCase):
 
         self.assertEqual(method_patch.call_args.kwargs["method"], "focus")
         self.assertEqual(method_patch.call_args.kwargs["alpha"], 1.75)
+        self.assertEqual(adapter.threshold, 0.7)
+        self.assertEqual(adapter.editing_threshold, 0.5)
+
+    def test_sdar_dynamic_remasking_defaults_to_point_95(self):
+        model = MagicMock()
+        model.eval.return_value = model
+        model.config.model_type = "sdar"
+        accelerator = SimpleNamespace(num_processes=1, device=torch.device("cpu"))
+
+        with (
+            patch.object(llada, "Accelerator", return_value=accelerator),
+            patch.object(
+                llada.transformers.AutoModelForCausalLM,
+                "from_pretrained",
+                return_value=model,
+            ),
+            patch.object(llada.transformers.AutoTokenizer, "from_pretrained"),
+            patch.object(llada, "patch_method"),
+        ):
+            adapter = sdar.SDAR(
+                pretrained="fake",
+                device="cpu",
+                method="focus",
+            )
+
         self.assertEqual(adapter.threshold, 0.95)
-        self.assertEqual(adapter.editing_threshold, 0.9)
+        self.assertEqual(adapter.remasking_strategy, "low_confidence_dynamic")
 
 if __name__ == "__main__":
     unittest.main()

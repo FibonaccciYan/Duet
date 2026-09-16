@@ -27,8 +27,8 @@ CUDA_VISIBLE_DEVICES=4 PYTHONPATH=. python scripts/attention_mass/collect_attent
   --page_size 1
 ```
 
-The collector uses the current SparseDLM transfer policy (`threshold=0.5`,
-`editing_threshold=0.0`, `num_to_transfer=1`) with EOS early stopping enabled.
+The collector uses the current SparseDLM quality policy (`threshold=0.7`,
+`editing_threshold=0.5`, `num_to_transfer=1`) with EOS early stopping enabled.
 Each sample therefore contributes however many complete blocks occur before EOS,
 up to eight.
 One forward may therefore resolve multiple tokens. The raw NPZ shape is

@@ -157,7 +157,7 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top_k", type=int, default=0)
     parser.add_argument("--top_p", type=float, default=1.0)
-    parser.add_argument("--threshold", type=float, default=1.0)
+    parser.add_argument("--threshold", type=float)
     parser.add_argument(
         "--strategy",
         choices=(
@@ -240,6 +240,8 @@ def plot_results(summary, step_records, output_dir):
 
 def main():
     args = parse_args()
+    if args.threshold is None:
+        args.threshold = 0.95 if args.strategy == "low_confidence_dynamic" else 1.0
     if args.temperature > 0:
         raise ValueError("This diagnostic requires greedy temperature=0 sampling")
     if args.gen_length <= 0:
