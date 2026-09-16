@@ -30,7 +30,7 @@ class LoSAV2Runtime:
     attn_implementation: str = "sdpa"
     moe_expert_patch: bool = False
     losa_page_size: int = 16
-    losa_token_budget: int = 16
+    losa_token_budget: int = 256
     losa_active_topk: int = 5
     losa_gqa_mode: str = "group_mean"
     losa_backend: str = "auto"
