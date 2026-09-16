@@ -517,7 +517,14 @@ def block_diffusion_generate(
     prefill_blocks = prompt_length // block_length
     traces = []
     transfer_counts = get_num_transfer_tokens(block_length, steps)
-    threshold = threshold if threshold is not None else (0.85 if family == "sdar" else 0.7)
+    if threshold is None:
+        threshold = (
+            0.7
+            if family == "llada"
+            else 0.95
+            if remasking_strategy == "low_confidence_dynamic"
+            else 0.85
+        )
 
     # The immutable prefix cache is finalized once at the end of every block and
     # reused by the next block.  v1 rebuilt all previous blocks from scratch.
