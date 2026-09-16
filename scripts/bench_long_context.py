@@ -351,7 +351,7 @@ def generation_kwargs(args, tokenizer, input_ids):
             else (
                 0.95
                 if is_sdar and args.remasking_strategy == "low_confidence_dynamic"
-                else 1.0
+                else 0.85
                 if is_sdar
                 else 0.7
             )
@@ -614,7 +614,7 @@ def main():
                 0.95
                 if args.model == "sdar"
                 and args.remasking_strategy == "low_confidence_dynamic"
-                else 1.0
+                else 0.85
                 if args.model == "sdar"
                 else 0.7
             )

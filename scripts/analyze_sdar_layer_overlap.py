@@ -241,7 +241,7 @@ def plot_results(summary, step_records, output_dir):
 def main():
     args = parse_args()
     if args.threshold is None:
-        args.threshold = 0.95 if args.strategy == "low_confidence_dynamic" else 1.0
+        args.threshold = 0.95 if args.strategy == "low_confidence_dynamic" else 0.85
     if args.temperature > 0:
         raise ValueError("This diagnostic requires greedy temperature=0 sampling")
     if args.gen_length <= 0:

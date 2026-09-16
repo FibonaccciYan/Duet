@@ -252,7 +252,7 @@ class LLaDA(LM):
         self.top_k = _optional_number(top_k, int)
         if threshold is None:
             threshold = 0.7 if self.MODEL_NAME == "llada" else (
-                1.0 if self.method == "sparse" else 0.85
+                0.85
             )
         if editing_threshold is None:
             editing_threshold = 0.5 if self.MODEL_NAME == "llada" else (

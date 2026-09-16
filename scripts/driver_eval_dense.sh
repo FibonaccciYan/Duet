@@ -30,9 +30,9 @@ case "$model_type" in
     export GEN_LENGTH="${GEN_LENGTH:-16384}"
     ;;
   sdar)
-    # Official eval config (eval_sdar_hf.py): thr 0.95, low_confidence remasking,
+    # Unified static-confidence config; dynamic remasking uses 0.95.
     # b32 checkpoint keeps block=32/steps=32
-    export THRESHOLD=0.95
+    export THRESHOLD=0.85
     export REMASKING_STRATEGY=low_confidence_static
     export BLOCK_LENGTH=32
     export STEPS=32

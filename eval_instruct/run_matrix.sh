@@ -8,6 +8,10 @@ model_type="${MODEL_TYPE:-llada}"
 output_root="${OUTPUT_ROOT:-${repo_root}/../${model_type}_exp/method_matrix}"
 read -r -a methods <<<"${METHODS:-dense focus losa sparse}"
 read -r -a benchmarks <<<"${BENCHMARKS:-gsm8k humaneval math mmlu longbench}"
+query_dense_threshold="${QUERY_DENSE_THRESHOLD:-4}"
+paper_losa_page_size="${PAPER_LOSA_PAGE_SIZE:-16}"
+paper_losa_token_budget="${PAPER_LOSA_TOKEN_BUDGET:-256}"
+paper_losa_active_topk="${PAPER_LOSA_ACTIVE_TOPK:-${LOSA_ACTIVE_TOPK:-5}}"
 
 mkdir -p "${output_root}/logs"
 
@@ -33,15 +37,17 @@ for method in "${methods[@]}"; do
         --output_dir "${job_root}/longbench"
         --block_length "${BLOCK_LENGTH:-32}"
         --steps "${STEPS:-32}"
+        --query_dense_threshold "${query_dense_threshold}"
         --focus_alpha "${FOCUS_ALPHA:-1.5}"
-        --losa_token_budget "${PAPER_LOSA_TOKEN_BUDGET:-256}"
+        --losa_page_size "${paper_losa_page_size}"
+        --losa_token_budget "${paper_losa_token_budget}"
+        --losa_active_topk "${paper_losa_active_topk}"
       )
       [[ -z "${MODEL:-}" ]] || args+=(--model_path "${MODEL}")
       [[ -z "${LONGBENCH_DATA:-}" ]] || args+=(--data_dir "${LONGBENCH_DATA}")
       [[ -z "${LIMIT:-}" ]] || args+=(--limit "${LIMIT}")
       [[ -z "${DTYPE:-}" ]] || args+=(--dtype "${DTYPE}")
       [[ -z "${THRESHOLD:-}" ]] || args+=(--threshold "${THRESHOLD}")
-      [[ -z "${QUERY_DENSE_THRESHOLD:-}" ]] || args+=(--query_dense_threshold "${QUERY_DENSE_THRESHOLD}")
       [[ -z "${EDITING_THRESHOLD:-}" ]] || args+=(--editing_threshold "${EDITING_THRESHOLD}")
       [[ -z "${REMASKING_STRATEGY:-}" ]] || args+=(--remasking_strategy "${REMASKING_STRATEGY}")
       case "${MOE_EXPERT_PATCH:-}" in

@@ -66,7 +66,7 @@ case "${method}" in
 esac
 
 if [[ "${method}" == "sparse" ]]; then
-  default_sdar_threshold=1.0
+  default_sdar_threshold=0.85
   default_sdar_remasking=sequential
 else
   default_sdar_threshold=0.85
