@@ -23,9 +23,7 @@ export OUTPUT_ROOT="${OUTPUT_ROOT:-${repo_root}/../eval_results/${out_name}}"
 
 case "$model_type" in
   llada)
-    # Official Q Mode (README best practices / tech report); overridable
-    # so LLaDA 2.0 runs can pass its own decode config (threshold=0.95,
-    # editing disabled via 1.0).
+    # Unified quality-mode defaults; overridable per experiment.
     export THRESHOLD="${THRESHOLD:-0.7}"
     export EDITING_THRESHOLD="${EDITING_THRESHOLD:-0.5}"
     # Official recommended output length (README: 16384 for most scenarios).

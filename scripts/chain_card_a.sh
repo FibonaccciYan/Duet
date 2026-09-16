@@ -2,10 +2,10 @@
 # Card A chain: LLaDA 2.0 (mmlu, gsm8k, humaneval) -> LLaDA 2.1 (humaneval)
 set -u
 DRIVER=/data0/gs/SparseDLM_LLaDA_SDAR/scripts/driver_eval_dense.sh
-export HF_DATASETS_CACHE=/data0/gs/.hf_cache_llada20_dense_thr095
+export HF_DATASETS_CACHE=/data0/gs/.hf_cache_llada20_dense_thr07
 
 echo "=== chain A: LLaDA 2.0 ==="
-env MODEL=/data0/gs/models/LLaDA2.0-mini THRESHOLD=0.95 EDITING_THRESHOLD=1.0 \
+env MODEL=/data0/gs/models/LLaDA2.0-mini THRESHOLD=0.7 EDITING_THRESHOLD=0.5 \
   BENCHMARKS="mmlu gsm8k humaneval" "$DRIVER" llada retest_llada20 0 12338 \
   || { echo "llada20 chain FAILED"; exit 1; }
 
