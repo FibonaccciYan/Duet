@@ -31,7 +31,7 @@ for method in "${methods[@]}"; do
     if [[ "${benchmark}" == "longbench" ]]; then
       python_bin="${PYTHON:-/home/ysy/anaconda3/envs/sparse/bin/python}"
       args=(
-        "${repo_root}/scripts/run_longbench_quality.py"
+        "${repo_root}/scripts/quality/longbench_quality.py"
         --family "${model_type}"
         --method "${method}"
         --output_dir "${job_root}/longbench"

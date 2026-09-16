@@ -19,11 +19,11 @@ checkpoint decoder's long-context quadratic mask and prompt logits.
 `patch_losa` changes the attention partition used after a prefix has been
 established. The integrated LoSA operators are self-contained in `src/losa`.
 
-For command-line runs, `scripts/run_mode.py` defaults to the LLaDA quality
+For command-line runs, `scripts/smoke/runtime_mode.py` defaults to the LLaDA quality
 profile:
 
 ```bash
-python scripts/run_mode.py --family llada --mode losa \
+python scripts/smoke/runtime_mode.py --family llada --mode losa \
   --threshold 0.7 --editing_threshold 0.5
 ```
 
@@ -45,7 +45,7 @@ paths (`moe_expert_patch=True` by default).
 Use mode `focus_v2` for benchmarking:
 
 ```bash
-python scripts/run_mode.py --family llada --mode focus_v2 \
+python scripts/smoke/runtime_mode.py --family llada --mode focus_v2 \
   --moe_expert_patch true \
   --threshold 0.7 --editing_threshold 0.5
 ```
@@ -53,7 +53,7 @@ python scripts/run_mode.py --family llada --mode focus_v2 \
 The dedicated throughput wrapper is:
 
 ```bash
-python scripts/run_focus_v2_throughput.py --family llada
+python scripts/performance/focus_v2_throughput.py --family llada
 ```
 
 Correctness gates are in `tests/test_focus_v2.py`.  The no-eviction gate
@@ -69,4 +69,4 @@ compares retained positions on the first selection step.
 - SDAR-8B-Chat-b32: `--family sdar`. The loader fills the checkpoint-missing
   `pad_token_id` with its EOS id when required.
 
-All three have smoke coverage through `scripts/run_mode.py --mode focus_v2`.
+All three have smoke coverage through `scripts/smoke/runtime_mode.py --mode focus_v2`.

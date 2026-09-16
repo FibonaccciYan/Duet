@@ -63,10 +63,10 @@ class GenerationDefaultsTest(unittest.TestCase):
 
     def test_llada20_quality_scripts_use_version_specific_defaults(self):
         for relative_path in (
-            "scripts/chain_c2.sh",
-            "scripts/chain_c3.sh",
-            "scripts/chain_card_a.sh",
-            "scripts/chain_math_a.sh",
+            "scripts/legacy/quality_dense_llada20_mmlu_humaneval_gpu1.sh",
+            "scripts/legacy/quality_dense_llada20_llada21_gsm8k_gpu2.sh",
+            "scripts/legacy/quality_dense_llada_card_a.sh",
+            "scripts/legacy/quality_dense_llada20_math500_gpu4.sh",
         ):
             source = (ROOT / relative_path).read_text(encoding="utf-8")
             self.assertIn("THRESHOLD=0.95", source)
