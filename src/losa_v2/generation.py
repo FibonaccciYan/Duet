@@ -128,6 +128,18 @@ def all_visible_mask(query_length, key_length, device, dtype, family):
     return torch.zeros((1, 1, query_length, key_length), dtype=dtype, device=device)
 
 
+def _should_stop_sdar_denoising(
+    *,
+    step: int,
+    steps: int,
+    remasking_strategy: str,
+    active_mask: torch.Tensor,
+) -> bool:
+    if step >= steps:
+        return True
+    return remasking_strategy != "sequential" and not bool(active_mask.any())
+
+
 def legacy_prefix_cache(cache, prefix_length):
     if prefix_length <= 0:
         return ()
@@ -568,7 +580,12 @@ def block_diffusion_generate(
                 post_steps += 1
                 if post_steps > int(max_post_steps):
                     break
-            if family != "llada" and step >= steps:
+            if family != "llada" and _should_stop_sdar_denoising(
+                step=step,
+                steps=steps,
+                remasking_strategy=remasking_strategy,
+                active_mask=active_mask,
+            ):
                 break
             if step == 0:
                 trace = []
