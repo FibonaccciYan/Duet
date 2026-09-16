@@ -19,18 +19,17 @@ checkpoint decoder's long-context quadratic mask and prompt logits.
 `patch_losa` changes the attention partition used after a prefix has been
 established. The integrated LoSA operators are self-contained in `src/losa`.
 
-For command-line runs, `scripts/run_mode.py` defaults to checkpoint-faithful
-LLaDA values. The speed profile must be selected explicitly:
+For command-line runs, `scripts/run_mode.py` defaults to the LLaDA quality
+profile:
 
 ```bash
 python scripts/run_mode.py --family llada --mode losa \
-  --threshold 0.5 --editing_threshold 0
+  --threshold 0.7 --editing_threshold 0.5
 ```
 
 FOCUS exposes both `FocusRuntime` and `src.focus.patch_model`. The runtime
 executes the FOCUS row-retention algorithm directly on the loaded HF model for
-LLaDA 2.1 and SDAR. LLaDA 2.1's `editing_threshold=0` is passed through as the
-official permissive T2T threshold; it does not disable editing.
+LLaDA 2.1 and SDAR.
 
 GPU verification must run on a node with a live CUDA driver, with
 `CUDA_VISIBLE_DEVICES` containing at most two idle cards.
@@ -48,7 +47,7 @@ Use mode `focus_v2` for benchmarking:
 ```bash
 python scripts/run_mode.py --family llada --mode focus_v2 \
   --moe_expert_patch true \
-  --threshold 0.5 --editing_threshold 0
+  --threshold 0.7 --editing_threshold 0.5
 ```
 
 The dedicated throughput wrapper is:
@@ -66,7 +65,7 @@ compares retained positions on the first selection step.
 - LLaDA2.0-mini: `--family llada --model_path /data0/gs/models/LLaDA2.0-mini`.
   Use `--editing_threshold 1.0` to keep LLaDA2.0 mask-to-token-only behavior.
 - LLaDA2.1-mini: `--family llada --model_path /data0/ysy/models/LLaDA2.1-mini`.
-  Speed profile uses `--threshold 0.5 --editing_threshold 0`.
+  Quality mode uses `--threshold 0.7 --editing_threshold 0.5`.
 - SDAR-8B-Chat-b32: `--family sdar`. The loader fills the checkpoint-missing
   `pad_token_id` with its EOS id when required.
 

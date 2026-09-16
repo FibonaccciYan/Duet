@@ -341,8 +341,8 @@ def _select_positions(
     cached_positions=None,
     selection_step=0,
     selection_interval=1,
-    query_dense_threshold=0,
-    threshold=0.95,
+    query_dense_threshold=4,
+    threshold=0.7,
 ):
     """Apply LLaDA's final confidence selector to shallow Query logits."""
     mask = input_ids[0] == mask_id
@@ -531,7 +531,7 @@ def _cached_forward(
     top_p=None,
     query_sparse=True,
     selection_layer=1,
-    threshold=0.95,
+    threshold=0.7,
     prefix_indices=None,
     original_prefix_length=None,
     maskless_attention=None,
@@ -716,8 +716,8 @@ def _block_cache_generate(self, *args, **kwargs):
     top_k = kwargs.pop("top_k", None)
     eos_early_stop = bool(kwargs.pop("eos_early_stop", False))
     minimal_topk = int(kwargs.pop("minimal_topk", 1))
-    threshold = float(kwargs.pop("threshold", 0.95))
-    editing_threshold = float(kwargs.pop("editing_threshold", 0.9))
+    threshold = float(kwargs.pop("threshold", 0.7))
+    editing_threshold = float(kwargs.pop("editing_threshold", 0.5))
     max_post_steps = int(kwargs.pop("max_post_steps", 16))
     eos_id = int(kwargs.pop("eos_id", 156892))
     mask_id = int(kwargs.pop("mask_id", 156895))
@@ -958,7 +958,7 @@ def patch_llada_model(
     ratio=0.5,
     top_k=64,
     selection_interval=4,
-    query_dense_threshold=0,
+    query_dense_threshold=4,
     query_min_prefix_length=0,
     selection_layer=1,
     query_sparse=True,

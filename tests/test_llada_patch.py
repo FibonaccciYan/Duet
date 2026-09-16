@@ -267,6 +267,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             mask_id=127,
             ratio=0.5,
             top_k=8,
+            query_dense_threshold=0,
             temperature=0.7,
             top_p=0.9,
         )
@@ -291,6 +292,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             mask_id=127,
             ratio=0.5,
             top_k=0,
+            query_dense_threshold=0,
             threshold=0.7,
         )
 
@@ -316,6 +318,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             mask_id=127,
             ratio=0.5,
             top_k=0,
+            query_dense_threshold=0,
         )
 
         self.assertEqual(selected.tolist(), [1, 3, 2])

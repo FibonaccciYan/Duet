@@ -34,6 +34,8 @@ GEN_LENGTHS = {
     "multifieldqa_en": 64,
     "gov_report": 512,
 }
+LLADA_THRESHOLD = 0.7
+LLADA_EDITING_THRESHOLD = 0.5
 
 
 def parse_args() -> argparse.Namespace:
@@ -256,18 +258,19 @@ def main() -> int:
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8"
     )
 
-    threshold = args.threshold if args.threshold is not None else (
-        0.5 if args.method == "sparse" and args.family == "llada" else
-        1.0 if args.method == "sparse" else
-        0.95 if args.family == "llada" else 0.85
-    )
-    editing_threshold = args.editing_threshold if args.editing_threshold is not None else (
-        0.0 if args.method == "sparse" else 0.9
-    )
     remasking = args.remasking_strategy or (
         "low_confidence_dynamic" if args.method == "focus" else "sequential"
     )
-
+    threshold = args.threshold if args.threshold is not None else (
+        LLADA_THRESHOLD if args.family == "llada" else
+        0.95 if remasking == "low_confidence_dynamic" else
+        1.0 if args.method == "sparse" else
+        0.85
+    )
+    editing_threshold = args.editing_threshold if args.editing_threshold is not None else (
+        LLADA_EDITING_THRESHOLD if args.family == "llada" else
+        0.0 if args.method == "sparse" else 0.9
+    )
     with progress_path.open("a", encoding="utf-8") as progress:
         for task in args.tasks:
             path = args.data_dir / f"{task}.jsonl"

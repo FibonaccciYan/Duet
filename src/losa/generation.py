@@ -500,7 +500,7 @@ def block_diffusion_generate(
     top_p=None,
     top_k=None,
     threshold=None,
-    editing_threshold=0.9,
+    editing_threshold=0.5,
     max_post_steps=16,
     minimal_topk=1,
     num_to_transfer=1,
@@ -556,7 +556,7 @@ def block_diffusion_generate(
     prefill_blocks = prompt_length // block_length
     traces = []
     transfer_counts = get_num_transfer_tokens(block_length, steps).to(device)
-    threshold = threshold if threshold is not None else (0.85 if family == "sdar" else 0.95)
+    threshold = threshold if threshold is not None else (0.85 if family == "sdar" else 0.7)
 
     for block_idx in range(prefill_blocks, num_blocks):
         block_start = block_idx * block_length

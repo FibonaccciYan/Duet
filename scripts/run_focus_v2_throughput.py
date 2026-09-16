@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--block_length", type=int, default=32)
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--threshold", type=float, default=None)
-    parser.add_argument("--editing_threshold", type=float, default=0.9)
+    parser.add_argument("--editing_threshold", type=float, default=0.5)
     parser.add_argument("--max_post_steps", type=int, default=16)
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repeats", type=int, default=3)
@@ -67,7 +67,7 @@ def main() -> int:
     mask_id = 156895 if args.family == "llada" else int(tokenizer.mask_token_id or 151669)
     threshold = args.threshold
     if threshold is None:
-        threshold = 0.95 if args.family == "llada" else 0.85
+        threshold = 0.7 if args.family == "llada" else 0.95
     generation_kwargs = dict(
         gen_length=args.gen_length,
         block_length=args.block_length,

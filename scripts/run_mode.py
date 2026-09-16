@@ -96,7 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_p", type=float, default=None)
     parser.add_argument("--top_k", type=int, default=None)
     parser.add_argument("--threshold", type=float, default=None)
-    parser.add_argument("--editing_threshold", type=float, default=0.9)
+    parser.add_argument("--editing_threshold", type=float, default=0.5)
     parser.add_argument("--max_post_steps", type=int, default=16)
     parser.add_argument("--minimal_topk", type=int, default=1)
     parser.add_argument("--eos_early_stop", type=parse_bool, default=True)
@@ -178,7 +178,13 @@ def main() -> int:
     input_ids = tokenize_chat(tokenizer, args.prompt).to(model.device)
     threshold = args.threshold
     if threshold is None:
-        threshold = 0.85 if args.family == "sdar" else 0.95
+        threshold = (
+            0.95
+            if args.family == "sdar" and args.mode in {"focus", "focus_v2"}
+            else 0.85
+            if args.family == "sdar"
+            else 0.7
+        )
     mask_id = (tokenizer.mask_token_id or 151669) if args.family == "sdar" else 156895
     eos_id = None
     if args.family == "llada":

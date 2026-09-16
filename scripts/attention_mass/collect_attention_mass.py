@@ -47,8 +47,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--page_size", type=int, default=1,
                    help="KV tokens aggregated per column; 1 disables aggregation")
     p.add_argument("--seed", type=int, default=1234)
-    p.add_argument("--threshold", type=float, default=0.5)
-    p.add_argument("--editing_threshold", type=float, default=0.0)
+    p.add_argument("--threshold", type=float, default=0.7)
+    p.add_argument("--editing_threshold", type=float, default=0.5)
     return p.parse_args()
 
 

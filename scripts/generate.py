@@ -69,7 +69,7 @@ def parse_args():
         default=0.35,
         help="SDAR entropy budget; ignored by LLaDA",
     )
-    parser.add_argument("--editing_threshold", type=float, default=0.0)
+    parser.add_argument("--editing_threshold", type=float, default=0.5)
     parser.add_argument("--num_to_transfer", type=int, default=1)
     parser.add_argument("--mask_id", type=int, default=None)
     parser.add_argument("--eos_id", type=int, default=None)
@@ -144,7 +144,7 @@ def load_model_and_tokenizer(args):
         args.sparse_dlm_selection_interval or (1 if is_sdar else 4)
     )
     if args.query_dense_threshold is None:
-        args.query_dense_threshold = 0
+        args.query_dense_threshold = 4
     args.prefix_sparse = (
         not is_sdar if args.prefix_sparse is None else args.prefix_sparse
     )
@@ -177,7 +177,13 @@ def load_model_and_tokenizer(args):
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     args.block_length = args.block_length or 32
     args.steps = args.steps or 32
-    args.threshold = args.threshold if args.threshold is not None else (0.85 if is_sdar else 0.5)
+    args.threshold = args.threshold if args.threshold is not None else (
+        0.95
+        if is_sdar and args.remasking_strategy == "low_confidence_dynamic"
+        else 0.85
+        if is_sdar
+        else 0.7
+    )
     args.mask_id = args.mask_id if args.mask_id is not None else (
         tokenizer.mask_token_id if is_sdar else 156895
     )

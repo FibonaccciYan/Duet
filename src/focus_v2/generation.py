@@ -32,7 +32,7 @@ def focus_v2_generate(
     top_p=None,
     top_k=None,
     threshold=None,
-    editing_threshold: float = 0.9,
+    editing_threshold: float = 0.5,
     max_post_steps: int = 16,
     minimal_topk: int = 1,
     num_to_transfer: int = 1,
@@ -55,7 +55,7 @@ def focus_v2_generate(
     prompt_length = input_ids.shape[1]
     mask_id = int(mask_id if mask_id is not None else (156895 if family == "llada" else 151669))
     if threshold is None:
-        threshold = 0.95 if family == "llada" else 0.85
+        threshold = 0.7 if family == "llada" else 0.95
     if eos_id is None:
         value = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
         if isinstance(value, (list, tuple)):

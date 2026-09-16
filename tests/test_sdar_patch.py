@@ -121,6 +121,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             mask_id=15,
             ratio=0.5,
             top_k=0,
+            query_dense_threshold=0,
             strategy="sequential",
             decoded_count=2,
             block_positions=block_positions,

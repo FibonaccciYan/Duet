@@ -14,7 +14,7 @@ case "${model_type}" in
     default_python=/home/ysy/anaconda3/envs/sparse/bin/python
     default_ratio=0.7
     default_selection_interval=4
-    default_query_dense_threshold=0
+    default_query_dense_threshold=4
     default_query_min_prefix_length=0
     default_selection_layer=1
     default_refresh_step=2
@@ -27,7 +27,7 @@ case "${model_type}" in
     default_moe_expert_patch=false
     default_ratio=0.5
     default_selection_interval=1
-    default_query_dense_threshold=0
+    default_query_dense_threshold=4
     default_query_min_prefix_length=0
     default_prefix_min_prefix_length=0
     default_selection_layer=5
@@ -59,7 +59,7 @@ args=(
   --attn_implementation "${ATTN_IMPLEMENTATION:-sdpa}"
   --gen_length "${GEN_LENGTH:-512}"
   --temperature "${TEMPERATURE:-0.0}"
-  --editing_threshold "${EDITING_THRESHOLD:-0.0}"
+  --editing_threshold "${EDITING_THRESHOLD:-0.5}"
   --num_to_transfer "${NUM_TO_TRANSFER:-1}"
   --sparse_dlm_ratio "${SPARSE_DLM_RATIO:-${default_ratio}}"
   --sparse_dlm_top_k "${SPARSE_DLM_TOP_K:-64}"

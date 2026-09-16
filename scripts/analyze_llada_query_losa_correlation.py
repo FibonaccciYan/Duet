@@ -411,7 +411,7 @@ def parse_args():
     parser.add_argument("--selection_interval", type=int, default=1)
     parser.add_argument("--losa_active_topk", type=int, default=5)
     parser.add_argument("--query_losa_union", action="store_true")
-    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--threshold", type=float, default=0.7)
     parser.add_argument("--mask_id", type=int, default=156895)
     parser.add_argument("--eos_id", type=int, default=156892)
     parser.add_argument("--dtype", choices=("float16", "bfloat16"), default="bfloat16")
@@ -545,7 +545,7 @@ def main():
         ratio=args.query_ratio,
         top_k=64,
         selection_interval=args.selection_interval,
-        query_dense_threshold=0,
+        query_dense_threshold=4,
         selection_layer=args.selection_layer,
         query_sparse=True,
         prefix_sparse=False,
@@ -578,7 +578,7 @@ def main():
                 top_p=None,
                 top_k=None,
                 threshold=args.threshold,
-                editing_threshold=0.0,
+                editing_threshold=0.5,
                 num_to_transfer=1,
                 mask_id=args.mask_id,
                 eos_id=args.eos_id,
