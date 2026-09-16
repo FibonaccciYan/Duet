@@ -50,7 +50,7 @@ def _select_positions(
     query_dense_threshold=4,
     minimum_mask_candidates=1,
     strategy="low_confidence_static",
-    threshold=1.0,
+    threshold=0.85,
     entropy_budget=None,
     decoded_count=None,
     block_positions=None,

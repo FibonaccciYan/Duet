@@ -568,7 +568,14 @@ def block_diffusion_generate(
     prefill_blocks = prompt_length // block_length
     traces = []
     transfer_counts = get_num_transfer_tokens(block_length, steps).to(device)
-    threshold = threshold if threshold is not None else (0.85 if family == "sdar" else 0.7)
+    if threshold is None:
+        threshold = (
+            0.7
+            if family == "llada"
+            else 0.95
+            if remasking_strategy == "low_confidence_dynamic"
+            else 0.85
+        )
 
     for block_idx in range(prefill_blocks, num_blocks):
         block_start = block_idx * block_length

@@ -955,7 +955,7 @@ def _block_cache_generate(self, *args, **kwargs):
 
 def patch_llada_model(
     model,
-    ratio=0.5,
+    ratio=0.7,
     top_k=64,
     selection_interval=4,
     query_dense_threshold=4,

@@ -103,6 +103,27 @@ class GenerationDefaultsTest(unittest.TestCase):
             ),
             256,
         )
+        for relative_path in (
+            "src/losa/generation.py",
+            "src/losa_v2/generation.py",
+        ):
+            source = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertIn(
+                'remasking_strategy == "low_confidence_dynamic"', source
+            )
+            self.assertIn("else 0.95", source)
+            self.assertIn("else 0.85", source)
+
+    def test_sparse_direct_patch_defaults_match_public_config(self):
+        llada_patch = _defaults(
+            _find_function("src/sparse/llada_patch.py", "patch_llada_model")
+        )
+        sdar_selector = _defaults(
+            _find_function("src/sparse/sdar_patch.py", "_select_positions")
+        )
+
+        self.assertEqual(llada_patch["ratio"], 0.7)
+        self.assertEqual(sdar_selector["threshold"], 0.85)
 
 
 if __name__ == "__main__":
