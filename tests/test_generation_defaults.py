@@ -57,9 +57,20 @@ class GenerationDefaultsTest(unittest.TestCase):
             _find_function("src/model/llada2_1/modeling.py", "generate")
         )
 
-        self.assertEqual(llada20["threshold"], 0.7)
+        self.assertEqual(llada20["threshold"], 0.95)
         self.assertEqual(llada21["threshold"], 0.7)
         self.assertEqual(llada21["editing_threshold"], 0.5)
+
+    def test_llada20_quality_scripts_use_version_specific_defaults(self):
+        for relative_path in (
+            "scripts/chain_c2.sh",
+            "scripts/chain_c3.sh",
+            "scripts/chain_card_a.sh",
+            "scripts/chain_math_a.sh",
+        ):
+            source = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertIn("THRESHOLD=0.95", source)
+            self.assertIn("EDITING_THRESHOLD=1.0", source)
 
     def test_focus_defaults(self):
         focus = _defaults(

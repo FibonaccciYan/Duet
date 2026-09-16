@@ -3,8 +3,8 @@
 set -u
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRIVER="${script_dir}/driver_eval_dense.sh"
-env HF_DATASETS_CACHE=/data0/gs/.hf_cache_llada20_dense_thr07 \
-  MODEL=/data0/gs/models/LLaDA2.0-mini THRESHOLD=0.7 EDITING_THRESHOLD=0.5 \
+env HF_DATASETS_CACHE=/data0/gs/.hf_cache_llada20_dense_thr095 \
+  MODEL=/data0/gs/models/LLaDA2.0-mini THRESHOLD=0.95 EDITING_THRESHOLD=1.0 \
   BENCHMARKS="gsm8k" "$DRIVER" llada retest_llada20 2 12340 \
   || { echo "card3 llada20 gsm8k FAILED"; exit 1; }
 env HF_DATASETS_CACHE=/data0/gs/.hf_cache_llada21_dense_thr07 \
