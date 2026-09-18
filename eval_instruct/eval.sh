@@ -122,8 +122,16 @@ else
   model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-true},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_llada_threshold}},editing_threshold=${EDITING_THRESHOLD:-${default_editing_threshold}},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${mask_id},eos_id=${eos_id}"
 fi
 
+if [[ -n "${IMPLEMENTATION:-}" ]]; then
+  model_args+=",implementation=${IMPLEMENTATION}"
+fi
+if [[ -n "${MAX_PROMPT_LEN:-}" ]]; then
+  model_args+=",max_prompt_len=${MAX_PROMPT_LEN}"
+fi
+
 case "${method}" in
   sparse)
+    model_args+=",prefix_strict_budget=${PREFIX_STRICT_BUDGET:-false}"
     model_args+=",sparse_dlm_ratio=${SPARSE_DLM_RATIO:-${default_ratio}},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-${default_selection_interval}},query_dense_threshold=${QUERY_DENSE_THRESHOLD:-${default_query_dense_threshold}},sparse_dlm_refresh_step=${SPARSE_DLM_REFRESH_STEP:-${default_refresh_step}},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-${default_selection_layer}},sparse_dlm_deep_only_transfer=${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_min_prefix_length=${PREFIX_MIN_PREFIX_LENGTH:-${default_prefix_min_length}},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}},prefix_share_layer_pairs=${PREFIX_SHARE_LAYER_PAIRS:-false},prefix_selector=${PREFIX_SELECTOR:-raw_l1},losa=${losa},losa_active_topk=${losa_active_topk},losa_score_mode=${losa_score_mode},losa_key_samples=${losa_key_samples}"
     if [[ "${model_type}" == "llada" ]]; then
       model_args+=",query_min_prefix_length=${QUERY_MIN_PREFIX_LENGTH:-0},query_losa_union=${QUERY_LOSA_UNION:-false}"
@@ -156,7 +164,7 @@ run_eval() {
   local args=(
     -m accelerate.commands.launch
     --main_process_port "${port}"
-    -m lm_eval
+    -m "${EVAL_ENTRY:-lm_eval}"
     --model "${model_type}"
     --model_args "${model_args},gen_length=${gen_length}"
     --tasks "${tasks}"
@@ -171,6 +179,9 @@ run_eval() {
 
   if [[ -n "${LIMIT:-}" ]]; then
     args+=(--limit "${LIMIT}")
+  fi
+  if [[ -n "${EVAL_SEED:-}" ]]; then
+    args+=(--seed "${EVAL_SEED}")
   fi
 
   if [[ "${name}" == "humaneval" ]]; then

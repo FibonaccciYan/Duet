@@ -1,0 +1,67 @@
+{
+  "retained": [
+    "src/focus",
+    "src/focus_v8"
+  ],
+  "removed": [
+    "src/focus_v2",
+    "src/focus_v3",
+    "src/focus_v4",
+    "src/focus_v5",
+    "src/focus_v6",
+    "src/focus_v7"
+  ],
+  "shared_preserved": [
+    "src/runtime_compat.py",
+    "src/kernels/versioned/block_causal_prefill.py"
+  ],
+  "original_hashes": {
+    "src/focus/generation.py": "e62c044d7cc74dffb8244835568d340e4eae0d136e7a257219250d1e23edaec3",
+    "src/focus/algorithm.py": "56bfbd5d808a644c02ef07e10364f4939997e09ac817daf2a2287fcb7a29849f",
+    "src/focus/api.py": "1cf59ae3add287f1233624b5374356dfe7549bcc370e3e7e94d93ced7c02d97b",
+    "src/focus/__init__.py": "5c2bef867dd45fa8f44fb280c672761018835465fc86cc366b7b771d6e0937bf",
+    "src/focus/model.py": "7267c9430392c67fe5b915800e715c8746ae7f9221a5c92916251dd94b159885"
+  },
+  "v8_hashes": {
+    "src/focus_v8/prefill.py": "8f291b62cfb1b5055e78e8905102eda8440cce9d9812c85cd75cf563e4c933ff",
+    "src/focus_v8/generation.py": "a7a3a66f69b29e506170ba39f1f66bff13405446eda95980f955a8e2d28ddf69",
+    "src/focus_v8/algorithm.py": "ba436aba10f061dfab7bd6ac20683f64acabd78d4fde2d33460344d637d5ab45",
+    "src/focus_v8/backend.py": "eca64ea9d3cff9ddc15fd5052023deb4ea6b761826259629178dd9a6f573c6a7",
+    "src/focus_v8/api.py": "75db703e155e3114b035b922c37e064c70fbf5c9acd1255a5caec96155fd489b",
+    "src/focus_v8/__init__.py": "f4338d2a96cb4091d0ce9abc4b8359a80ca4562c3156aa6ad12ad8161669f509",
+    "src/focus_v8/model.py": "83d96fa1a8bdd2e1a979c154bc4c565cd2be782d9276b57289d0cc441ecaa1b9",
+    "src/focus_v8/compat.py": "ea04127abf62a272bbbad9b1c5e4a8df0f8d43ef0c0b5a46d8fd00daaa050e6d"
+  },
+  "changed": [
+    "src/runtime_compat.py",
+    "src/losa/generation.py",
+    "src/losa_v6/generation.py",
+    "src/kernels/versioned/block_causal_prefill.py",
+    "src/losa_v6/generation.py",
+    "src/runtime.py",
+    "tests/test_focus_v8_reference.py",
+    "tests/test_focus_v8_selection.py",
+    "tests/test_focus_v8_cache.py",
+    "tests/test_focus_v8_early_stop.py",
+    "tests/test_generation_defaults.py",
+    "scripts/smoke/runtime_mode.py",
+    "scripts/performance/check_focus_native_flash.py",
+    "scripts/performance/check_focus_selector.py",
+    "scripts/performance/check_focus_cache_only.py",
+    "scripts/performance/check_focus_prefill.py",
+    "scripts/performance/focus_v8_throughput.py",
+    "scripts/performance/real_row_versions.py",
+    "README.md"
+  ],
+  "removed_scripts": [
+    "scripts/performance/narrative_focus_dense.py",
+    "scripts/performance/narrative_focus_v7_complete.py",
+    "scripts/performance/profile_focus_losa_parts.py"
+  ],
+  "test_renames": {
+    "tests/test_focus_v2.py": "tests/test_focus_v8_reference.py",
+    "tests/test_focus_v3_selection.py": "tests/test_focus_v8_selection.py",
+    "tests/test_focus_v5_cache.py": "tests/test_focus_v8_cache.py",
+    "tests/test_focus_v7_early_stop.py": "tests/test_focus_v8_early_stop.py"
+  }
+}

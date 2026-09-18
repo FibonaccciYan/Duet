@@ -1,0 +1,2 @@
+# Stored token IDs and tokenizer snapshots are checksum-verified byte-for-byte.
+data/narrativeqa_speed80/** -text whitespace=-blank-at-eol

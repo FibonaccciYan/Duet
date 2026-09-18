@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.sparse.llada_patch import (
+from src.reference.sparse.llada_patch import (
     _cached_forward,
     _select_positions,
     _transfer_tokens,
@@ -22,12 +22,12 @@ from src.sparse.llada_patch import (
     patch_llada_model as patch_model,
     patch_moe_experts,
 )
-from src.sparse.sparse_ops import (
+from src.reference.sparse.sparse_ops import (
     _BlockDualCache,
     _dual_cache_from_dense,
     _prefix_from_dynamic_cache,
 )
-from src.sparse.sparse_ops import (
+from src.reference.sparse.sparse_ops import (
     _adamas_prefix_indices,
     _qk_prefix_indices,
     _block_attention_output_lse,
@@ -39,7 +39,7 @@ from src.sparse.sparse_ops import (
     _merge_attention_states,
     _new_losa_state,
 )
-from src.sparse.triton_kernels import fused_kv_index_copy_
+from src.reference.sparse.triton_kernels import fused_kv_index_copy_
 
 
 MODEL_PATH = "/data0/ysy/models/LLaDA2.1-mini"
@@ -117,7 +117,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         )
         queries = [torch.randn(1, 1, 2, 2) for _ in range(2)]
         with mock_patch(
-            "src.sparse.sparse_ops._prefix_indices",
+            "src.reference.sparse.sparse_ops._prefix_indices",
             side_effect=(torch.tensor([1, 3]), torch.tensor([0, 2])),
         ) as selector:
             compact, indices = _compact_prefix_cache(
@@ -153,7 +153,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         )
         queries = [torch.randn(1, 1, 2, 2) for _ in range(4)]
         with mock_patch(
-            "src.sparse.sparse_ops._prefix_indices",
+            "src.reference.sparse.sparse_ops._prefix_indices",
             side_effect=(torch.tensor([1, 3]), torch.tensor([0, 2])),
         ) as selector:
             _, indices = _compact_prefix_cache(
@@ -181,7 +181,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             ),
         )
         with mock_patch(
-            "src.sparse.sparse_ops._prefix_indices",
+            "src.reference.sparse.sparse_ops._prefix_indices",
             return_value=torch.tensor([0, 3]),
         ) as selector:
             _, indices = _compact_prefix_cache(
@@ -350,7 +350,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(transferred.tolist(), [[True, True, False, True]])
         self.assertEqual(tokens.tolist(), [[10, 11, 127, 13]])
 
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    @mock_patch("src.reference.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_dual_cache_overwrites_only_selected_current_kv(self, _copy):
         prefix = torch.randn(1, 2, 2, 3)
         current = torch.randn(1, 2, 4, 3)
@@ -520,7 +520,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    @mock_patch("src.reference.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_query_sparse_returns_logits_only_for_selected_masks(self, _copy):
         model = _tiny_model()
         tokens = torch.tensor([[1, 2, 3, 4, 127, 127, 127, 127]])
@@ -543,7 +543,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                     dense.past_key_values, prefix_cache, 4, 8
                 ),
             }
-            with mock_patch("src.sparse.llada_patch._layer_attention_mask") as build_mask:
+            with mock_patch("src.reference.sparse.llada_patch._layer_attention_mask") as build_mask:
                 _, selected, logit_positions = _cached_forward(
                     model,
                     tokens[:, 4:],
@@ -591,7 +591,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
                 )
                 completed_layers.clear()
                 with mock_patch(
-                    "src.sparse.llada_patch._select_positions",
+                    "src.reference.sparse.llada_patch._select_positions",
                     side_effect=lambda *args, **kwargs: observed_layers.append(
                         completed_layers.copy()
                     ),
@@ -626,7 +626,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertEqual(model.config.llada_query_selection_layer, 3)
 
     @mock_patch(
-        "src.sparse.llada_patch._attention_output_lse",
+        "src.reference.sparse.llada_patch._attention_output_lse",
         side_effect=_block_attention_output_lse,
     )
     def test_losa_first_cached_forward_matches_dense_forward_exactly(self, _attention):
@@ -680,11 +680,11 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         )
 
     @mock_patch(
-        "src.sparse.llada_patch._attention_output_lse",
+        "src.reference.sparse.llada_patch._attention_output_lse",
         side_effect=_block_attention_output_lse,
     )
     @mock_patch(
-        "src.sparse.sparse_ops.losa_query_delta",
+        "src.reference.sparse.sparse_ops.losa_query_delta",
         side_effect=lambda query, *_args, **_kwargs: torch.zeros(query.shape[2]),
     )
     def test_losa_full_active_budget_uses_losa_after_dense_init(
@@ -799,7 +799,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
         self.assertIsNone(logit_positions)
         torch.testing.assert_close(cached_logits, dense.logits[:, 4:], rtol=1e-5, atol=1e-5)
 
-    @mock_patch("src.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
+    @mock_patch("src.reference.sparse.sparse_ops.fused_kv_index_copy_", side_effect=_torch_kv_copy)
     def test_sparse_multiblock_generation_uses_llada_selector(self, _copy):
         model = _tiny_model()
         patch_model(
@@ -840,7 +840,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             prefix_sparse=False,
         )
         with mock_patch(
-            "src.sparse.llada_patch._cached_forward", wraps=_cached_forward
+            "src.reference.sparse.llada_patch._cached_forward", wraps=_cached_forward
         ) as cached_forward:
             model.generate(
                 inputs=torch.tensor([[1, 2, 3, 4]]),
@@ -870,7 +870,7 @@ class BlockCacheSparsePatchTest(unittest.TestCase):
             prefix_sparse=True,
             prefix_min_prefix_length=8,
         )
-        with mock_patch("src.sparse.llada_patch._compact_prefix_cache") as compact:
+        with mock_patch("src.reference.sparse.llada_patch._compact_prefix_cache") as compact:
             model.generate(
                 inputs=torch.tensor([[1, 2, 3, 4]]),
                 gen_length=4,

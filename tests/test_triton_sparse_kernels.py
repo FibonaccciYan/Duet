@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from src.sparse.triton_kernels import (
+from src.reference.sparse.triton_kernels import (
     _route_moe,
     adamas_distances,
     attention_output_lse,

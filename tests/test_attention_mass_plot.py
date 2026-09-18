@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 
 
-MODULE_PATH = Path(__file__).parents[1] / "scripts/paper/attention_mass/plot_attention_mass.py"
+MODULE_PATH = Path(__file__).parents[1] / "scripts/original/paper/attention_mass/plot_attention_mass.py"
 SPEC = importlib.util.spec_from_file_location("plot_attention_mass", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)

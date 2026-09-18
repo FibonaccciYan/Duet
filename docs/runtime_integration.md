@@ -1,72 +1,46 @@
-# Dense, LoSA, and FOCUS Runtime Contract
+# Runtime contract
 
-The project preserves `src.sparse.patch_model` as the compatibility reference.
-Dense and LoSA expose matching patch entry points:
+Canonical packages are split between `src.reference` and `src.optimized`.
+See [PACKAGE_LAYOUT.md](PACKAGE_LAYOUT.md) for the migration mapping.
 
 ```python
-from src.dense import patch_model as patch_dense
-from src.focus import patch_model as patch_focus
-from src.losa import patch_model as patch_losa
+from src.runtime import load_runtime, patch_method
 
-patch_dense(model, model_name="llada")
-patch_losa(model, model_name="sdar", token_budget=256)
-patch_focus(model, model_name="llada", alpha=1.5)
+# Construct without loading weights until .load() or .generate().
+baseline = load_runtime("dense_optimized", family="sdar")
+losa = load_runtime("losa_optimized", family="sdar")
+focus = load_runtime("focus_optimized", family="llada")
+
+# Reference algorithms remain available.
+reference_losa = load_runtime("losa", family="sdar")
+reference_focus = load_runtime("focus", family="llada")
+
+# Sparse patches an already loaded model, preserving model.generate's contract.
+patch_method(model, "sparse_optimized", model_name="sdar",
+             query_sparse=True, prefix_sparse=True, prefix_token_budget=256)
 ```
 
-`patch_dense` uses the shared block-cache decoder with query, prefix, and LoSA
-sparsity disabled. This preserves dense attention while avoiding the
-checkpoint decoder's long-context quadratic mask and prompt logits.
-`patch_losa` changes the attention partition used after a prefix has been
-established. The integrated LoSA operators are self-contained in `src/losa`.
+Optimized dense uses Efficient Attention. `dense` is a compatibility alias for
+that same runtime. Reference Sparse uses method `sparse`; reference LoSA and
+FOCUS use methods `losa` and `focus`. Do not use a bare name when intending to
+benchmark an optimized implementation.
 
-For command-line runs, `scripts/smoke/runtime_mode.py` defaults to the LLaDA quality
-profile:
+Runtime wrappers return objects with `.tokens`. Patched Sparse's
+`model.generate` returns a tensor. Preserve each API's EOS semantics; the
+full-dataset benchmark's private output-trimming controls are benchmark-specific.
+
+Example CLI (run at checkout root, on an explicitly selected idle GPU):
 
 ```bash
-python scripts/smoke/runtime_mode.py --family llada --mode losa \
-  --threshold 0.7 --editing_threshold 0.5
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. python -m scripts.original.smoke.runtime_mode \
+  --family llada --mode focus_optimized \
+  --threshold 0.7 --editing_threshold 0.5 --gen_length 64
 ```
 
-FOCUS exposes both `FocusRuntime` and `src.focus.patch_model`. The runtime
-executes the FOCUS row-retention algorithm directly on the loaded HF model for
-LLaDA 2.1 and SDAR.
+This command does not reserve GPU0. For the user's reserved GPU5, run through
+`scripts/original/performance/run_reserved_gpu5.sh` and verify restoration on exit.
 
-GPU verification must run on a node with a live CUDA driver, with
-`CUDA_VISIBLE_DEVICES` containing at most two idle cards.
-
-## FOCUS v2
-
-`src.focus_v2` is the speed-test implementation of FOCUS.  It preserves the
-reference selection semantics from `src.focus`, but projects Q/K/V only once in
-each executed decoder layer and reuses the post-RoPE tensors for layer-0/layer-1
-importance.  It also exposes the packed routed-MoE backend used by the MoE speed
-paths (`moe_expert_patch=True` by default).
-
-Use mode `focus_v2` for benchmarking:
-
-```bash
-python scripts/smoke/runtime_mode.py --family llada --mode focus_v2 \
-  --moe_expert_patch true \
-  --threshold 0.7 --editing_threshold 0.5
-```
-
-The dedicated throughput wrapper is:
-
-```bash
-python scripts/performance/focus_v2_throughput.py --family llada
-```
-
-Correctness gates are in `tests/test_focus_v2.py`.  The no-eviction gate
-compares FOCUS v2 against the portable FOCUS reference; the selected gate
-compares retained positions on the first selection step.
-
-### FOCUS v2 model matrix
-
-- LLaDA2.0-mini: `--family llada --model_path /data0/gs/models/LLaDA2.0-mini`.
-  Use `--editing_threshold 1.0` to keep LLaDA2.0 mask-to-token-only behavior.
-- LLaDA2.1-mini: `--family llada --model_path /data0/ysy/models/LLaDA2.1-mini`.
-  Quality mode uses `--threshold 0.7 --editing_threshold 0.5`.
-- SDAR-8B-Chat-b32: `--family sdar`. The loader fills the checkpoint-missing
-  `pad_token_id` with its EOS id when required.
-
-All three have smoke coverage through `scripts/smoke/runtime_mode.py --mode focus_v2`.
+Reference implementations and optimized ones may share selectors and numerical
+helpers. Package separation is not a claim of independent upstream provenance.
+Historical integration instructions are archived under `docs/history/` and must
+not be used as current import paths.

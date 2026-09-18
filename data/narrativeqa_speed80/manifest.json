@@ -1,0 +1,97 @@
+{
+  "created_date": "2026-09-17",
+  "source_path": "/data0/gs/losa_accuracy_prep/data/longbench_all21_full/narrativeqa.jsonl",
+  "source_sha256": "939c1bc9e06c0f64cd80a9ec312d8cfd4b791309a9c377b97f8c127c441509e5",
+  "source_records": 200,
+  "eligible_records": 85,
+  "selected_records": 80,
+  "seed": 42,
+  "threshold_strictly_greater_than": 32768,
+  "lengths": [
+    8192,
+    16384,
+    32768
+  ],
+  "families": [
+    "sdar",
+    "llada21"
+  ],
+  "tokenizers_version": "0.22.2",
+  "input_convention": "stored source prompt; no chat template; add_special_tokens=False",
+  "truncation": "first N/2 token IDs + last N/2 token IDs; no separator",
+  "authoritative_field": "input_ids",
+  "roundtrip_mismatches": {
+    "sdar/8192": 6,
+    "sdar/16384": 4,
+    "sdar/32768": 7,
+    "llada21/8192": 16,
+    "llada21/16384": 6,
+    "llada21/32768": 1
+  },
+  "files": {
+    "build_dataset.py": {
+      "bytes": 5175,
+      "sha256": "068f901298a7856c3adf613f50d4873d52ef5295271c4470b1a3a5867f9da927"
+    },
+    "llada21/16384.jsonl": {
+      "bytes": 11757222,
+      "sha256": "b08106fb8b89902becbd32541496faae540307fddd233d05c6f1f72e708c7fb3"
+    },
+    "llada21/32768.jsonl": {
+      "bytes": 23419339,
+      "sha256": "b2028fecd11e5db18027ff21b9f6946d093194d0716da1ca7314a2606aad42b3"
+    },
+    "llada21/8192.jsonl": {
+      "bytes": 5916465,
+      "sha256": "76a6d4df18b8e4cf02942acbe2fe255e1175a7991b0b3268b0dc4912276e9b4d"
+    },
+    "sdar/16384.jsonl": {
+      "bytes": 12149087,
+      "sha256": "849a29e060c3b3ca7bad30054d821a71eb6346d8efcfc5e45f2ff7db52b95ec3"
+    },
+    "sdar/32768.jsonl": {
+      "bytes": 24228263,
+      "sha256": "6aa7964577a6b623e10ce27cb68b7c1a1a71a16a1c2f48422178c249a29b024d"
+    },
+    "sdar/8192.jsonl": {
+      "bytes": 6112610,
+      "sha256": "c9779545f8d795e5613478795a65b47512c456937f1ea4f942e3ccf033d6e302"
+    },
+    "selected_originals.jsonl": {
+      "bytes": 26849444,
+      "sha256": "084b864d82d88942b73b846501a68d4184d17113c150672461394f2e1d4a3c6a"
+    },
+    "selection_audit.json": {
+      "bytes": 49139,
+      "sha256": "0c2122a67e67fbcea1c65168ee5f4f6920568b1e2d13d0cd740e2a9dc18cd44f"
+    },
+    "tokenizers/llada21/special_tokens_map.json": {
+      "bytes": 180,
+      "sha256": "2fb357349941f0b4b88669cc2745e70350487dc1b46a5b4dfab8ae1882efdf0b"
+    },
+    "tokenizers/llada21/tokenizer.json": {
+      "bytes": 7663359,
+      "sha256": "0a1db22fe3dfb28f9b2be6d87f472af371b50235d7f5366ecac14b52ff8c002b"
+    },
+    "tokenizers/llada21/tokenizer_config.json": {
+      "bytes": 4595,
+      "sha256": "053a74db9233c69408762c4e70043cf9811504d1a59220adb0d00c956cf7749c"
+    },
+    "tokenizers/sdar/added_tokens.json": {
+      "bytes": 727,
+      "sha256": "6e81b0b78e49ced21e68b7ed551a29afc3bde018b06df356692c4df94f753d93"
+    },
+    "tokenizers/sdar/special_tokens_map.json": {
+      "bytes": 630,
+      "sha256": "8d7a2b508e7325a93b5cc9e6908397ad8865df49bed7af20ff8d90b57fabff7b"
+    },
+    "tokenizers/sdar/tokenizer.json": {
+      "bytes": 7031645,
+      "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"
+    },
+    "tokenizers/sdar/tokenizer_config.json": {
+      "bytes": 10005,
+      "sha256": "96d86b69328269b178513cfee56d66d90f26a93a3ee8c2444dfbae4df7d07403"
+    }
+  }
+}

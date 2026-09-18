@@ -20,8 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 from src.runtime import patch_method
-from src.sparse import resolve_model_family
-from src.sparse.llada_patch import patch_moe_experts
+from src.reference.sparse import resolve_model_family
+from src.reference.sparse.llada_patch import patch_moe_experts
 
 
 eval_logger = logging.getLogger(__name__)
@@ -70,6 +70,7 @@ class LLaDA(LM):
         mask_id: int = 156895,
         eos_id: int = 156892,
         method: Optional[str] = None,
+        implementation: str = "reference",
         runtime_mode: Optional[str] = None,
         sparse_dlm: bool = True,
         sparse_dlm_ratio: Optional[float] = None,
@@ -85,6 +86,7 @@ class LLaDA(LM):
         prefix_sparse: Optional[bool] = None,
         prefix_min_prefix_length: Optional[int] = None,
         prefix_token_budget: int = 256,
+        prefix_strict_budget: bool = False,
         prefix_chunk_size: Optional[int] = None,
         prefix_share_layer_pairs: bool = False,
         prefix_selector: str = "raw_l1",
@@ -113,6 +115,13 @@ class LLaDA(LM):
         ).lower()
         if self.method not in {"sparse", "dense", "focus", "losa"}:
             raise ValueError(f"Unsupported evaluation method: {self.method!r}")
+        if implementation not in {"reference", "optimized"}:
+            raise ValueError(f"Unsupported implementation: {implementation}")
+        self.implementation = implementation
+        patch_name = self.method + "_optimized" if implementation == "optimized" else self.method
+        if implementation == "optimized":
+            from src.runtime_compat import install_runtime_compat
+            install_runtime_compat()
 
         batch_size = int(batch_size)
         if batch_size != 1:
@@ -153,7 +162,7 @@ class LLaDA(LM):
         if prefix_selector not in {"raw_l1", "hadamard_qk", "adamas", "qk"}:
             raise ValueError(f"Unsupported prefix selector: {prefix_selector!r}")
         if prefix_selector != "raw_l1":
-            import src.sparse.sparse_ops as sparse
+            import src.reference.sparse.sparse_ops as sparse
 
             if prefix_selector == "adamas":
                 sparse._prefix_indices = sparse._adamas_prefix_indices
@@ -173,7 +182,7 @@ class LLaDA(LM):
         if self.method == "sparse":
             patch_method(
                 self.model,
-                method="sparse",
+                method=patch_name,
                 model_name=self.MODEL_NAME,
                 ratio=None if sparse_dlm_ratio is None else float(sparse_dlm_ratio),
                 top_k=None if sparse_dlm_top_k is None else int(sparse_dlm_top_k),
@@ -203,6 +212,7 @@ class LLaDA(LM):
                     prefix_min_prefix_length, int
                 ),
                 prefix_token_budget=int(prefix_token_budget),
+                prefix_strict_budget=_as_bool(prefix_strict_budget),
                 prefix_chunk_size=_optional_number(prefix_chunk_size, int),
                 prefix_share_layer_pairs=_as_bool(prefix_share_layer_pairs),
                 losa=sparse_enabled and _as_bool(losa),
@@ -215,31 +225,39 @@ class LLaDA(LM):
         elif self.method == "focus":
             patch_method(
                 self.model,
-                method="focus",
+                method=patch_name,
                 model_name=self.MODEL_NAME,
                 alpha=float(focus_alpha),
+                **({"moe_expert_patch": _as_bool(moe_expert_patch)}
+                   if self.implementation == "optimized" else {}),
             )
         elif self.method == "losa":
             patch_method(
                 self.model,
-                method="losa",
+                method=patch_name,
                 model_name=self.MODEL_NAME,
                 page_size=int(paper_losa_page_size),
                 token_budget=int(paper_losa_token_budget),
                 active_topk=int(paper_losa_active_topk),
                 gqa_mode=paper_losa_gqa_mode,
                 backend=paper_losa_backend,
+                **({"moe_expert_patch": _as_bool(moe_expert_patch)}
+                   if self.implementation == "optimized" else {}),
             )
         else:
-            patch_method(self.model, method="dense", model_name=self.MODEL_NAME)
+            patch_method(self.model, method=patch_name, model_name=self.MODEL_NAME,
+                         **({"moe_expert_patch": _as_bool(moe_expert_patch)}
+                            if self.implementation == "optimized" else {}))
 
         if (
             self.MODEL_NAME == "llada"
+            and self.implementation == "reference"
             and self.method != "sparse"
             and _as_bool(moe_expert_patch)
         ):
             patch_moe_experts(self.model)
-        eval_logger.info("Applied evaluation method=%s", self.method)
+        eval_logger.info("Applied evaluation method=%s implementation=%s patch=%s",
+                         self.method, self.implementation, patch_name)
 
         self.model_type = self.MODEL_NAME
         self.batch_size_per_gpu = batch_size
@@ -286,7 +304,8 @@ class LLaDA(LM):
 
     def get_model_info(self):
         """Expose generation throughput in the aggregated lm-eval result."""
-        return {"method": self.method, **self._generation_stats}
+        return {"method": self.method, "implementation": self.implementation,
+                **self._generation_stats}
 
     def apply_chat_template(
         self, chat_history, add_generation_prompt: bool = True

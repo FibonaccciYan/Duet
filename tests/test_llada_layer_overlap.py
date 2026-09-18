@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import torch
 
-from scripts.overlap.llada_layer_overlap import (
+from scripts.original.overlap.llada_layer_overlap import (
     block_attention_mask,
     layer_logits,
     selector_mask,

@@ -9,7 +9,7 @@ import unittest
 import torch
 from torch.nn import functional as F
 
-from src.focus.model import focus_forward
+from src.reference.focus.model import focus_forward
 
 
 class FocusSDAROfficialModelTest(unittest.TestCase):

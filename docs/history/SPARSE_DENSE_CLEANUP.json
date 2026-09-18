@@ -1,0 +1,62 @@
+{
+  "protected_hashes": {
+    "src/sparse/sparse_ops.py": "1f079e13e11fda76691a0b991873e8a1cdb2d6375dd4b1b12a8d4b495f23f8a3",
+    "src/sparse/sdar_patch.py": "6115db54684f25d103a6eec3aa378402e25335dad3fc461fdad1bd013dd7b8ac",
+    "src/sparse/triton_kernels.py": "dce6baf38770749a5b0adedd59fd9fdb5e79870cca121705c2bda10e8f678981",
+    "src/sparse/llada_patch.py": "34f8c6fab86d53b279bdb66654bf39354ba660628c0ec54c913ef30b81861d5c",
+    "src/sparse/api.py": "434ba7ea6139bcb0b11686cf4641f1990ed244fc12b6cb7c56699f33390c6d74",
+    "src/sparse/__init__.py": "32723b145f5490d967567bb869203ade1ab152690dba089b9e8523bee6d66f7f",
+    "src/sparse/config.py": "68ad46069cccba42fca0e642102cbc666402d98ce9d82bf9a0fdaed4b7118b0f",
+    "src/losa/operators.py": "41b47efe0725721801193651b2080c97a3e99609192e17d84ec3986c2fd29263",
+    "src/losa/attention_patch.py": "c00a07361a64605b6198cbafd602eafdcf922a0df828bec53cc49d08c87dcad2",
+    "src/losa/generation.py": "b50724f31a57a3dacb3731a48a46f29fec7a02a4935d2147c244dde801cc4a9f",
+    "src/losa/triton_ops.py": "6990cdb8f61a9302a0502c29cafc7dfb36c9a30de713e212de7c35f9fc7660d0",
+    "src/losa/api.py": "d1fd98c49ebb47e6bb57182f93fe4b93f99fd7266961bdd007e09fea776e9a7b",
+    "src/losa/__init__.py": "149357e8f3988e72c92b47fca2b8fc6d9cd3a95a0af651372e2f871ccbeb86a8",
+    "src/losa/moe_patch.py": "eead3d806b3909bb3c578cc65450153704dca306a9920b90f4b9834432593d67",
+    "src/losa_v6/replay.py": "e907c8c1079a5b069825c4cd42aabd40d09cba02489f658a71b4d43b59c03e67",
+    "src/losa_v6/shared_exact.py": "f0b29ec8c3847989fc7b059874ca77171ae108a87d25d54b583430db3ed0989d",
+    "src/losa_v6/shared_scalar.py": "69f650d8abd57d2fb83a452fd8d45b71d4ae047c9f3ca763ddde5954c2d332f7",
+    "src/losa_v6/operators.py": "8f48802cd0224e90bce9ea28df8411aa009dbf71f55a8996b82667e45e02c751",
+    "src/losa_v6/attention_patch.py": "938858d9705d360f03c884a220cd14ee644caedc877a5c2866961060b6954a3e",
+    "src/losa_v6/generation.py": "451d8e3cdbe012b6edfef64afe291b5b169d1d18ccc7a9d892fd4163a426c843",
+    "src/losa_v6/staged_attention.py": "1e29ec463f0c5b5dfbe80516c4eea6d1e55ac500f46bd93ebc3e11b90f93be76",
+    "src/losa_v6/shared_cuda.py": "79cd81668c8e808817974bda76b8c3a0b081d0ea8e99c2f06c29f74c9f941090",
+    "src/losa_v6/shared_vector.py": "bf2dd6fc7ab0e49daa5b7666a49b62a3dcaffd41a7994f0be655032f58ca49c1",
+    "src/losa_v6/shared_attention.py": "863a8befcaf3064809587c5e2347028ad87b484dcdf195ff013fb403010ee935",
+    "src/losa_v6/triton_ops.py": "85794f6addb7165ebb41e4ff9869d693e0f1b4dd720397ac09e31889df57b6d9",
+    "src/losa_v6/shared_pipeline.py": "b6c821608019e7a7895e03889548699bbaca767a354b12cb3684b43d23053617",
+    "src/losa_v6/shared_ordered.py": "3fb3b4ce6395de8af820a7d1a406382c9bff7252c749708563e1833a01fc4f08",
+    "src/losa_v6/api.py": "3b43fe935a7852621bccaac9e757f8d5d2323a8179200bf2495856fab66e2c42",
+    "src/losa_v6/workspace.py": "5c7174d833334dd7c52913fb4e2f2c830bc392f48a933e32e5d715518c949152",
+    "src/losa_v6/__init__.py": "38c418cab7e8f69ba76dc955aea1403deb860672a3e6ce48a88bda6cbc3d63c6",
+    "src/losa_v6/state.py": "c4ce3451c488254ae7dec3ae5c5599b13f08880557b1e861f828b40c5dd77dea",
+    "src/losa_v6/attention_ops.py": "ee4a014bc4991b06a82030bdcf49dc8e22d29e036c278413f5801ced41ff1528",
+    "src/losa_v6/graph.py": "a6c877f7cc5c8c6452cfc721e8da0e3f3c31301b616b0f0458a06afa1f1ad42f",
+    "src/focus/generation.py": "e62c044d7cc74dffb8244835568d340e4eae0d136e7a257219250d1e23edaec3",
+    "src/focus/algorithm.py": "56bfbd5d808a644c02ef07e10364f4939997e09ac817daf2a2287fcb7a29849f",
+    "src/focus/api.py": "1cf59ae3add287f1233624b5374356dfe7549bcc370e3e7e94d93ced7c02d97b",
+    "src/focus/__init__.py": "5c2bef867dd45fa8f44fb280c672761018835465fc86cc366b7b771d6e0937bf",
+    "src/focus/model.py": "7267c9430392c67fe5b915800e715c8746ae7f9221a5c92916251dd94b159885",
+    "src/focus_v8/prefill.py": "8f291b62cfb1b5055e78e8905102eda8440cce9d9812c85cd75cf563e4c933ff",
+    "src/focus_v8/generation.py": "a7a3a66f69b29e506170ba39f1f66bff13405446eda95980f955a8e2d28ddf69",
+    "src/focus_v8/algorithm.py": "ba436aba10f061dfab7bd6ac20683f64acabd78d4fde2d33460344d637d5ab45",
+    "src/focus_v8/backend.py": "eca64ea9d3cff9ddc15fd5052023deb4ea6b761826259629178dd9a6f573c6a7",
+    "src/focus_v8/api.py": "75db703e155e3114b035b922c37e064c70fbf5c9acd1255a5caec96155fd489b",
+    "src/focus_v8/__init__.py": "f4338d2a96cb4091d0ce9abc4b8359a80ca4562c3156aa6ad12ad8161669f509",
+    "src/focus_v8/model.py": "83d96fa1a8bdd2e1a979c154bc4c565cd2be782d9276b57289d0cc441ecaa1b9",
+    "src/focus_v8/compat.py": "ea04127abf62a272bbbad9b1c5e4a8df0f8d43ef0c0b5a46d8fd00daaa050e6d"
+  },
+  "retained": [
+    "src/sparse",
+    "src/sparse_v3",
+    "src/dense_v3"
+  ],
+  "compatibility_only": [
+    "src/dense"
+  ],
+  "removed": [
+    "src/sparse_v2",
+    "src/dense_v2"
+  ]
+}

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.losa.operators import (
+from src.reference.losa.operators import (
     GQAMode,
     KVHeadUnion,
     LoSAPrefixState as LoSAState,

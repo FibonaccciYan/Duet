@@ -6,12 +6,12 @@ from unittest import mock
 import torch
 from transformers.cache_utils import DynamicCache
 
-from src.sparse.sparse_ops import (
+from src.reference.sparse.sparse_ops import (
     _apply_rotary,
     _block_attention_output_lse,
     _new_losa_state,
 )
-from src.sparse.sdar_patch import (
+from src.reference.sparse.sdar_patch import (
     _sdar_attention_forward,
     _sdar_losa_attention_forward,
     _project_qkv,
@@ -101,7 +101,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         cache = DynamicCache.from_legacy_cache(((prefix, prefix),))
         hidden = torch.zeros(1, 2, 2)
         with mock.patch(
-            "src.sparse.sdar_patch.F.scaled_dot_product_attention",
+            "src.reference.sparse.sdar_patch.F.scaled_dot_product_attention",
             side_effect=lambda q, k, v, **kw: torch.zeros_like(q),
         ) as sdpa:
             _sdar_attention_forward(
@@ -213,7 +213,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             prefix_sparse=True,
             prefix_min_prefix_length=4,
         )
-        with mock.patch("src.sparse.sdar_patch._compact_prefix_cache") as compact:
+        with mock.patch("src.reference.sparse.sdar_patch._compact_prefix_cache") as compact:
             model.generate(
                 inputs=torch.tensor([[7, 8, 9]]),
                 gen_length=4,
@@ -250,11 +250,11 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         self.assertIs(layer.self_attn._sdar_losa_model_ref(), model)
 
     @mock.patch(
-        "src.sparse.sdar_patch._attention_output_lse",
+        "src.reference.sparse.sdar_patch._attention_output_lse",
         side_effect=_block_attention_output_lse,
     )
     @mock.patch(
-        "src.sparse.sparse_ops.losa_query_delta",
+        "src.reference.sparse.sparse_ops.losa_query_delta",
         side_effect=lambda query, *_args, **_kwargs: torch.zeros(query.shape[2]),
     )
     def test_losa_full_active_budget_matches_dense_attention(
@@ -476,7 +476,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         )
         input_ids = torch.tensor([[1, 15]])
         with mock.patch(
-            "src.sparse.sdar_patch._select_positions",
+            "src.reference.sparse.sdar_patch._select_positions",
             return_value=None,
         ) as select_positions:
             _sparse_cached_forward(
@@ -508,7 +508,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
 
         norm_mock.reset_mock()
         with mock.patch(
-            "src.sparse.sdar_patch._select_positions",
+            "src.reference.sparse.sdar_patch._select_positions",
             return_value=None,
         ) as select_positions:
             _sparse_cached_forward(
@@ -567,7 +567,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         )
         input_ids = torch.tensor([[1, 15, 15]])
         with mock.patch(
-            "src.sparse.sdar_patch._select_positions",
+            "src.reference.sparse.sdar_patch._select_positions",
             return_value=torch.tensor([0, 2]),
         ):
             logits, logit_positions = _sparse_cached_forward(
@@ -586,7 +586,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
         torch.testing.assert_close(logits, torch.tensor([[[21.0], [22.0]]]))
 
         with mock.patch(
-            "src.sparse.sdar_patch._select_positions",
+            "src.reference.sparse.sdar_patch._select_positions",
             return_value=torch.tensor([0, 2]),
         ):
             deep_logits, deep_positions = _sparse_cached_forward(
@@ -655,7 +655,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             ),
         )
         with mock.patch(
-            "src.sparse.sdar_patch._select_positions",
+            "src.reference.sparse.sdar_patch._select_positions",
             return_value=torch.tensor([0, 2]),
         ):
             _sparse_cached_forward(
@@ -722,7 +722,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             return logits, positions
 
         with mock.patch(
-            "src.sparse.sdar_patch._sparse_cached_forward",
+            "src.reference.sparse.sdar_patch._sparse_cached_forward",
             side_effect=sparse_forward,
         ) as sparse:
             output = model.generate(
@@ -754,7 +754,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
             return logits, positions
 
         with mock.patch(
-            "src.sparse.sdar_patch._sparse_cached_forward",
+            "src.reference.sparse.sdar_patch._sparse_cached_forward",
             side_effect=sparse_forward,
         ) as sparse:
             model.generate(
@@ -776,7 +776,7 @@ class SDARBlockDiffusionPatchTest(unittest.TestCase):
 
         model = patch_model(_FakeSDAR(), query_sparse=True, refresh_step=-2)
         with mock.patch(
-            "src.sparse.sdar_patch._sparse_cached_forward",
+            "src.reference.sparse.sdar_patch._sparse_cached_forward",
             side_effect=sparse_forward,
         ) as sparse:
             model.generate(
