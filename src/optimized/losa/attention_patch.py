@@ -108,6 +108,8 @@ def _run_losa_attention(
         previous_state=previous_state,
         fused_state=bool(context.get("fused_state", True)),
         shared_kv=bool(getattr(model, "_losa_optimized_shared_kv", False)),
+        kv_stats_counts=(context["kv_stats"].layer_views[int(attention.layer_idx)]
+                         if context.get("kv_stats") is not None else None),
     )
     context["states"][key] = result.next_state
     # The prefix is immutable for the lifetime of this block's states.

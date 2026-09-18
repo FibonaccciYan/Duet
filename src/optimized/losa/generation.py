@@ -242,6 +242,7 @@ def paper_losa_context(
     backend,
     trace_detail,
     fused_state=False,
+    kv_stats=None,
 ):
     trace = []
     model._paper_losa_context = {
@@ -255,6 +256,7 @@ def paper_losa_context(
         "trace_detail": bool(trace_detail),
         "fused_state": bool(fused_state),
         "trace": trace,
+        "kv_stats": kv_stats,
     }
     try:
         yield trace
@@ -277,8 +279,14 @@ def prefix_cache_view(prefix_cache):
     return cache
 
 
-def model_forward(model, family, input_ids, attention_mask, position_ids, *, prefix_cache=(), losa_context_kwargs=None, store_kv=True):
+def model_forward(model, family, input_ids, attention_mask, position_ids, *, prefix_cache=(), losa_context_kwargs=None, store_kv=True, kv_stats_phase=None):
     from .replay import run
+    collector = getattr(model, "_losa_kv_stats", None)
+    if collector is not None:
+        return collector.forward(
+            run, _eager_model_forward, model, family, input_ids, attention_mask, position_ids,
+            prefix_cache=prefix_cache, losa_context_kwargs=losa_context_kwargs,
+            store_kv=store_kv, kv_stats_phase=kv_stats_phase)
     return run(_eager_model_forward, model, family, input_ids, attention_mask, position_ids,
                prefix_cache=prefix_cache, losa_context_kwargs=losa_context_kwargs, store_kv=store_kv)
 
@@ -406,10 +414,16 @@ def block_diffusion_generate(
     losa_backend="auto",
     losa_trace_detail=False,
     losa_fused_state=True,
+    kv_stats=False,
+    kv_stats_chunk_size=1024,
 ):
     model._losa_optimized_graph = None
     model._losa_optimized_primed_states = None
     model._losa_optimized_graph_stats = dict(captures=0, capture_seconds=0., replays=0, priming_steps=0)
+    model._losa_kv_stats = None
+    if kv_stats:
+        from .kv_stats import KVStats
+        model._losa_kv_stats = KVStats(model, family, block_length, kv_stats_chunk_size)
     if inputs.shape[0] != 1:
         raise ValueError("runtime currently supports batch_size=1")
     if use_losa:
@@ -433,6 +447,8 @@ def block_diffusion_generate(
     if gen_length < 0:
         raise ValueError("gen_length must be non-negative")
     if gen_length == 0:
+        if model._losa_kv_stats is not None:
+            model._losa_kv_stats.completed = True
         return SimpleNamespace(tokens=input_ids[:, :0], trace=[])
     if family == "llada":
         if minimal_topk <= 0:
@@ -619,6 +635,7 @@ def block_diffusion_generate(
             position_ids[:, block_start:block_end],
             prefix_cache=prefix_cache,
             store_kv=True,
+            kv_stats_phase="finalize",
         )
         persistent_prefix_cache = final_outputs.past_key_values.to_legacy_cache()
 
@@ -634,4 +651,6 @@ def block_diffusion_generate(
         eos_positions = (generated[0] == int(eos_id)).nonzero(as_tuple=True)[0]
         if eos_positions.numel():
             generated = generated[:, : int(eos_positions[0].item()) + 1]
+    if model._losa_kv_stats is not None:
+        model._losa_kv_stats.completed = True
     return SimpleNamespace(tokens=generated, trace=traces)

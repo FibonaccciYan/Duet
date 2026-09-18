@@ -186,6 +186,7 @@ def focus_optimized_forward(
     append_cache: DynamicCache | None = None,
     block_cache: DynamicCache | None = None,
     attention_backend: str = "sdpa",
+    required_query_positions: torch.Tensor | None = None,
 ) -> FocusOptimizedResult:
     """Run one denoising forward with FOCUS eviction after layer one."""
 
@@ -282,6 +283,9 @@ def focus_optimized_forward(
                 average_decoded_tokens=average_decoded_tokens,
                 block_progress=block_progress,
             )
+            if required_query_positions is not None:
+                from .sequential import retain_required
+                selected_positions = retain_required(selected_positions, required_query_positions)
             # As in the reference implementation, eviction applies to layer
             # one's output and therefore only affects layers two and later.
             hidden_states = _compact_rows(hidden_states, selected_positions)

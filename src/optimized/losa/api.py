@@ -40,6 +40,8 @@ class LoSAOptimizedRuntime:
     shared_kv: bool = False
     graph_replay: bool = True
     verify_graph: bool = False
+    kv_stats: bool = False
+    kv_stats_chunk_size: int = 1024
     model: Any | None = field(init=False, default=None)
     tokenizer: Any | None = field(init=False, default=None)
     moe_patch_report: Any | None = field(init=False, default=None)
@@ -93,13 +95,21 @@ class LoSAOptimizedRuntime:
             losa_backend=self.losa_backend,
             losa_trace_detail=self.losa_trace_detail,
             losa_fused_state=self.losa_fused_state,
+            kv_stats=kwargs.pop("kv_stats", self.kv_stats),
+            kv_stats_chunk_size=kwargs.pop("kv_stats_chunk_size", self.kv_stats_chunk_size),
             **kwargs,
         )
+
+    def export_kv_stats(self, output_dir=None, include_heads=False):
+        """Export the last request's statistics; returns None when disabled."""
+        from .kv_stats import export_kv_stats
+        return export_kv_stats(self.model, output_dir, include_heads)
 
 
 def patch_model(model, model_name="auto", *, page_size=16, token_budget=256,
                 active_topk=5, gqa_mode="group_mean", backend="auto",
-                moe_expert_patch=True, graph_replay=True, **kwargs):
+                moe_expert_patch=True, graph_replay=True,
+                kv_stats=False, kv_stats_chunk_size=1024, **kwargs):
     """Bind the optimized runtime to a model already loaded by an evaluator."""
     import types
     family = {"llada2_moe": "llada", "sdar": "sdar"}.get(model.config.model_type)
@@ -134,7 +144,10 @@ def patch_model(model, model_name="auto", *, page_size=16, token_budget=256,
             self, family=family, inputs=inputs, use_losa=True,
             losa_page_size=page_size, losa_token_budget=token_budget,
             losa_active_topk=active_topk, losa_gqa_mode=gqa_mode,
-            losa_backend=backend, losa_fused_state=True, **options).tokens
+            losa_backend=backend, losa_fused_state=True,
+            kv_stats=options.pop("kv_stats", kv_stats),
+            kv_stats_chunk_size=options.pop("kv_stats_chunk_size", kv_stats_chunk_size),
+            **options).tokens
     model.generate = types.MethodType(torch.inference_mode()(generate), model)
     return model
 

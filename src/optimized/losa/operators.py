@@ -324,6 +324,7 @@ def losa_optimized_attention_step(
     previous_state: OptimizedLayerState | None = None,
     fused_state: bool = True,
     shared_kv: bool = False,
+    kv_stats_counts: torch.Tensor | None = None,
 ) -> OptimizedAttentionResult:
     validate_qkv(query, k_prefix, v_prefix)
     validate_qkv(query, k_block, v_block)
@@ -406,6 +407,9 @@ def losa_optimized_attention_step(
                 num_kv_heads=num_kv_heads,
                 group_size=group_size,
                 workspace=workspace,
+                stats_counts=kv_stats_counts,
+                stats_page_size=page_size,
+                stats_prefix_length=metadata.prefix_length,
             )
         else:
             compact_pages = compact_selected_pages(
@@ -414,6 +418,10 @@ def losa_optimized_attention_step(
                 num_kv_heads=num_kv_heads,
                 group_size=group_size,
             )
+            if kv_stats_counts is not None:
+                from .kv_stats import count_compact_tokens
+                kv_stats_counts.copy_(count_compact_tokens(
+                    compact_pages, page_size, metadata.prefix_length))
         if triton_enabled and shared_kv and dim == 128 and page_size == 16:
             from .shared_pipeline import attention
             prefix_output, prefix_lse = attention(

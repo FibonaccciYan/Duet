@@ -372,6 +372,28 @@ if triton is not None:
         )
 
 
+    @triton.jit
+    def _compact_page_mask_stats_kernel(
+        page_mask_ptr, output_ptr, counts_ptr, num_pages, max_pages,
+        stride_mh, stride_mp, stride_oh, stride_op, prefix_length,
+        PAGE_SIZE: tl.constexpr, BLOCK_P: tl.constexpr,
+    ):
+        kv_head = tl.program_id(0)
+        pages = tl.arange(0, BLOCK_P)
+        valid_page = pages < num_pages
+        selected = tl.load(
+            page_mask_ptr + kv_head * stride_mh + pages * stride_mp,
+            mask=valid_page, other=0,
+        ).to(tl.int32)
+        position = tl.cumsum(selected, axis=0) - 1
+        store_mask = valid_page & (selected != 0) & (position < max_pages)
+        tl.store(output_ptr + kv_head * stride_oh + position * stride_op,
+                 pages, mask=store_mask)
+        valid_tokens = tl.minimum(PAGE_SIZE, tl.maximum(prefix_length - pages * PAGE_SIZE, 0))
+        count = tl.sum(tl.where(store_mask, valid_tokens, 0), axis=0)
+        tl.store(counts_ptr + kv_head, count)
+
+
 def locality_scores_triton(
     query: torch.Tensor,
     previous_query: torch.Tensor,
@@ -613,6 +635,9 @@ def compact_selected_pages_triton(
     num_kv_heads: int | None = None,
     group_size: int | None = None,
     workspace=None,
+    stats_counts=None,
+    stats_page_size=16,
+    stats_prefix_length=None,
 ) -> torch.Tensor:
     if not triton_available():
         raise RuntimeError("Triton CUDA support is unavailable")
@@ -657,6 +682,19 @@ def compact_selected_pages_triton(
     block_p = triton.next_power_of_2(num_prefix_pages)
     if block_p > 65536:
         raise ValueError("union Triton supports at most 65536 prefix pages")
+    if stats_counts is not None:
+        if (stats_counts.shape != (num_kv_heads,) or stats_counts.dtype != torch.int32
+                or stats_counts.device != selected_pages.device or not stats_counts.is_contiguous()):
+            raise ValueError("statistics output must be contiguous int32 [Hkv] on the same device")
+        if (stats_prefix_length is None or stats_prefix_length <= 0 or stats_page_size <= 0
+                or triton.cdiv(stats_prefix_length, stats_page_size) != num_prefix_pages):
+            raise ValueError("statistics prefix/page geometry mismatch")
+        _compact_page_mask_stats_kernel[(num_kv_heads,)](
+            page_mask, output, stats_counts, num_prefix_pages, max_pages,
+            page_mask.stride(0), page_mask.stride(1), output.stride(0), output.stride(1),
+            stats_prefix_length, PAGE_SIZE=stats_page_size, BLOCK_P=block_p, num_warps=8)
+        return output
+    # Preserve the original kernel and launch when statistics are disabled.
     _compact_page_mask_kernel[(num_kv_heads,)](
         page_mask,
         output,

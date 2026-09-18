@@ -12,11 +12,19 @@ from src.reference.losa.generation import get_num_transfer_tokens, sample_with_c
 from src.reference.focus.algorithm import FocusDecodeState
 from src.reference.focus.generation import (
     _selected_llada_transfer,
-    _selected_sdar_transfer,
+    _selected_sdar_transfer as _confidence_sdar_transfer,
 )
 
 from .model import focus_optimized_forward
 from .backend import resolve_attention_backend
+from .sequential import required_positions, transfer_sequential
+
+
+def _selected_sdar_transfer(*args, strategy, **kwargs):
+    """Retain the profiling hook name and original confidence paths."""
+    if strategy == "sequential":
+        return transfer_sequential(*args, strategy=strategy, **kwargs)
+    return _confidence_sdar_transfer(*args, strategy=strategy, **kwargs)
 
 
 @torch.inference_mode()
@@ -44,6 +52,14 @@ def focus_optimized_generate(
     eos_id=None,
 ):
     attention_backend = resolve_attention_backend(family, attention_backend)
+    if family == "sdar" and remasking_strategy not in {
+        "sequential", "low_confidence_dynamic", "low_confidence_static"
+    }:
+        raise ValueError(f"Unsupported FOCUS SDAR strategy: {remasking_strategy}")
+    if family == "sdar" and remasking_strategy == "sequential" and not (
+        1 <= int(steps) <= int(block_length)
+    ):
+        raise ValueError("SDAR sequential requires 1 <= steps <= block_length")
     if inputs.shape[0] != 1:
         raise ValueError("optimized FOCUS currently requires batch_size=1")
     if alpha < 1:
@@ -114,6 +130,10 @@ def focus_optimized_generate(
             if family == "sdar" and (step >= steps or not bool(active.any().item())):
                 break
 
+            sequential_kwargs = {}
+            if family == "sdar" and remasking_strategy == "sequential":
+                sequential_kwargs["required_query_positions"] = required_positions(
+                    active, transfer_counts[step])
             result = focus_optimized_forward(
                 model,
                 family=family,
@@ -125,6 +145,7 @@ def focus_optimized_generate(
                 average_decoded_tokens=state.average_decoded_tokens,
                 block_progress=state.block_progress,
                 block_cache=block_cache,
+                **sequential_kwargs,
             )
             selected = result.positions
             state.block_progress = max(state.block_progress, int(selected.max().item()))
