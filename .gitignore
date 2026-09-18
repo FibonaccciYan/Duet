@@ -223,3 +223,10 @@ results/
 .hf_cache/
 
 third_party/
+
+# Local macOS metadata
+.DS_Store
+._*
+
+# Local run archives and verification outputs (source docs live in docs/)
+/artifacts/

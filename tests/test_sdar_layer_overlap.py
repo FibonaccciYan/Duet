@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import torch
 
-from scripts.overlap.sdar_layer_overlap import (
+from scripts.original.overlap.sdar_layer_overlap import (
     candidate_mask,
     layer_logits,
     overlap_metrics,

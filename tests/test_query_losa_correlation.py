@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import torch
 
-from scripts.legacy.llada_query_losa_correlation import summarize_records
-from src.sparse.sparse_ops import (
+from scripts.original.legacy.llada_query_losa_correlation import summarize_records
+from src.reference.sparse.sparse_ops import (
     _losa_active_indices,
     _losa_key_energy,
     _new_losa_state,
@@ -80,7 +80,7 @@ class QueryLosaCorrelationTest(unittest.TestCase):
         state["valid"][0, [0, 2]] = True
 
         with patch(
-            "src.sparse.sparse_ops.losa_query_delta",
+            "src.reference.sparse.sparse_ops.losa_query_delta",
             return_value=torch.tensor([0.0, 1.0]),
         ):
             active, valid, delta = _losa_active_indices(
@@ -103,7 +103,7 @@ class QueryLosaCorrelationTest(unittest.TestCase):
         state["fully_valid"] = True
 
         with patch(
-            "src.sparse.sparse_ops.losa_query_delta",
+            "src.reference.sparse.sparse_ops.losa_query_delta",
             return_value=torch.tensor([0.1, 0.9, 0.2]),
         ):
             active, valid, delta = _losa_active_indices(
@@ -127,7 +127,7 @@ class QueryLosaCorrelationTest(unittest.TestCase):
         state["key_energy"] = torch.tensor([[0.01, 10.0]])
 
         with patch(
-            "src.sparse.sparse_ops.losa_query_delta",
+            "src.reference.sparse.sparse_ops.losa_query_delta",
             return_value=torch.tensor([0.04, 10.0]),
         ):
             active = _losa_active_indices(

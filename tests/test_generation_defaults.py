@@ -63,17 +63,17 @@ class GenerationDefaultsTest(unittest.TestCase):
 
     def test_focus_defaults(self):
         focus = _defaults(
-            _find_function("src/focus/generation.py", "focus_generate")
+            _find_function("src/reference/focus/generation.py", "focus_generate")
         )
-        focus_v2 = _defaults(
-            _find_function("src/focus_v2/generation.py", "focus_v2_generate")
+        focus_optimized = _defaults(
+            _find_function("src/optimized/focus/generation.py", "focus_optimized_generate")
         )
 
         self.assertEqual(focus["editing_threshold"], 0.5)
-        self.assertEqual(focus_v2["editing_threshold"], 0.5)
+        self.assertEqual(focus_optimized["editing_threshold"], 0.5)
         for relative_path in (
-            "src/focus/generation.py",
-            "src/focus_v2/generation.py",
+            "src/reference/focus/generation.py",
+            "src/optimized/focus/generation.py",
         ):
             source = (ROOT / relative_path).read_text(encoding="utf-8")
             self.assertIn(
@@ -82,8 +82,8 @@ class GenerationDefaultsTest(unittest.TestCase):
 
     def test_losa_defaults(self):
         for relative_path in (
-            "src/losa/generation.py",
-            "src/losa_v2/generation.py",
+            "src/reference/losa/generation.py",
+            "src/optimized/losa/generation.py",
         ):
             defaults = _defaults(
                 _find_function(relative_path, "block_diffusion_generate")
@@ -93,19 +93,19 @@ class GenerationDefaultsTest(unittest.TestCase):
 
         self.assertEqual(
             _annotated_default(
-                "src/losa/api.py", "LoSARuntime", "losa_token_budget"
+                "src/reference/losa/api.py", "LoSARuntime", "losa_token_budget"
             ),
             256,
         )
         self.assertEqual(
             _annotated_default(
-                "src/losa_v2/api.py", "LoSAV2Runtime", "losa_token_budget"
+                "src/optimized/losa/api.py", "LoSAOptimizedRuntime", "losa_token_budget"
             ),
             256,
         )
         for relative_path in (
-            "src/losa/generation.py",
-            "src/losa_v2/generation.py",
+            "src/reference/losa/generation.py",
+            "src/optimized/losa/generation.py",
         ):
             source = (ROOT / relative_path).read_text(encoding="utf-8")
             self.assertIn(
@@ -116,10 +116,10 @@ class GenerationDefaultsTest(unittest.TestCase):
 
     def test_sparse_direct_patch_defaults_match_public_config(self):
         llada_patch = _defaults(
-            _find_function("src/sparse/llada_patch.py", "patch_llada_model")
+            _find_function("src/reference/sparse/llada_patch.py", "patch_llada_model")
         )
         sdar_selector = _defaults(
-            _find_function("src/sparse/sdar_patch.py", "_select_positions")
+            _find_function("src/reference/sparse/sdar_patch.py", "_select_positions")
         )
 
         self.assertEqual(llada_patch["ratio"], 0.7)

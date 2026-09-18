@@ -1,0 +1,18 @@
+[
+  {
+    "family": "llada",
+    "backend": "flash",
+    "generated_tokens": 256,
+    "steps": 29,
+    "matches_saved_tokens": true,
+    "shared_prefill_bitwise": true
+  },
+  {
+    "family": "sdar",
+    "backend": "sdpa",
+    "generated_tokens": 256,
+    "steps": 44,
+    "matches_saved_tokens": true,
+    "shared_prefill_bitwise": true
+  }
+]

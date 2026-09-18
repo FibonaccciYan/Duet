@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from scripts.quality.longbench_quality import (
+from scripts.original.quality.longbench_quality import (
     GEN_LENGTHS,
     LLADA_EDITING_THRESHOLD,
     LLADA_THRESHOLD,

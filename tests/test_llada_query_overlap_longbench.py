@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.paper.llada_query_recall_longbench import summarize_rows
+from scripts.original.paper.llada_query_recall_longbench import summarize_rows
 
 
 class SummaryTest(unittest.TestCase):

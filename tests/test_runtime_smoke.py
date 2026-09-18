@@ -12,20 +12,20 @@ import torch
 import src.runtime as runtime
 from src.dense import patch_model as patch_dense_model
 
-from src.focus import (
+from src.reference.focus import (
     attention_importance,
     patch_model as patch_focus_model,
     select_retained_positions,
 )
-from src.focus.model import focus_forward
+from src.reference.focus.model import focus_forward
 from src.kernels.losa import GQAMode, adapted_quest_attention_step, losa_attention_step
-from src.losa.generation import transfer_llada
+from src.reference.losa.generation import transfer_llada
 from src.runtime import load_runtime, patch_method
 
 
 class IntegratedRuntimeSmokeTest(unittest.TestCase):
     def test_runtime_dispatch(self):
-        self.assertEqual(type(load_runtime("dense", family="llada")).__name__, "DenseRuntime")
+        self.assertEqual(type(load_runtime("dense", family="llada")).__name__, "DenseOptimizedRuntime")
         self.assertEqual(type(load_runtime("losa", family="llada")).__name__, "LoSARuntime")
         self.assertEqual(type(load_runtime("focus", family="llada")).__name__, "FocusRuntime")
 
@@ -59,8 +59,14 @@ class IntegratedRuntimeSmokeTest(unittest.TestCase):
         model = types.SimpleNamespace(
             config=types.SimpleNamespace(model_type="llada2_moe")
         )
-        with patch("src.sparse.patch_model") as patch_sparse:
+        with patch("src.reference.sparse.patch_model") as patch_sparse, \
+             patch("src.optimized.dense.attention_backend.install") as backend, \
+             patch("src.kernels.optimized.small_moe.install_small_moe") as moe, \
+             patch("src.kernels.optimized.prefix_cache_view.install") as cache:
             patch_dense_model(model, model_name="llada", moe_expert_patch=True)
+        backend.assert_called_once_with(model, "llada")
+        moe.assert_called_once_with(model)
+        cache.assert_called_once_with(model)
         patch_sparse.assert_called_once_with(
             model,
             model_name="llada",
@@ -163,7 +169,7 @@ class IntegratedRuntimeSmokeTest(unittest.TestCase):
         torch.testing.assert_close(retained.logits, dense.logits, atol=1e-6, rtol=1e-5)
 
         with patch(
-            "src.focus.model.select_retained_positions",
+            "src.reference.focus.model.select_retained_positions",
             return_value=torch.tensor([1, 3]),
         ):
             evicted = focus_forward(
@@ -243,15 +249,15 @@ class IntegratedRuntimeSmokeTest(unittest.TestCase):
     def test_integrated_runtimes_have_no_sibling_workspace_dependency(self):
         root = Path(__file__).resolve().parents[1]
         sources = [
-            root / "src/losa/api.py",
-            root / "src/losa/attention_patch.py",
-            root / "src/losa/generation.py",
-            root / "src/losa/operators.py",
-            root / "src/losa/triton_ops.py",
-            root / "src/focus/api.py",
-            root / "src/focus/algorithm.py",
-            root / "src/focus/generation.py",
-            root / "src/focus/model.py",
+            root / "src/reference/losa/api.py",
+            root / "src/reference/losa/attention_patch.py",
+            root / "src/reference/losa/generation.py",
+            root / "src/reference/losa/operators.py",
+            root / "src/reference/losa/triton_ops.py",
+            root / "src/reference/focus/api.py",
+            root / "src/reference/focus/algorithm.py",
+            root / "src/reference/focus/generation.py",
+            root / "src/reference/focus/model.py",
         ]
         combined = "\n".join(path.read_text(encoding="utf-8") for path in sources)
         self.assertNotIn("losa_accuracy_prep", combined)

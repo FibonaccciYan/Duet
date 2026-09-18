@@ -2,7 +2,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from src.sparse import patch_model, resolve_model_family
+from src.reference.sparse import patch_model, resolve_model_family
 
 
 class SparseApiTest(unittest.TestCase):
@@ -11,9 +11,9 @@ class SparseApiTest(unittest.TestCase):
             config=types.SimpleNamespace(model_type="llada2_moe")
         )
         with patch(
-            "src.sparse.api.patch_llada_model"
+            "src.reference.sparse.api.patch_llada_model"
         ) as patch_llada, patch(
-            "src.sparse.api.patch_moe_experts"
+            "src.reference.sparse.api.patch_moe_experts"
         ) as patch_moe:
             patch_model(
                 model,
@@ -46,8 +46,8 @@ class SparseApiTest(unittest.TestCase):
     def test_api_routes_prefix_sparse_and_losa_to_sdar(self):
         model = types.SimpleNamespace(config=types.SimpleNamespace(model_type="sdar"))
         with patch(
-            "src.sparse.api.patch_sdar_model"
-        ) as patch_sdar, patch("src.sparse.api.patch_moe_experts") as patch_moe:
+            "src.reference.sparse.api.patch_sdar_model"
+        ) as patch_sdar, patch("src.reference.sparse.api.patch_moe_experts") as patch_moe:
             patch_model(
                 model,
                 model_name="sdar",

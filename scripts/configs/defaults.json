@@ -1,0 +1,57 @@
+{
+  "models": {
+    "llada21": "/data0/ysy/models/LLaDA2.1-mini",
+    "sdar": "/data0/ysy/models/SDAR-8B-Chat-b32"
+  },
+  "speed": {
+    "implementation": "optimized",
+    "contexts": [8192, 16384, 32768],
+    "samples": 80,
+    "warmups": 2,
+    "repeats": 3,
+    "gen_length": 256,
+    "block_length": 32,
+    "steps": 32,
+    "temperature": 0.0,
+    "seed": 42,
+    "eos_early_stop": false,
+    "llada_threshold": 0.7,
+    "llada_editing_threshold": 0.5,
+    "sdar_threshold": 0.95,
+    "sdar_remasking_strategy": "low_confidence_dynamic"
+  },
+  "longbench": {
+    "implementation": "reference",
+    "tasks": ["hotpotqa", "triviaqa", "narrativeqa", "qasper", "multifieldqa_en"],
+    "gen_lengths": {"hotpotqa": 32, "triviaqa": 32, "narrativeqa": 128, "qasper": 128, "multifieldqa_en": 64, "gov_report": 512},
+    "max_context_tokens": 32768,
+    "block_length": 32,
+    "steps": 32,
+    "seed": 42,
+    "eos_early_stop": true,
+    "llada_threshold": 0.7,
+    "llada_editing_threshold": 0.5,
+    "sdar_threshold": 0.95
+  },
+  "short": {
+    "implementation": "optimized",
+    "dense_tasks": ["gsm8k", "humaneval", "mmlu", "math"],
+    "other_tasks": ["gsm8k"],
+    "llada_gen_length": 16384,
+    "sdar_dense_gen_length": 4096,
+    "sdar_task_gen_lengths": {"gsm8k": 4096, "humaneval": 768, "mmlu": 128, "math": 512, "math500": 2048},
+    "mmlu_fewshot": 5,
+    "other_fewshot": 0,
+    "block_length": 32,
+    "steps": 32,
+    "temperature": 0.0,
+    "llada_threshold": 0.7,
+    "llada_editing_threshold": 0.5,
+    "sdar_threshold": 0.95,
+    "sdar_dense_remasking": "low_confidence_static",
+    "sdar_focus_remasking": "low_confidence_dynamic",
+    "sdar_other_remasking": "sequential",
+    "smoke_limit": 1,
+    "port": 12335
+  }
+}
