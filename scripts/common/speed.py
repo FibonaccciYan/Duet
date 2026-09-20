@@ -52,6 +52,7 @@ def run(c):
         "dense": {"exact_rope", "moe_expert_patch"},
         "sparse": {"ratio", "top_k", "selection_interval", "selection_layer",
                    "query_sparse", "prefix_sparse", "prefix_token_budget", "prefix_strict_budget",
+                   "prefix_rescreen_full_kv",
                    "exact_rope", "moe_expert_patch", "query_dense_threshold"},
         "losa": {"losa_gqa_mode", "losa_token_budget", "losa_page_size", "losa_active_topk",
                  "losa_backend", "losa_fused_state", "shared_kv", "graph_replay",
@@ -70,7 +71,10 @@ def run(c):
         model, tok = base.load_model_and_tokenizer(family, model_path=c["model_path"])
         patch = dict(moe_expert_patch=True)
         if method == "sparse":
-            patch.update(query_sparse=True, prefix_sparse=True, prefix_token_budget=256)
+            # Keep the formal speed protocol explicit: prefix sparsity is on,
+            # with the 256-token budget and no full-KV rescreening by default.
+            patch.update(query_sparse=True, prefix_sparse=True, prefix_token_budget=256,
+                         prefix_rescreen_full_kv=False)
         patch.update(overrides)
         base.patch_method(model, method + "_optimized", model_name=family, **patch)
         Clock = base.Clock

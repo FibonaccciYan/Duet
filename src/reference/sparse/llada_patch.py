@@ -845,6 +845,7 @@ def _block_cache_generate(self, *args, **kwargs):
                     else previous_prefix_indices
                 ),
                 previous_prefix_length,
+                selection_layer + 1,
             )
             previous_prefix_indices = prefix_indices
             previous_prefix_length = block_start

@@ -458,6 +458,7 @@ def _compact_prefix_cache(
     chunk_size,
     previous_indices=None,
     previous_length=0,
+    prefix_start_layer=0,
 ):
     family = "sdar" if model.config.model_type == "sdar" else "llada"
     strict = getattr(model.config, family + "_prefix_strict_budget", False)
@@ -490,6 +491,8 @@ def _compact_prefix_cache(
         and getattr(model.config, "sdar_prefix_share_layer_pairs", False)
         else 1
     )
+    if group_size == 2 and prefix_start_layer % 2:
+        group_size = 1
     cos, sin = model.model.rotary_emb(
         captured_queries[group_size - 1], block_position_ids
     )
@@ -498,6 +501,13 @@ def _compact_prefix_cache(
     thresholds = ADAMAS_BUCKET_THRESHOLDS.get(model.config.model_type)
     for start in range(0, len(prefix_cache), group_size):
         representative = min(start + group_size, len(prefix_cache)) - 1
+        if representative < prefix_start_layer:
+            for key, value in prefix_cache[start : start + group_size]:
+                compact_cache.append((key, value))
+                prefix_indices.append(
+                    torch.arange(prefix_length, device=key.device)
+                )
+            continue
         query = captured_queries[representative]
         if query is None:
             raise RuntimeError("Failed to capture a layer query during dense refresh")

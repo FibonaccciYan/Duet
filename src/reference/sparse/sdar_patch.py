@@ -702,6 +702,7 @@ def _block_diffusion_generate(self, *args, **kwargs):
                         else previous_prefix_indices
                     ),
                     previous_prefix_length,
+                    model.config.sdar_query_selection_layer + 1,
                 )
                 previous_prefix_length = block_start
             else:
