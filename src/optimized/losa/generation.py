@@ -385,6 +385,26 @@ def layerwise_cached_forward(
     return SimpleNamespace(logits=logits, past_key_values=cache), trace
 
 
+def _sdar_eos_ids(model, eos_id=None):
+    """Honor explicit overrides, otherwise use the checkpoint stop-token list."""
+    value = eos_id
+    if value is None:
+        value = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+        if value is None:
+            value = getattr(getattr(model, "config", None), "eos_token_id", None)
+    if value is None:
+        return ()
+    values = value if isinstance(value, (list, tuple)) else (value,)
+    return tuple(dict.fromkeys(int(v) for v in values))
+
+
+def _sdar_eos_positions(tokens, eos_ids):
+    mask = torch.zeros_like(tokens, dtype=torch.bool)
+    for token_id in eos_ids:
+        mask |= tokens == token_id
+    return mask.nonzero(as_tuple=True)[0]
+
+
 @torch.no_grad()
 def block_diffusion_generate(
     model,
@@ -442,6 +462,7 @@ def block_diffusion_generate(
             if isinstance(configured_eos, (list, tuple))
             else configured_eos or 156892
         )
+    sdar_eos_ids = _sdar_eos_ids(model, eos_id) if family == "sdar" else ()
     prompt_length = input_ids.shape[1]
     gen_length = int(gen_length)
     if gen_length < 0:
@@ -639,7 +660,12 @@ def block_diffusion_generate(
         )
         persistent_prefix_cache = final_outputs.past_key_values.to_legacy_cache()
 
-        if eos_early_stop and eos_id is not None:
+        if family == "sdar" and eos_early_stop and sdar_eos_ids:
+            generated_part = x[0, prompt_length:block_end]
+            if (generated_part == int(mask_id)).sum() == 0:
+                if _sdar_eos_positions(generated_part, sdar_eos_ids).numel():
+                    break
+        elif eos_early_stop and eos_id is not None:
             generated_part = x[0, prompt_length:block_end]
             if (generated_part == int(mask_id)).sum() == 0:
                 eos_positions = (generated_part == int(eos_id)).nonzero(as_tuple=True)[0]
@@ -647,7 +673,11 @@ def block_diffusion_generate(
                     break
 
     generated = x[:, prompt_length : prompt_length + gen_length]
-    if eos_early_stop and eos_id is not None:
+    if family == "sdar" and eos_early_stop and sdar_eos_ids:
+        eos_positions = _sdar_eos_positions(generated[0], sdar_eos_ids)
+        if eos_positions.numel():
+            generated = generated[:, : int(eos_positions[0].item()) + 1]
+    elif eos_early_stop and eos_id is not None:
         eos_positions = (generated[0] == int(eos_id)).nonzero(as_tuple=True)[0]
         if eos_positions.numel():
             generated = generated[:, : int(eos_positions[0].item()) + 1]
