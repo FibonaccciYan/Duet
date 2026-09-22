@@ -370,35 +370,12 @@ def _distance_prefix_indices(query, key, budget, chunk_size, *,
     return indices.sort().values
 
 
-def _qk_prefix_indices(query, key, token_budget):
-    """Select the same per-query union as Adamas using exact QK scores."""
-    prefix_length = key.shape[-2]
-    budget = min(int(token_budget), prefix_length)
-    if budget >= prefix_length:
-        return torch.arange(prefix_length, device=key.device)
-    if budget <= 0:
-        return torch.empty(0, dtype=torch.long, device=key.device)
-
-    batch_size, query_heads, query_length, head_dim = query.shape
-    key_heads = key.shape[1]
-    if batch_size != 1 or query_heads % key_heads:
-        raise ValueError("QK prefix selection requires batch_size=1 and valid GQA heads")
-    grouped_query = query.reshape(
-        key_heads, query_heads // key_heads * query_length, head_dim
-    )
-    scores = torch.bmm(grouped_query, key[0].transpose(1, 2)).reshape(
-        query_heads * query_length, prefix_length
-    )
-    local_budget = max(1, math.ceil(budget / scores.shape[0]))
-    query_indices = scores.topk(local_budget, dim=1).indices
-    indices = torch.unique(query_indices.flatten())
-    if indices.numel() < budget:
-        remaining_scores = scores.amax(dim=0).float()
-        remaining_scores[indices] = -torch.inf
-        indices = torch.cat(
-            (indices, remaining_scores.topk(budget - indices.numel()).indices)
-        )
-    return indices.sort().values
+def _qk_prefix_indices(query, key, token_budget, chunk_size=256,
+                       bucket_thresholds=None, strict_budget=False, selection_stats=None):
+    """QK selector oracle; candidate-local indices, full budget/statistics support."""
+    from .qk_prefix import prefix_indices
+    return prefix_indices(query, key, token_budget, chunk_size, bucket_thresholds,
+                          strict_budget, selection_stats)
 
 
 def _hadamard_qk_prefix_indices(query, key, token_budget):
@@ -434,18 +411,42 @@ def _raw_l1_prefix_indices(query, key, token_budget, *, strict_budget=False,
                                     strict_budget=strict_budget, selection_stats=selection_stats)
 
 
-def _prefix_indices(
-    query,
-    key,
-    token_budget,
-    chunk_size=256,
-    bucket_thresholds=None,
-    strict_budget=False,
-    selection_stats=None,
-):
-    """Select prefix tokens with exact L1 distance in the learned Q/K basis."""
-    return _raw_l1_prefix_indices(query, key, token_budget,
-                                 strict_budget=strict_budget, selection_stats=selection_stats)
+def _prefix_indices(query, key, token_budget, chunk_size=256, bucket_thresholds=None,
+                    strict_budget=False, selection_stats=None, *, selector="raw_l1"):
+    from .selector_config import validate_selector, SCORE_DEFINITIONS
+    validate_selector(selector)
+    if selector in ("qk", "qk_tc"):
+        result = _qk_prefix_indices(query, key, token_budget, chunk_size, bucket_thresholds,
+                                   strict_budget, selection_stats)
+        if selector == "qk_tc" and selection_stats is not None:
+            selection_stats.update(selector="qk_tc", execution_backend="qk_reference")
+        return result
+    if selector in ("adamas", "hadamard_qk"):
+        # Keep legacy transforms and arithmetic intact, but bind options privately:
+        # no global monkeypatch, so alternating models cannot leak selectors.
+        import types
+        original = _adamas_prefix_indices if selector == "adamas" else _hadamard_qk_prefix_indices
+        length = key.shape[-2]
+        budget = max(0, min(int(token_budget), length))
+        def distance(q, k, b, chunk):
+            return _distance_prefix_indices(q, k, b, chunk,
+                strict_budget=strict_budget, selection_stats=selection_stats)
+        clone = types.FunctionType(original.__code__,
+            {**original.__globals__, "_distance_prefix_indices": distance},
+            original.__name__, original.__defaults__, original.__closure__)
+        result = (clone(query, key, token_budget, chunk_size, bucket_thresholds)
+                  if selector == "adamas" else clone(query, key, token_budget))
+        if selection_stats is not None:
+            if budget == 0 or budget == length:
+                _selection_stats(selection_stats, length, budget, 0, result.numel(),
+                                 result.numel(), strict_budget, bypassed=True)
+            selection_stats.update(selector=selector, score_definition=SCORE_DEFINITIONS[selector])
+        return result
+    result = _raw_l1_prefix_indices(query, key, token_budget,
+                                    strict_budget=strict_budget, selection_stats=selection_stats)
+    if selection_stats is not None:
+        selection_stats.update(selector="raw_l1", score_definition="raw_l1_legacy")
+    return result
 
 
 def _compact_prefix_cache(
@@ -458,10 +459,15 @@ def _compact_prefix_cache(
     chunk_size,
     previous_indices=None,
     previous_length=0,
+    *,
+    prefix_start_layer=0,
 ):
     family = "sdar" if model.config.model_type == "sdar" else "llada"
     strict = getattr(model.config, family + "_prefix_strict_budget", False)
     collector = getattr(model, "_prefix_selection_stats", None)
+    selector = getattr(model.config, family + "_prefix_selector", "raw_l1")
+    from .selector_config import validate_selector, SCORE_DEFINITIONS
+    validate_selector(selector)
     # Selection only reads the prefix; gather directly from strided views.
     # Copying the entire history here duplicates KV before discarding most of it.
     prefix_cache = tuple(
@@ -470,17 +476,26 @@ def _compact_prefix_cache(
     )
     if not prefix_cache:
         return prefix_cache, ()
+    prefix_start_layer = min(max(int(prefix_start_layer), 0), len(prefix_cache))
     budget = min(int(token_budget), prefix_length)
     if prefix_length <= budget:
         indices = torch.arange(prefix_length, device=prefix_cache[0][0].device)
         if collector is not None:
             group = 2 if family == "sdar" and getattr(
                 model.config, "sdar_prefix_share_layer_pairs", False) else 1
-            for start in range(0, len(prefix_cache), group):
-                stats = dict(layer=min(start + group, len(prefix_cache)) - 1,
+            layers = (range(len(prefix_cache)) if prefix_start_layer
+                      else (min(start + group, len(prefix_cache)) - 1
+                            for start in range(0, len(prefix_cache), group)))
+            for layer in layers:
+                stats = dict(layer=layer,
                              prefix_length=prefix_length)
                 _selection_stats(stats, prefix_length, budget, 0, prefix_length,
                                  prefix_length, strict, bypassed=True)
+                stats.update(selector=selector, score_definition=(
+                    "not_computed" if selector == "qk_tc" else SCORE_DEFINITIONS[selector]))
+                if layer < prefix_start_layer:
+                    stats.update(selection_policy="full_prefix", budget_applied=False,
+                                 score_definition="not_computed")
                 collector.append(stats)
         return prefix_cache, tuple(indices for _ in prefix_cache)
 
@@ -490,17 +505,36 @@ def _compact_prefix_cache(
         and getattr(model.config, "sdar_prefix_share_layer_pairs", False)
         else 1
     )
-    cos, sin = model.model.rotary_emb(
-        captured_queries[group_size - 1], block_position_ids
-    )
+    # Retain pair representatives, including a pair straddling the boundary.
+    # Its shallow member bypasses selection; its deep member still uses the
+    # original odd-layer query. Never downgrade grouping without query capture.
+    cos = sin = None
+    full_indices = None
+    if prefix_start_layer:
+        full_indices = torch.arange(prefix_length, device=prefix_cache[0][0].device)
     compact_cache = []
     prefix_indices = []
     thresholds = ADAMAS_BUCKET_THRESHOLDS.get(model.config.model_type)
     for start in range(0, len(prefix_cache), group_size):
         representative = min(start + group_size, len(prefix_cache)) - 1
+        dense_end = min(start + group_size, prefix_start_layer)
+        for layer in range(start, dense_end):
+            compact_cache.append(prefix_cache[layer])
+            prefix_indices.append(full_indices)
+            if collector is not None:
+                stats = dict(layer=layer, prefix_length=prefix_length)
+                _selection_stats(stats, prefix_length, budget, 0, prefix_length,
+                                 prefix_length, strict, bypassed=True)
+                stats.update(selector=selector, score_definition="not_computed",
+                             selection_policy="full_prefix", budget_applied=False)
+                collector.append(stats)
+        if representative < prefix_start_layer:
+            continue
         query = captured_queries[representative]
         if query is None:
             raise RuntimeError("Failed to capture a layer query during dense refresh")
+        if cos is None:
+            cos, sin = model.model.rotary_emb(query, block_position_ids)
         key = prefix_cache[representative][0]
         candidates = None
         if previous_indices is not None and previous_length < prefix_length:
@@ -513,6 +547,8 @@ def _compact_prefix_cache(
             key = key.index_select(2, candidates)
         stats = {} if collector is not None else None
         extra = {}
+        if selector != "raw_l1":
+            extra["selector"] = selector
         # Keep the disabled path's call contract compatible with existing hooks.
         if strict or stats is not None:
             extra.update(strict_budget=strict, selection_stats=stats)
@@ -525,11 +561,12 @@ def _compact_prefix_cache(
             **extra,
         )
         if stats is not None:
-            stats.update(layer=representative, prefix_length=prefix_length)
+            stats.update(layer=representative, prefix_length=prefix_length, selector=selector)
+            stats.setdefault("score_definition", SCORE_DEFINITIONS[selector])
             collector.append(stats)
         if candidates is not None:
             indices = candidates.index_select(0, indices)
-        for key, value in prefix_cache[start : start + group_size]:
+        for key, value in prefix_cache[max(start, prefix_start_layer) : start + group_size]:
             compact_cache.append(
                 (
                     key.index_select(2, indices).contiguous(),

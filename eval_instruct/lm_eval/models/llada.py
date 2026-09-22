@@ -90,6 +90,8 @@ class LLaDA(LM):
         prefix_chunk_size: Optional[int] = None,
         prefix_share_layer_pairs: bool = False,
         prefix_selector: str = "raw_l1",
+        prefix_dense_before_query_selection: bool = False,
+        prefix_rescreen_full_kv: bool = False,
         losa: bool = False,
         losa_active_topk: int = 5,
         losa_score_mode: str = "query",
@@ -159,21 +161,8 @@ class LLaDA(LM):
 
         resolve_model_family(self.model, self.MODEL_NAME)
         prefix_selector = str(prefix_selector).lower()
-        if prefix_selector not in {"raw_l1", "hadamard_qk", "adamas", "qk"}:
-            raise ValueError(f"Unsupported prefix selector: {prefix_selector!r}")
-        if prefix_selector != "raw_l1":
-            import src.reference.sparse.sparse_ops as sparse
-
-            if prefix_selector == "adamas":
-                sparse._prefix_indices = sparse._adamas_prefix_indices
-            elif prefix_selector == "qk":
-                sparse._prefix_indices = lambda query, key, budget, *_args, **_kwargs: (
-                    sparse._qk_prefix_indices(query, key, budget)
-                )
-            else:
-                sparse._prefix_indices = lambda query, key, budget, *_args, **_kwargs: (
-                    sparse._hadamard_qk_prefix_indices(query, key, budget)
-                )
+        from src.reference.sparse.selector_config import validate_selector
+        validate_selector(prefix_selector)
         prefix_sparse_enabled = sparse_enabled and (
             self.MODEL_NAME == "llada"
             if prefix_sparse is None
@@ -213,6 +202,9 @@ class LLaDA(LM):
                 ),
                 prefix_token_budget=int(prefix_token_budget),
                 prefix_strict_budget=_as_bool(prefix_strict_budget),
+                prefix_selector=prefix_selector,
+                prefix_dense_before_query_selection=_as_bool(prefix_dense_before_query_selection),
+                prefix_rescreen_full_kv=_as_bool(prefix_rescreen_full_kv),
                 prefix_chunk_size=_optional_number(prefix_chunk_size, int),
                 prefix_share_layer_pairs=_as_bool(prefix_share_layer_pairs),
                 losa=sparse_enabled and _as_bool(losa),

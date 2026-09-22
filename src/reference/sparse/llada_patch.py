@@ -845,6 +845,9 @@ def _block_cache_generate(self, *args, **kwargs):
                     else previous_prefix_indices
                 ),
                 previous_prefix_length,
+                prefix_start_layer=(selection_layer + 1
+                    if query_sparse and getattr(self.config,
+                        "llada_prefix_dense_before_query_selection", False) else 0),
             )
             previous_prefix_indices = prefix_indices
             previous_prefix_length = block_start
@@ -973,7 +976,12 @@ def patch_llada_model(
     losa_score_mode="query",
     losa_key_samples=32,
     query_losa_union=False,
+    *,
+    prefix_selector="raw_l1",
+    prefix_dense_before_query_selection=False,
 ):
+    from .selector_config import validate_selector
+    validate_selector(prefix_selector)
     if (
         top_k <= 0
         or selection_interval <= 0
@@ -1006,6 +1014,8 @@ def patch_llada_model(
     model.config.llada_prefix_min_prefix_length = int(prefix_min_prefix_length)
     model.config.llada_prefix_token_budget = int(prefix_token_budget)
     model.config.llada_prefix_strict_budget = bool(prefix_strict_budget)
+    model.config.llada_prefix_selector = prefix_selector
+    model.config.llada_prefix_dense_before_query_selection = bool(prefix_dense_before_query_selection)
     model.config.llada_prefix_chunk_size = int(prefix_chunk_size)
     model.config.llada_prefix_rescreen_full_kv = bool(prefix_rescreen_full_kv)
     model.config.llada_losa = bool(losa)

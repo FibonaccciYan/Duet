@@ -39,7 +39,21 @@ def _distance_minima(Q, K, M, I, S,
 
 
 def prefix_indices(query, key, token_budget, chunk_size=256, bucket_thresholds=None,
-                   strict_budget=False, selection_stats=None):
+                   strict_budget=False, selection_stats=None, *, selector="raw_l1"):
+    if selector == "qk_tc":
+        from .qk_tc_prefix import prefix_indices as tc_indices
+        return tc_indices(query, key, token_budget, chunk_size, bucket_thresholds,
+                          strict_budget, selection_stats)
+    if selector == "qk":
+        from .qk_prefix import prefix_indices as qk_indices
+        return qk_indices(query, key, token_budget, chunk_size, bucket_thresholds,
+                          strict_budget, selection_stats)
+    if selector != "raw_l1":
+        from src.reference.sparse.sparse_ops import _prefix_indices
+        return _prefix_indices(query, key, token_budget, chunk_size, bucket_thresholds,
+                               strict_budget, selection_stats, selector=selector)
+    if selection_stats is not None:
+        selection_stats.update(selector="raw_l1", score_definition="raw_l1_legacy")
     length = key.shape[-2]
     budget = min(int(token_budget), length)
     rows = query.shape[1] * query.shape[2]

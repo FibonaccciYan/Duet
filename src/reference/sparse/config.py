@@ -16,6 +16,8 @@ class LLaDASparseConfig:
     prefix_min_prefix_length: int = 0
     prefix_token_budget: int = 256
     prefix_strict_budget: bool = False
+    prefix_dense_before_query_selection: bool = False
+    prefix_selector: str = "raw_l1"
     prefix_chunk_size: int = 1024
     prefix_rescreen_full_kv: bool = False
     losa: bool = False
@@ -40,6 +42,8 @@ class SDARSparseConfig:
     prefix_min_prefix_length: int = 0
     prefix_token_budget: int = 256
     prefix_strict_budget: bool = False
+    prefix_dense_before_query_selection: bool = False
+    prefix_selector: str = "raw_l1"
     prefix_chunk_size: int = 1024
     prefix_share_layer_pairs: bool = False
     prefix_rescreen_full_kv: bool = False

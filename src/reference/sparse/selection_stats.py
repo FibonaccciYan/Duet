@@ -12,7 +12,7 @@ def summarize(records):
                   bypassed=n-len(active), overflow=overflow, shortfall=shortfall,
                   overflow_rate=overflow/len(active) if active else 0.,
                   shortfall_rate=shortfall/len(active) if active else 0.,
-                  strict_final_violations=sum(r["strict_budget"] and
+                  strict_final_violations=sum(r.get("budget_applied", True) and r["strict_budget"] and
                       r["selected_size"] > r["budget"] for r in records))
     for key in ("union_size", "selected_size", "candidate_length", "prefix_length"):
         values = sorted(r[key] for r in records)

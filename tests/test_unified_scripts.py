@@ -10,6 +10,58 @@ from scripts.common.run import arguments, plan
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_qk_longbench_cli_forwarding():
+    qk = jobs("sparse", "longbench", "llada21", "--set", "prefix_selector=qk_tc")
+    for job in qk:
+        cmd = job["command"]
+        assert cmd[cmd.index("--prefix_selector")+1] == "qk_tc"
+    for job in jobs("sparse", "longbench", "llada21"):
+        assert "--prefix_selector" not in job["command"]
+
+
+def test_prefix_dense_before_query_selection_cli_forwarding():
+    jobs_on = jobs("sparse", "longbench", "llada21",
+                   "--set", "prefix_dense_before_query_selection=true")
+    for job in jobs_on:
+        assert "--prefix_dense_before_query_selection" in job["command"]
+    jobs_off = jobs("sparse", "longbench", "llada21",
+                    "--set", "prefix_dense_before_query_selection=false")
+    for job in jobs_off:
+        assert "--no-prefix_dense_before_query_selection" in job["command"]
+
+
+def test_short_sparse_forwards_qk_tc_and_shallow_full_prefix():
+    job = jobs("sparse", "short", "sdar", "--tasks", "math500",
+               "--set", "PREFIX_SELECTOR=qk_tc",
+               "--set", "PREFIX_DENSE_BEFORE_QUERY_SELECTION=true",
+               "--set", "PREFIX_TOKEN_BUDGET=256")[0]
+    env = job["env"]
+    assert env["PREFIX_SELECTOR"] == "qk_tc"
+    assert env["PREFIX_DENSE_BEFORE_QUERY_SELECTION"] == "true"
+    assert env["PREFIX_TOKEN_BUDGET"] == "256"
+
+
+def test_short_scoring_routes_to_correct_tasks(tmp_path):
+    capture = tmp_path / "capture.sh"
+    record = tmp_path / "argv.txt"
+    capture.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$CAPTURE_ARGV"\n')
+    capture.chmod(0o755)
+    expected = {
+        ("math500", "llada21"): "math_500",
+        ("math500", "sdar"): "math_500",
+        ("gsm8k", "llada21"): "gsm8k",
+        ("gsm8k", "sdar"): "gsm8k_sdar",
+    }
+    for (benchmark, model), task_name in expected.items():
+        job = jobs("sparse", "short", model, "--tasks", benchmark, "--stage", "full")[0]
+        env = {**os.environ, **job["env"], "PYTHON": str(capture),
+               "OUTPUT_ROOT": str(tmp_path / f"{model}-{benchmark}"),
+               "CAPTURE_ARGV": str(record)}
+        subprocess.run(job["command"], env=env, cwd=ROOT, check=True)
+        argv = record.read_text().splitlines()
+        assert argv[argv.index("--tasks") + 1] == task_name
+
+
 def jobs(method, task, model, *extra):
     return plan(arguments(["--method", method, "--task", task, "--model", model, *extra]))
 

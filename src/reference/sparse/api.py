@@ -53,6 +53,9 @@ def patch_model(
     query_losa_union=None,
     moe_expert_patch=None,
     sparse_config=None,
+    *,
+    prefix_selector=None,
+    prefix_dense_before_query_selection=None,
 ):
     """Enable requested sparse features through the matching model patch."""
     family = resolve_model_family(model, model_name)
@@ -77,6 +80,8 @@ def patch_model(
             "prefix_min_prefix_length": prefix_min_prefix_length,
             "prefix_token_budget": prefix_token_budget,
             "prefix_strict_budget": prefix_strict_budget,
+            "prefix_selector": prefix_selector,
+            "prefix_dense_before_query_selection": prefix_dense_before_query_selection,
             "prefix_chunk_size": prefix_chunk_size,
             "prefix_share_layer_pairs": prefix_share_layer_pairs,
             "prefix_rescreen_full_kv": prefix_rescreen_full_kv,
@@ -88,6 +93,8 @@ def patch_model(
             "moe_expert_patch": moe_expert_patch,
         },
     )
+    from .selector_config import validate_selector
+    validate_selector(sparse_config.prefix_selector)
     save_to_model_config(model, sparse_config)
     values = sparse_config.__dict__
     if family == "llada":

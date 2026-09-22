@@ -51,7 +51,7 @@ def run(c):
     allowed = {
         "dense": {"exact_rope", "moe_expert_patch"},
         "sparse": {"ratio", "top_k", "selection_interval", "selection_layer",
-                   "query_sparse", "prefix_sparse", "prefix_token_budget", "prefix_strict_budget",
+                   "query_sparse", "prefix_sparse", "prefix_token_budget", "prefix_dense_before_query_selection", "prefix_rescreen_full_kv", "prefix_strict_budget", "prefix_selector",
                    "exact_rope", "moe_expert_patch", "query_dense_threshold"},
         "losa": {"losa_gqa_mode", "losa_token_budget", "losa_page_size", "losa_active_topk",
                  "losa_backend", "losa_fused_state", "shared_kv", "graph_replay",

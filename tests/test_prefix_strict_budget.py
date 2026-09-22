@@ -131,5 +131,7 @@ def test_v3_fused_and_fallback(length):
         ref = _raw_l1_prefix_indices(q,k,2,strict_budget=strict,selection_stats=a)
         out = prefix_indices(q,k,2,strict_budget=strict,selection_stats=b)
         assert torch.equal(ref,out)
-        assert a == b
+        assert all(b[name] == value for name, value in a.items())
+        assert b["selector"] == "raw_l1"
+        assert b["score_definition"] == "raw_l1_legacy"
         assert out.numel() == (2 if strict else 3)

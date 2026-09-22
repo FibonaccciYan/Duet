@@ -15,6 +15,30 @@ from lm_eval.models import llada, sdar
 
 
 class LLaDAEvalAdapterTest(unittest.TestCase):
+    def test_qk_then_raw_are_isolated_and_forwarded(self):
+        import src.reference.sparse.sparse_ops as ops
+        original = ops._prefix_indices
+        for adapter, typ in ((llada.LLaDA, "llada2_moe"), (sdar.SDAR, "sdar")):
+            model = MagicMock()
+            model.eval.return_value = model
+            model.config.model_type = typ
+            accelerator = SimpleNamespace(num_processes=1, device=torch.device("cpu"))
+            with (
+                patch.object(llada, "Accelerator", return_value=accelerator),
+                patch.object(llada.transformers.AutoModelForCausalLM, "from_pretrained", return_value=model),
+                patch.object(llada.transformers.AutoTokenizer, "from_pretrained"),
+                patch.object(llada, "patch_method") as install,
+            ):
+                for selector in ("qk", "qk_tc", "raw_l1"):
+                    adapter(pretrained="fake", device="cpu", method="sparse",
+                            implementation="optimized", prefix_selector=selector)
+                    self.assertEqual(install.call_args.kwargs["prefix_selector"], selector)
+                    self.assertEqual(install.call_args.kwargs["method"], "sparse_optimized")
+                for legacy in ("adamas", "hadamard_qk"):
+                    adapter(pretrained="fake", device="cpu", prefix_selector=legacy)
+                    self.assertEqual(install.call_args.kwargs["prefix_selector"], legacy)
+            self.assertIs(ops._prefix_indices, original)
+
     def test_query_losa_union_is_forwarded_to_sparse_patch(self):
         model = MagicMock()
         model.eval.return_value = model

@@ -185,6 +185,7 @@ def plan(a):
                     allowed = {"QUERY_SPARSE", "PREFIX_SPARSE", "PREFIX_TOKEN_BUDGET", "PREFIX_STRICT_BUDGET",
                                "SPARSE_DLM_RATIO", "SPARSE_DLM_TOP_K", "SPARSE_DLM_SELECTION_INTERVAL",
                                "QUERY_DENSE_THRESHOLD", "SPARSE_DLM_SELECTION_LAYER", "PREFIX_SELECTOR",
+                               "PREFIX_DENSE_BEFORE_QUERY_SELECTION", "PREFIX_RESCREEN_FULL_KV",
                                "FOCUS_ALPHA", "PAPER_LOSA_PAGE_SIZE", "PAPER_LOSA_TOKEN_BUDGET",
                                "PAPER_LOSA_ACTIVE_TOPK", "PAPER_LOSA_GQA_MODE", "PAPER_LOSA_BACKEND",
                                "MOE_EXPERT_PATCH", "DTYPE", "ATTN_IMPLEMENTATION", "MAX_PROMPT_LEN"}
@@ -233,14 +234,14 @@ def plan(a):
                 for key, v in a.overrides.items():
                     if key not in {"ratio", "selection_layer", "query_dense_threshold",
                                    "query_sparse", "prefix_sparse", "prefix_token_budget",
-                                   "prefix_strict_budget", "focus_alpha", "losa_token_budget",
+                                   "prefix_selector", "prefix_dense_before_query_selection", "prefix_strict_budget", "focus_alpha", "losa_token_budget",
                                    "losa_page_size", "losa_active_topk", "losa_gqa_mode",
                                    "losa_backend", "moe_expert_patch", "dtype"}:
                         raise ValueError("unsupported LongBench option: " + key)
                     relevant = (
                         key in {"moe_expert_patch", "dtype"}
                         or a.method == "sparse" and key in {"ratio", "selection_layer", "query_dense_threshold",
-                            "query_sparse", "prefix_sparse", "prefix_token_budget", "prefix_strict_budget"}
+                            "query_sparse", "prefix_sparse", "prefix_token_budget", "prefix_dense_before_query_selection", "prefix_strict_budget", "prefix_selector"}
                         or a.method == "focus" and key == "focus_alpha"
                         or a.method == "losa" and key.startswith("losa_"))
                     if not relevant:

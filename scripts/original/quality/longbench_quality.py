@@ -62,6 +62,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query_sparse", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--prefix_sparse", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--prefix_token_budget", type=int)
+    parser.add_argument("--prefix_dense_before_query_selection", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--prefix_selector", choices=("raw_l1", "qk", "qk_tc", "adamas", "hadamard_qk"), default=None)
     parser.add_argument("--prefix_strict_budget", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--collect_prefix_selection_stats", action="store_true")
     parser.add_argument(
@@ -234,7 +236,7 @@ def main() -> int:
     if args.method in {"sparse", "sparse_optimized"}:
         for name in (
             "query_dense_threshold", "ratio", "selection_layer", "query_sparse",
-            "prefix_sparse", "prefix_token_budget", "prefix_rescreen_full_kv", "prefix_strict_budget",
+            "prefix_sparse", "prefix_token_budget", "prefix_rescreen_full_kv", "prefix_dense_before_query_selection", "prefix_strict_budget", "prefix_selector",
         ):
             if getattr(args, name) is not None:
                 options[name] = getattr(args, name)
