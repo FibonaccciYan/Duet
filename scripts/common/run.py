@@ -188,6 +188,9 @@ def plan(a):
                                "PREFIX_DENSE_BEFORE_QUERY_SELECTION", "PREFIX_RESCREEN_FULL_KV",
                                "FOCUS_ALPHA", "PAPER_LOSA_PAGE_SIZE", "PAPER_LOSA_TOKEN_BUDGET",
                                "PAPER_LOSA_ACTIVE_TOPK", "PAPER_LOSA_GQA_MODE", "PAPER_LOSA_BACKEND",
+                               "PAPER_LOSA_KV_STATS", "PAPER_LOSA_KV_STATS_CHUNK_SIZE",
+                               "PAPER_LOSA_KV_STATS_OUTPUT_DIR", "PAPER_LOSA_KV_STATS_INCLUDE_HEADS",
+                               "PAPER_LOSA_KV_STATS_COMPACT",
                                "MOE_EXPERT_PATCH", "DTYPE", "ATTN_IMPLEMENTATION", "MAX_PROMPT_LEN"}
                     specific = {
                         "dense": set(),

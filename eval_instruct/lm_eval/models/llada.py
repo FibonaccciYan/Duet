@@ -68,7 +68,7 @@ class LLaDA(LM):
         minimal_topk: int = 1,
         num_to_transfer: int = 1,
         mask_id: int = 156895,
-        eos_id: int = 156892,
+        eos_id: Optional[int] = None,
         method: Optional[str] = None,
         implementation: str = "reference",
         runtime_mode: Optional[str] = None,
@@ -103,6 +103,11 @@ class LLaDA(LM):
         paper_losa_active_topk: int = 5,
         paper_losa_gqa_mode: str = "per_query_head",
         paper_losa_backend: str = "auto",
+        paper_losa_kv_stats: bool = False,
+        paper_losa_kv_stats_chunk_size: int = 1024,
+        paper_losa_kv_stats_output_dir: Optional[str] = None,
+        paper_losa_kv_stats_include_heads: bool = False,
+        paper_losa_kv_stats_compact: bool = False,
         moe_expert_patch: bool = True,
         show_samples: bool = False,
         **kwargs,
@@ -233,6 +238,8 @@ class LLaDA(LM):
                 active_topk=int(paper_losa_active_topk),
                 gqa_mode=paper_losa_gqa_mode,
                 backend=paper_losa_backend,
+                kv_stats=_as_bool(paper_losa_kv_stats),
+                kv_stats_chunk_size=int(paper_losa_kv_stats_chunk_size),
                 **({"moe_expert_patch": _as_bool(moe_expert_patch)}
                    if self.implementation == "optimized" else {}),
             )
@@ -274,8 +281,23 @@ class LLaDA(LM):
         self.minimal_topk = int(minimal_topk)
         self.num_to_transfer = int(num_to_transfer)
         self.mask_id = int(mask_id)
+        if eos_id is None:
+            configured_eos = getattr(self.model.config, "eos_token_id", None)
+            if configured_eos is None:
+                configured_eos = getattr(getattr(self.model, "generation_config", None), "eos_token_id", None)
+            if isinstance(configured_eos, (list, tuple)):
+                configured_eos = configured_eos[0] if configured_eos else None
+            eos_id = configured_eos
         self.eos_id = None if eos_id is None else int(eos_id)
         self.show_samples = _as_bool(show_samples)
+        self.kv_stats_enabled = self.method == "losa" and self.implementation == "optimized" and _as_bool(paper_losa_kv_stats)
+        self.kv_stats_chunk_size = int(paper_losa_kv_stats_chunk_size)
+        if self.kv_stats_chunk_size <= 0:
+            raise ValueError("paper_losa_kv_stats_chunk_size must be positive")
+        self.kv_stats_output_dir = Path(paper_losa_kv_stats_output_dir) if paper_losa_kv_stats_output_dir else None
+        self.kv_stats_include_heads = _as_bool(paper_losa_kv_stats_include_heads)
+        self.kv_stats_compact = _as_bool(paper_losa_kv_stats_compact)
+        self._kv_stats_request_index = 0
         self._generation_stats = {
             "generated_tokens": 0,
             "generation_time_seconds": 0.0,
@@ -351,6 +373,15 @@ class LLaDA(LM):
         output_ids = self.model.generate(**generation_kwargs)
         if hasattr(output_ids, "sequences"):
             output_ids = output_ids.sequences
+        if self.kv_stats_enabled:
+            from src.optimized.losa.kv_stats import export_kv_stats
+            if self.kv_stats_output_dir is None:
+                raise RuntimeError("LoSA KV statistics enabled without output directory")
+            request_dir = self.kv_stats_output_dir / f"request_{self._kv_stats_request_index:06d}"
+            stats = export_kv_stats(self.model, request_dir, include_heads=self.kv_stats_include_heads, compact=self.kv_stats_compact)
+            if stats is None or not stats.get("completed") or stats.get("forward_count", 0) <= 0:
+                raise RuntimeError("incomplete LoSA KV statistics export")
+            self._kv_stats_request_index += 1
 
         response = self.tokenizer.decode(
             output_ids[0].tolist(), skip_special_tokens=True

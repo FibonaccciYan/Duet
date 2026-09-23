@@ -40,6 +40,7 @@ case "${model_type}" in
     default_selection_layer=5
     default_prefix_min_length=0
     default_prefix_chunk_size=1024
+    eos_id="${EOS_ID:-151643}"
     ;;
   *)
     echo "Unsupported MODEL_TYPE: ${model_type} (expected llada or sdar)" >&2
@@ -115,9 +116,7 @@ output_root="${OUTPUT_ROOT:-${default_output_root}}"
 
 if [[ "${model_type}" == "sdar" ]]; then
   model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-float16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-false},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_sdar_threshold}},remasking_strategy=${resolved_sdar_remasking},eb_threshold=${EB_THRESHOLD:-0.35},mask_id=${mask_id}"
-  if [[ -n "${EOS_ID:-}" ]]; then
-    model_args+=",eos_id=${EOS_ID}"
-  fi
+  model_args+=",eos_id=${eos_id}"
 else
   model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-true},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_llada_threshold}},editing_threshold=${EDITING_THRESHOLD:-${default_editing_threshold}},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${mask_id},eos_id=${eos_id}"
 fi
@@ -141,7 +140,7 @@ case "${method}" in
     model_args+=",focus_alpha=${FOCUS_ALPHA:-1.5}"
     ;;
   losa)
-    model_args+=",paper_losa_page_size=${PAPER_LOSA_PAGE_SIZE:-16},paper_losa_token_budget=${PAPER_LOSA_TOKEN_BUDGET:-256},paper_losa_active_topk=${PAPER_LOSA_ACTIVE_TOPK:-5},paper_losa_gqa_mode=${PAPER_LOSA_GQA_MODE:-per_query_head},paper_losa_backend=${PAPER_LOSA_BACKEND:-auto}"
+    model_args+=",paper_losa_page_size=${PAPER_LOSA_PAGE_SIZE:-16},paper_losa_token_budget=${PAPER_LOSA_TOKEN_BUDGET:-256},paper_losa_active_topk=${PAPER_LOSA_ACTIVE_TOPK:-5},paper_losa_gqa_mode=${PAPER_LOSA_GQA_MODE:-per_query_head},paper_losa_backend=${PAPER_LOSA_BACKEND:-auto},paper_losa_kv_stats=${PAPER_LOSA_KV_STATS:-true},paper_losa_kv_stats_chunk_size=${PAPER_LOSA_KV_STATS_CHUNK_SIZE:-1024},paper_losa_kv_stats_output_dir=${PAPER_LOSA_KV_STATS_OUTPUT_DIR:-${output_root}/kv_stats},paper_losa_kv_stats_include_heads=${PAPER_LOSA_KV_STATS_INCLUDE_HEADS:-false},paper_losa_kv_stats_compact=${PAPER_LOSA_KV_STATS_COMPACT:-false}"
     ;;
 esac
 minerva_tasks="minerva_math_algebra,minerva_math_counting_and_prob,minerva_math_geometry,minerva_math_intermediate_algebra,minerva_math_num_theory,minerva_math_prealgebra,minerva_math_precalc"

@@ -117,7 +117,7 @@ class KVStats:
             self.block_steps[block_id] += 1
         return result
 
-    def export(self, output_dir=None, include_heads=False):
+    def export(self, output_dir=None, include_heads=False, compact=False):
         """Explicit synchronization/readback, kept outside generation timing."""
         if self.latest.is_cuda:
             torch.cuda.synchronize(self.latest.device)
@@ -175,6 +175,20 @@ class KVStats:
             chunk_size=self.chunk_size, allocated_chunks=len(self.chunks),
             allocated_bytes=(self.latest.numel() + sum(c.numel() for c in self.chunks))*4,
             kv_steps=rows, kv_layers=summary)
+        if compact:
+            if not rows:
+                raise RuntimeError("cannot compact empty KV statistics")
+            result["avg_kv"] = sum(float(r["active_query_mean_kv"]) for r in rows) / len(rows)
+            result["avg_all_query_fresh_kv"] = sum(float(r["all_query_mean_fresh_kv"]) for r in rows) / len(rows)
+            result["aggregation"] = "mean over all layers and generation forwards for this sample"
+            result.pop("kv_steps", None)
+            result.pop("kv_layers", None)
+            result.pop("kv_heads", None)
+            if output_dir is not None:
+                path = Path(output_dir)
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "kv_stats.json").write_text(json.dumps(result, indent=2))
+            return result
         if include_heads:
             result["kv_heads"] = heads
         if output_dir is not None:
@@ -191,6 +205,6 @@ class KVStats:
         return result
 
 
-def export_kv_stats(model, output_dir=None, include_heads=False):
+def export_kv_stats(model, output_dir=None, include_heads=False, compact=False):
     collector = getattr(model, "_losa_kv_stats", None)
-    return None if collector is None else collector.export(output_dir, include_heads)
+    return None if collector is None else collector.export(output_dir, include_heads, compact)
