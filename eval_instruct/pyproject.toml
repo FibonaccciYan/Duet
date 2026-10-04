@@ -9,7 +9,7 @@ authors = [
     {name="EleutherAI", email="contact@eleuther.ai"}
 ]
 description = "A framework for evaluating language models"
-readme = "README.md"
+readme = {text = "Paper evaluation adapters for LLaDA2.1 and SDAR-8B.", content-type = "text/plain"}
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",

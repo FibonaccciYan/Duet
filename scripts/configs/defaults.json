@@ -1,7 +1,36 @@
 {
-  "models": {
-    "llada21": "/data0/ysy/models/LLaDA2.1-mini",
-    "sdar": "/data0/ysy/models/SDAR-8B-Chat-b32"
+  "model_env": {
+    "llada21": "LLADA_MODEL_PATH",
+    "sdar": "SDAR_MODEL_PATH"
+  },
+  "sparse": {
+    "llada": {
+      "query_sparse": true,
+      "prefix_sparse": true,
+      "ratio": 0.7,
+      "selection_layer": 1,
+      "selection_interval": 1,
+      "query_dense_threshold": 0,
+      "prefix_token_budget": 256,
+      "prefix_strict_budget": true,
+      "prefix_selector": "qk_tc",
+      "prefix_rescreen_full_kv": true,
+      "prefix_dense_before_query_selection": true
+    },
+    "sdar": {
+      "query_sparse": true,
+      "prefix_sparse": true,
+      "ratio": 0.5,
+      "selection_layer": 5,
+      "selection_interval": 1,
+      "query_dense_threshold": 0,
+      "prefix_token_budget": 256,
+      "prefix_strict_budget": true,
+      "prefix_selector": "qk_tc",
+      "prefix_rescreen_full_kv": true,
+      "prefix_dense_before_query_selection": true,
+      "deep_only_transfer": true
+    }
   },
   "speed": {
     "implementation": "optimized",
@@ -11,22 +40,23 @@
     "repeats": 3,
     "gen_length": 256,
     "block_length": 32,
-    "steps": 32,
+    "llada_steps": 32,
+    "sdar_steps": 16,
     "temperature": 0.0,
     "seed": 42,
     "eos_early_stop": false,
     "llada_threshold": 0.7,
     "llada_editing_threshold": 0.5,
-    "sdar_threshold": 0.95,
-    "sdar_remasking_strategy": "low_confidence_dynamic"
+    "sdar_threshold": 0.95
   },
   "longbench": {
-    "implementation": "reference",
+    "implementation": "optimized",
     "tasks": ["hotpotqa", "triviaqa", "narrativeqa", "qasper", "multifieldqa_en"],
-    "gen_lengths": {"hotpotqa": 32, "triviaqa": 32, "narrativeqa": 128, "qasper": 128, "multifieldqa_en": 64, "gov_report": 512},
+    "gen_lengths": {"hotpotqa": 32, "triviaqa": 32, "narrativeqa": 128, "qasper": 128, "multifieldqa_en": 64},
     "max_context_tokens": 32768,
     "block_length": 32,
-    "steps": 32,
+    "llada_steps": 32,
+    "sdar_steps": 16,
     "seed": 42,
     "eos_early_stop": true,
     "llada_threshold": 0.7,
@@ -35,23 +65,19 @@
   },
   "short": {
     "implementation": "optimized",
-    "dense_tasks": ["gsm8k", "humaneval", "mmlu", "math"],
-    "other_tasks": ["gsm8k"],
+    "tasks": ["gsm8k", "humaneval", "mmlu", "math500"],
     "llada_gen_length": 16384,
-    "sdar_dense_gen_length": 4096,
-    "sdar_task_gen_lengths": {"gsm8k": 4096, "humaneval": 768, "mmlu": 128, "math": 512, "math500": 2048},
+    "sdar_task_gen_lengths": {"gsm8k": 4096, "humaneval": 768, "mmlu": 128, "math500": 2048},
     "mmlu_fewshot": 5,
     "other_fewshot": 0,
     "block_length": 32,
-    "steps": 32,
+    "llada_steps": 32,
+    "sdar_steps": 16,
     "temperature": 0.0,
     "llada_threshold": 0.7,
     "llada_editing_threshold": 0.5,
     "sdar_threshold": 0.95,
-    "sdar_dense_remasking": "low_confidence_static",
-    "sdar_focus_remasking": "low_confidence_dynamic",
-    "sdar_other_remasking": "sequential",
-    "smoke_limit": 1,
+    "sdar_remasking": "sequential",
     "port": 12335
   }
 }

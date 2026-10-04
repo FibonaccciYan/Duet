@@ -11,36 +11,32 @@ port="${MAIN_PROCESS_PORT:-12335}"
 benchmark="${BENCHMARK:-gsm8k}"
 sparse_dlm="${SPARSE_DLM:-true}"
 method="${METHOD:-${RUNTIME_MODE:-}}"
+
 case "${model_type}" in
   llada)
-    default_model=/data0/ysy/models/LLaDA2.1-mini
-    default_python=/home/ysy/anaconda3/envs/sparse/bin/python
     block_length="${BLOCK_LENGTH:-32}"
     steps="${STEPS:-32}"
     mask_id="${MASK_ID:-156895}"
     eos_id="${EOS_ID:-156892}"
     default_ratio=0.7
-    default_selection_interval=4
-    default_query_dense_threshold=4
-    default_refresh_step=2
+    default_selection_interval=1
+    default_query_dense_threshold=0
+    default_refresh_step=0
     default_selection_layer=1
     default_prefix_min_length=0
     default_prefix_chunk_size=1024
     ;;
   sdar)
-    default_model=/data0/ysy/models/SDAR-8B-Chat-b32
-    default_python=/home/ysy/anaconda3/envs/sparse/bin/python
     block_length="${BLOCK_LENGTH:-32}"
-    steps="${STEPS:-32}"
+    steps="${STEPS:-16}"
     mask_id="${MASK_ID:-151669}"
     default_ratio=0.5
     default_selection_interval=1
-    default_query_dense_threshold=4
+    default_query_dense_threshold=0
     default_refresh_step=-1
     default_selection_layer=5
     default_prefix_min_length=0
     default_prefix_chunk_size=1024
-    eos_id="${EOS_ID:-151643}"
     ;;
   *)
     echo "Unsupported MODEL_TYPE: ${model_type} (expected llada or sdar)" >&2
@@ -58,6 +54,7 @@ if [[ -z "${method}" ]]; then
       ;;
   esac
 fi
+
 case "${method}" in
   sparse|dense|focus|losa) ;;
   *)
@@ -66,30 +63,37 @@ case "${method}" in
     ;;
 esac
 
-if [[ "${method}" == "sparse" ]]; then
-  default_sdar_threshold=0.85
-  default_sdar_remasking=sequential
-else
-  default_sdar_threshold=0.85
-  if [[ "${method}" == "focus" ]]; then
-    default_sdar_remasking=low_confidence_dynamic
-  else
-    default_sdar_remasking=sequential
-  fi
-fi
+default_sdar_threshold=0.95
+default_sdar_remasking=sequential
+
 default_llada_threshold=0.7
 default_editing_threshold=0.5
 resolved_sdar_remasking="${REMASKING_STRATEGY:-${default_sdar_remasking}}"
-if [[ "${resolved_sdar_remasking}" == "low_confidence_dynamic" ]]; then
-  default_sdar_threshold=0.95
+case "${model_type}" in
+  llada) model_env="${LLADA_MODEL_PATH:-}" ;;
+  sdar) model_env="${SDAR_MODEL_PATH:-}" ;;
+esac
+model="${MODEL:-${model_env}}"
+python_bin="${PYTHON:-$(command -v python 2>/dev/null || true)}"
+if [[ -z "${model}" ]]; then
+  if [[ "${model_type}" == "llada" ]]; then
+    echo "LLADA_MODEL_PATH is required (or pass MODEL explicitly)" >&2
+  else
+    echo "SDAR_MODEL_PATH is required (or pass MODEL explicitly)" >&2
+  fi
+  exit 2
 fi
-model="${MODEL:-${default_model}}"
-python_bin="${PYTHON:-${default_python}}"
+if [[ -z "${python_bin}" ]]; then
+  echo "Python was not found; set PYTHON to the current environment interpreter" >&2
+  exit 2
+fi
+
 query_sparse="${QUERY_SPARSE:-true}"
+prefix_sparse="${PREFIX_SPARSE:-true}"
 if [[ "${model_type}" == "sdar" ]]; then
-  prefix_sparse="${PREFIX_SPARSE:-false}"
+  default_deep_only_transfer=true
 else
-  prefix_sparse="${PREFIX_SPARSE:-true}"
+  default_deep_only_transfer=false
 fi
 prefix_budget="${PREFIX_TOKEN_BUDGET:-256}"
 losa="${LOSA:-false}"
@@ -99,12 +103,8 @@ losa_key_samples="${LOSA_KEY_SAMPLES:-32}"
 output_path="${OUTPUT_PATH:-default}"
 
 case "${sparse_dlm,,}" in
-  1|true|yes|y)
-    sparse_dlm=true
-    ;;
-  0|false|no|n)
-    sparse_dlm=false
-    ;;
+  1|true|yes|y) sparse_dlm=true ;;
+  0|false|no|n) sparse_dlm=false ;;
   *)
     echo "Unsupported SPARSE_DLM value: ${sparse_dlm}" >&2
     exit 2
@@ -115,35 +115,67 @@ default_output_root="${repo_root}/../${model_type}_exp/${output_path}"
 output_root="${OUTPUT_ROOT:-${default_output_root}}"
 
 if [[ "${model_type}" == "sdar" ]]; then
-  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-float16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-false},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_sdar_threshold}},remasking_strategy=${resolved_sdar_remasking},eb_threshold=${EB_THRESHOLD:-0.35},mask_id=${mask_id}"
-  model_args+=",eos_id=${eos_id}"
+  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-float16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},implementation=${IMPLEMENTATION:-optimized},moe_expert_patch=${MOE_EXPERT_PATCH:-false},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_sdar_threshold}},remasking_strategy=${resolved_sdar_remasking},eb_threshold=${EB_THRESHOLD:-0.35},mask_id=${mask_id}"
+  if [[ -n "${EOS_ID:-}" ]]; then
+    model_args+=",eos_id=${EOS_ID}"
+  fi
 else
-  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},moe_expert_patch=${MOE_EXPERT_PATCH:-true},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_llada_threshold}},editing_threshold=${EDITING_THRESHOLD:-${default_editing_threshold}},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${mask_id},eos_id=${eos_id}"
+  model_args="pretrained=${model},trust_remote_code=true,dtype=${DTYPE:-bfloat16},attn_implementation=${ATTN_IMPLEMENTATION:-sdpa},method=${method},implementation=${IMPLEMENTATION:-optimized},moe_expert_patch=${MOE_EXPERT_PATCH:-true},block_length=${block_length},steps=${steps},temperature=${TEMPERATURE:-0.0},threshold=${THRESHOLD:-${default_llada_threshold}},editing_threshold=${EDITING_THRESHOLD:-${default_editing_threshold}},num_to_transfer=${NUM_TO_TRANSFER:-1},mask_id=${mask_id},eos_id=${eos_id}"
 fi
 
-if [[ -n "${IMPLEMENTATION:-}" ]]; then
-  model_args+=",implementation=${IMPLEMENTATION}"
-fi
 if [[ -n "${MAX_PROMPT_LEN:-}" ]]; then
   model_args+=",max_prompt_len=${MAX_PROMPT_LEN}"
 fi
 
 case "${method}" in
   sparse)
-    model_args+=",prefix_strict_budget=${PREFIX_STRICT_BUDGET:-false}"
-    model_args+=",sparse_dlm_ratio=${SPARSE_DLM_RATIO:-${default_ratio}},sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64},sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-${default_selection_interval}},query_dense_threshold=${QUERY_DENSE_THRESHOLD:-${default_query_dense_threshold}},sparse_dlm_refresh_step=${SPARSE_DLM_REFRESH_STEP:-${default_refresh_step}},sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-${default_selection_layer}},sparse_dlm_deep_only_transfer=${SPARSE_DLM_DEEP_ONLY_TRANSFER:-false},query_sparse=${query_sparse},prefix_sparse=${prefix_sparse},prefix_min_prefix_length=${PREFIX_MIN_PREFIX_LENGTH:-${default_prefix_min_length}},prefix_token_budget=${prefix_budget},prefix_chunk_size=${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}},prefix_share_layer_pairs=${PREFIX_SHARE_LAYER_PAIRS:-false},prefix_selector=${PREFIX_SELECTOR:-raw_l1},prefix_dense_before_query_selection=${PREFIX_DENSE_BEFORE_QUERY_SELECTION:-false},prefix_rescreen_full_kv=${PREFIX_RESCREEN_FULL_KV:-false},losa=${losa},losa_active_topk=${losa_active_topk},losa_score_mode=${losa_score_mode},losa_key_samples=${losa_key_samples}"
+    case "${PREFIX_STRICT_BUDGET:-true}" in
+      1|true|True|TRUE|yes|y) ;;
+      *)
+        echo "Paper evaluation requires PREFIX_STRICT_BUDGET=true" >&2
+        exit 2
+        ;;
+    esac
+    model_args+=",prefix_strict_budget=true"
+    model_args+=",sparse_dlm_ratio=${SPARSE_DLM_RATIO:-${default_ratio}}"
+    model_args+=",sparse_dlm_top_k=${SPARSE_DLM_TOP_K:-64}"
+    model_args+=",sparse_dlm_selection_interval=${SPARSE_DLM_SELECTION_INTERVAL:-${default_selection_interval}}"
+    model_args+=",query_dense_threshold=${QUERY_DENSE_THRESHOLD:-${default_query_dense_threshold}}"
+    model_args+=",sparse_dlm_refresh_step=${SPARSE_DLM_REFRESH_STEP:-${default_refresh_step}}"
+    model_args+=",sparse_dlm_selection_layer=${SPARSE_DLM_SELECTION_LAYER:-${default_selection_layer}}"
+    model_args+=",sparse_dlm_deep_only_transfer=${SPARSE_DLM_DEEP_ONLY_TRANSFER:-${default_deep_only_transfer}}"
+    model_args+=",query_sparse=${query_sparse},prefix_sparse=${prefix_sparse}"
+    model_args+=",prefix_min_prefix_length=${PREFIX_MIN_PREFIX_LENGTH:-${default_prefix_min_length}}"
+    model_args+=",prefix_token_budget=${prefix_budget}"
+    model_args+=",prefix_chunk_size=${PREFIX_CHUNK_SIZE:-${default_prefix_chunk_size}}"
+    model_args+=",prefix_share_layer_pairs=${PREFIX_SHARE_LAYER_PAIRS:-false}"
+    model_args+=",prefix_selector=${PREFIX_SELECTOR:-qk_tc}"
+    model_args+=",prefix_dense_before_query_selection=${PREFIX_DENSE_BEFORE_QUERY_SELECTION:-true}"
+    model_args+=",prefix_rescreen_full_kv=${PREFIX_RESCREEN_FULL_KV:-true}"
+    model_args+=",losa=${losa},losa_active_topk=${losa_active_topk}"
+    model_args+=",losa_score_mode=${losa_score_mode},losa_key_samples=${losa_key_samples}"
     if [[ "${model_type}" == "llada" ]]; then
-      model_args+=",query_min_prefix_length=${QUERY_MIN_PREFIX_LENGTH:-0},query_losa_union=${QUERY_LOSA_UNION:-false}"
+      model_args+=",query_min_prefix_length=${QUERY_MIN_PREFIX_LENGTH:-0}"
+      model_args+=",query_losa_union=${QUERY_LOSA_UNION:-false}"
     fi
     ;;
   focus)
     model_args+=",focus_alpha=${FOCUS_ALPHA:-1.5}"
     ;;
   losa)
-    model_args+=",paper_losa_page_size=${PAPER_LOSA_PAGE_SIZE:-16},paper_losa_token_budget=${PAPER_LOSA_TOKEN_BUDGET:-256},paper_losa_active_topk=${PAPER_LOSA_ACTIVE_TOPK:-5},paper_losa_gqa_mode=${PAPER_LOSA_GQA_MODE:-per_query_head},paper_losa_backend=${PAPER_LOSA_BACKEND:-auto},paper_losa_kv_stats=${PAPER_LOSA_KV_STATS:-true},paper_losa_kv_stats_chunk_size=${PAPER_LOSA_KV_STATS_CHUNK_SIZE:-1024},paper_losa_kv_stats_output_dir=${PAPER_LOSA_KV_STATS_OUTPUT_DIR:-${output_root}/kv_stats},paper_losa_kv_stats_include_heads=${PAPER_LOSA_KV_STATS_INCLUDE_HEADS:-false},paper_losa_kv_stats_compact=${PAPER_LOSA_KV_STATS_COMPACT:-false}"
+    model_args+=",paper_losa_page_size=${PAPER_LOSA_PAGE_SIZE:-16}"
+    model_args+=",paper_losa_token_budget=${PAPER_LOSA_TOKEN_BUDGET:-256}"
+    model_args+=",paper_losa_active_topk=${PAPER_LOSA_ACTIVE_TOPK:-5}"
+    model_args+=",paper_losa_gqa_mode=${PAPER_LOSA_GQA_MODE:-per_query_head}"
+    model_args+=",paper_losa_backend=${PAPER_LOSA_BACKEND:-auto}"
+    model_args+=",paper_losa_kv_stats=${PAPER_LOSA_KV_STATS:-true}"
+    model_args+=",paper_losa_kv_stats_chunk_size=${PAPER_LOSA_KV_STATS_CHUNK_SIZE:-1024}"
+    model_args+=",paper_losa_kv_stats_output_dir=${PAPER_LOSA_KV_STATS_OUTPUT_DIR:-${output_root}/kv_stats}"
+    model_args+=",paper_losa_kv_stats_include_heads=${PAPER_LOSA_KV_STATS_INCLUDE_HEADS:-false}"
+    model_args+=",paper_losa_kv_stats_compact=${PAPER_LOSA_KV_STATS_COMPACT:-false}"
     ;;
 esac
-minerva_tasks="minerva_math_algebra,minerva_math_counting_and_prob,minerva_math_geometry,minerva_math_intermediate_algebra,minerva_math_num_theory,minerva_math_prealgebra,minerva_math_precalc"
+
 gsm8k_task=gsm8k
 gsm8k_gen_length=256
 if [[ "${model_type}" == "sdar" ]]; then
@@ -163,7 +195,7 @@ run_eval() {
   local args=(
     -m accelerate.commands.launch
     --main_process_port "${port}"
-    -m "${EVAL_ENTRY:-lm_eval}"
+    -m "${EVAL_ENTRY:-scripts.common.eval_entry}"
     --model "${model_type}"
     --model_args "${model_args},gen_length=${gen_length}"
     --tasks "${tasks}"
@@ -206,13 +238,10 @@ run_eval() {
 
 case "${benchmark}" in
   mmlu)
-    run_eval mmlu mmlu_generative 128 4 "$@"
+    run_eval mmlu mmlu_generative 128 5 "$@"
     ;;
   gsm8k)
     run_eval gsm8k "${gsm8k_task}" "${gsm8k_gen_length}" 0 "$@"
-    ;;
-  math)
-    run_eval math "${minerva_tasks}" 512 0 "$@"
     ;;
   math500)
     run_eval math500 math_500 2048 0 "$@"
@@ -221,13 +250,13 @@ case "${benchmark}" in
     run_eval humaneval humaneval_instruct 768 0 "$@"
     ;;
   all)
-    run_eval mmlu mmlu_generative 128 4 "$@"
+    run_eval mmlu mmlu_generative 128 5 "$@"
     run_eval gsm8k "${gsm8k_task}" "${gsm8k_gen_length}" 0 "$@"
-    run_eval math "${minerva_tasks}" 512 0 "$@"
+    run_eval math500 math_500 2048 0 "$@"
     run_eval humaneval humaneval_instruct 768 0 "$@"
     ;;
   *)
-    echo "Unsupported BENCHMARK: ${benchmark} (expected mmlu, gsm8k, math, humaneval, or all)" >&2
+    echo "Unsupported BENCHMARK: ${benchmark} (expected mmlu, gsm8k, math500, humaneval, or all)" >&2
     exit 2
     ;;
 esac

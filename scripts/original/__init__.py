@@ -1,1 +1,1 @@
-"""Preserved pre-unification entry points; see scripts/unified for current use."""
+"""Paper motivation analysis; formal benchmarks use scripts.common.run."""

@@ -45,4 +45,3 @@ transformers==4.57.1
 triton==3.1.0
 word2number==1.1
 zstandard==0.25.0
-pytest==9.1.1

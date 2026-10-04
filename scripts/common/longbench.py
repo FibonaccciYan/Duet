@@ -5,9 +5,9 @@ import sys
 
 def main():
     pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument("--implementation", choices=["reference", "optimized"], default="reference")
+    pre.add_argument("--implementation", choices=["reference", "optimized"], default="optimized")
     args, remaining = pre.parse_known_args()
-    from scripts.original.quality import longbench_quality as original
+    from scripts.common import longbench_runner as original
     from src.runtime import patch_method
     sys.argv = [sys.argv[0], *remaining]
     options = original.parse_args()

@@ -14,6 +14,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULTS = json.loads((ROOT / "scripts/configs/defaults.json").read_text())
 METHODS = ("dense", "sparse", "losa", "focus")
+MODEL_ENV = DEFAULTS["model_env"]
 
 
 def parser():
@@ -28,8 +29,7 @@ def parser():
     p.add_argument("--data-dir", type=Path)
     p.add_argument("--config", type=Path, help="JSON object containing CLI option defaults")
     p.add_argument("--implementation", choices=("reference", "optimized"))
-    p.add_argument("--profile", choices=("default", "strict-budget", "all-tasks"), default="default")
-    p.add_argument("--stage", choices=("smoke", "full", "all"))
+    p.add_argument("--profile", choices=("default", "strict-budget"), default="default")
     p.add_argument("--tasks", nargs="+")
     p.add_argument("--contexts", nargs="+", type=int)
     for key in ("samples", "limit", "warmups", "repeats", "gen-length",
@@ -45,8 +45,6 @@ def parser():
     p.add_argument("--dry-run", "--print-config", dest="dry_run", action="store_true")
     p.add_argument("--offline", action="store_true",
                    help="Use existing Hugging Face caches without network requests")
-    p.add_argument("--restore-holder", action="store_true",
-                   help="GPU5 only; opt in to stopping/restoring its existing holder")
     return p
 
 
@@ -71,8 +69,6 @@ def arguments(argv=None):
                             else DEFAULTS[a.task]["implementation"])
     if a.task in ("speed", "short") and a.implementation != "optimized":
         p.error("unified speed/short entries use optimized implementations")
-    if a.stage is None:
-        a.stage = "all" if a.task == "short" and a.method == "dense" else "full"
     if a.task != "speed" and any(getattr(a, k) is not None for k in ("contexts", "samples", "warmups", "repeats")):
         p.error("contexts/samples/warmups/repeats are speed-only")
     if a.task == "speed" and (a.tasks or a.limit is not None or a.fewshot is not None):
@@ -89,10 +85,6 @@ def arguments(argv=None):
         p.error("profiles apply only to LongBench")
     if a.profile == "strict-budget" and a.method != "sparse":
         p.error("strict-budget profile requires sparse")
-    if a.profile == "all-tasks" and (a.method != "dense" or a.model != "llada21"):
-        p.error("original all-tasks runner supports dense LLaDA only")
-    if a.restore_holder and a.gpu != 5:
-        p.error("--restore-holder is restricted to the existing GPU5 holder")
     if a.gpu is not None and a.gpu < 0:
         p.error("GPU index must be nonnegative")
     for k in ("samples", "limit", "repeats", "gen_length", "block_length", "steps"):
@@ -111,6 +103,16 @@ def arguments(argv=None):
         if key in a.overrides:
             p.error("duplicate --set: " + key)
         a.overrides[key] = value
+    for key in ("prefix_strict_budget", "PREFIX_STRICT_BUDGET"):
+        if a.overrides.get(key, "").lower() == "false":
+            p.error("paper strict budget cannot be disabled by --set")
+    models = ("sdar", "llada21") if a.model == "both" else (a.model,)
+    a.model_paths = {}
+    for model in models:
+        path = a.model_path or os.environ.get(MODEL_ENV[model])
+        if not path:
+            p.error(f"model path required via --model-path or {MODEL_ENV[model]}")
+        a.model_paths[model] = path
     return a
 
 
@@ -119,154 +121,192 @@ def value(a, name, default):
     return default if v is None else v
 
 
+def family_of(model):
+    return "llada" if model == "llada21" else "sdar"
+
+
+def paper_sparse(family):
+    return dict(DEFAULTS["sparse"][family])
+
+
+def add_option(command, key, value):
+    if isinstance(value, bool):
+        command.append("--" + key if value else "--no-" + key)
+    else:
+        command.extend(["--" + key, str(value)])
+
+
+def append_paper_sparse(command, family):
+    for key, value in paper_sparse(family).items():
+        add_option(command, key, value)
+
+
+def paper_sparse_env(family):
+    env_names = {
+        "query_sparse": "QUERY_SPARSE",
+        "prefix_sparse": "PREFIX_SPARSE",
+        "ratio": "SPARSE_DLM_RATIO",
+        "selection_layer": "SPARSE_DLM_SELECTION_LAYER",
+        "selection_interval": "SPARSE_DLM_SELECTION_INTERVAL",
+        "query_dense_threshold": "QUERY_DENSE_THRESHOLD",
+        "prefix_token_budget": "PREFIX_TOKEN_BUDGET",
+        "prefix_strict_budget": "PREFIX_STRICT_BUDGET",
+        "prefix_selector": "PREFIX_SELECTOR",
+        "prefix_rescreen_full_kv": "PREFIX_RESCREEN_FULL_KV",
+        "prefix_dense_before_query_selection": "PREFIX_DENSE_BEFORE_QUERY_SELECTION",
+        "deep_only_transfer": "SPARSE_DLM_DEEP_ONLY_TRANSFER",
+    }
+    return {env_names[key]: (str(value).lower() if isinstance(value, bool) else str(value))
+            for key, value in paper_sparse(family).items()}
+
+
 def plan(a):
     jobs = []
     models = ("sdar", "llada21") if a.model == "both" else (a.model,)
-    stages = ("smoke", "full") if a.stage == "all" else (a.stage,)
-    for stage in stages:
-        for model in models:
-            family = "llada" if model == "llada21" else "sdar"
-            model_path = a.model_path or DEFAULTS["models"][model]
-            threshold = value(a, "threshold", .7 if family == "llada" else .95)
-            editing = value(a, "editing_threshold", .5)
-            out = a.output / stage / model
-            if a.task == "speed":
-                d = DEFAULTS["speed"]
-                for length in value(a, "contexts", d["contexts"]):
-                    if length not in (8192, 16384, 32768):
-                        raise ValueError("stored speed contexts are 8192/16384/32768")
-                    config = dict(method=a.method, model=model, model_path=model_path,
-                                  length=length, output=str(out / str(length)), stage=stage,
-                                  data_dir=str(a.data_dir or ROOT / "data/narrativeqa_speed80"),
-                                  samples=value(a, "samples", 1 if stage == "smoke" else 80),
-                                  repeats=value(a, "repeats", 1 if stage == "smoke" else 3),
-                                  warmups=value(a, "warmups", 2), threshold=threshold,
-                                  editing_threshold=editing,
-                                  remasking_strategy=value(a, "remasking_strategy", "low_confidence_dynamic"),
-                                  overrides=a.overrides, gpu=a.gpu)
-                    for k in ("gen_length", "block_length", "steps", "temperature", "seed", "eos_early_stop"):
-                        config[k] = value(a, k, d[k])
-                    if config["samples"] > 80:
-                        raise ValueError("dataset has exactly 80 samples")
-                    if config["eos_early_stop"]:
-                        raise ValueError("fixed-budget speed protocol requires EOS early-stop disabled")
-                    jobs.append(dict(kind="speed", config=config))
-            elif a.task == "short":
-                d = DEFAULTS["short"]
-                tasks = a.tasks or d["dense_tasks" if a.method == "dense" else "other_tasks"]
-                for task in tasks:
-                    if task not in d["sdar_task_gen_lengths"]:
-                        raise ValueError("unsupported short task: " + task)
-                    gen = d["llada_gen_length"] if family == "llada" else (
-                        d["sdar_dense_gen_length"] if a.method == "dense" else d["sdar_task_gen_lengths"][task])
-                    few = d["mmlu_fewshot"] if task == "mmlu" else 0
-                    remask = d["sdar_dense_remasking"] if a.method == "dense" else d[
-                        "sdar_focus_remasking" if a.method == "focus" else "sdar_other_remasking"]
-                    env = dict(MODEL_TYPE=family, METHOD=a.method, IMPLEMENTATION="optimized",
-                               EVAL_ENTRY="scripts.common.eval_entry",
-                               MODEL=model_path, PYTHON=a.python, BENCHMARK=task,
-                               OUTPUT_ROOT=str(out / task), THRESHOLD=str(threshold),
-                               EDITING_THRESHOLD=str(editing), GEN_LENGTH=str(value(a, "gen_length", gen)),
-                               NUM_FEWSHOT=str(value(a, "fewshot", few)),
-                               MAIN_PROCESS_PORT=str(value(a, "port", d["port"])),
-                               BLOCK_LENGTH=str(value(a, "block_length", 32)),
-                               STEPS=str(value(a, "steps", 32)),
-                               TEMPERATURE=str(value(a, "temperature", 0.)),
-                               REMASKING_STRATEGY=value(a, "remasking_strategy", remask))
-                    # Optimized LoSA's GQA default is group_mean, not the old adapter's per-head default.
-                    if a.method == "losa":
-                        env["PAPER_LOSA_GQA_MODE"] = "group_mean"
-                    if a.seed is not None:
-                        env["EVAL_SEED"] = str(a.seed)
-                    if a.max_context_tokens is not None:
-                        env["MAX_PROMPT_LEN"] = str(a.max_context_tokens)
-                    if stage == "smoke" or a.limit is not None:
-                        env["LIMIT"] = str(value(a, "limit", d["smoke_limit"]))
-                    allowed = {"QUERY_SPARSE", "PREFIX_SPARSE", "PREFIX_TOKEN_BUDGET", "PREFIX_STRICT_BUDGET",
-                               "SPARSE_DLM_RATIO", "SPARSE_DLM_TOP_K", "SPARSE_DLM_SELECTION_INTERVAL",
-                               "QUERY_DENSE_THRESHOLD", "SPARSE_DLM_SELECTION_LAYER", "PREFIX_SELECTOR",
-                               "PREFIX_DENSE_BEFORE_QUERY_SELECTION", "PREFIX_RESCREEN_FULL_KV",
-                               "FOCUS_ALPHA", "PAPER_LOSA_PAGE_SIZE", "PAPER_LOSA_TOKEN_BUDGET",
-                               "PAPER_LOSA_ACTIVE_TOPK", "PAPER_LOSA_GQA_MODE", "PAPER_LOSA_BACKEND",
-                               "PAPER_LOSA_KV_STATS", "PAPER_LOSA_KV_STATS_CHUNK_SIZE",
-                               "PAPER_LOSA_KV_STATS_OUTPUT_DIR", "PAPER_LOSA_KV_STATS_INCLUDE_HEADS",
-                               "PAPER_LOSA_KV_STATS_COMPACT",
-                               "MOE_EXPERT_PATCH", "DTYPE", "ATTN_IMPLEMENTATION", "MAX_PROMPT_LEN"}
-                    specific = {
-                        "dense": set(),
-                        "sparse": {k for k in allowed if k.startswith(("QUERY_", "PREFIX_", "SPARSE_"))},
-                        "focus": {"FOCUS_ALPHA"},
-                        "losa": {k for k in allowed if k.startswith("PAPER_LOSA_")},
-                    }
-                    allowed = specific[a.method] | {"MOE_EXPERT_PATCH", "DTYPE", "ATTN_IMPLEMENTATION"}
-                    if set(a.overrides) - allowed:
-                        raise ValueError("unsupported short --set: " + str(set(a.overrides) - allowed))
-                    env.update(a.overrides)
-                    jobs.append(dict(kind="command", command=["bash", str(ROOT / "eval_instruct/eval.sh")],
-                                     env=env, output=str(out / task),
-                                     metadata=dict(model=model, method=a.method, stage=stage, task=task)))
-            else:
-                if a.profile == "all-tasks" and a.overrides:
-                    raise ValueError("all-tasks does not accept method --set overrides")
-                module = ("scripts.original.quality.longbench_dense_all_tasks" if a.profile == "all-tasks"
-                          else "scripts.common.longbench")
-                cmd = [a.python, "-B", "-m", module, "--model_path", model_path,
-                       "--data_dir", str(a.data_dir or os.environ.get("LONGBENCH_DATA", ROOT / "data/longbench")),
-                       "--output_dir", str(out), "--threshold", str(threshold),
-                       "--editing_threshold", str(editing),
-                       "--max_context_tokens", str(value(a, "max_context_tokens", 32768)),
-                       "--block_length", str(value(a, "block_length", 32)),
-                       "--steps", str(value(a, "steps", 32))]
-                if a.profile != "all-tasks":
-                    cmd += ["--family", family, "--method", a.method,
-                            "--implementation", a.implementation, "--seed", str(value(a, "seed", 42))]
-                    if a.tasks:
-                        cmd += ["--tasks", *a.tasks]
-                    if a.remasking_strategy:
-                        cmd += ["--remasking_strategy", a.remasking_strategy]
-                    if a.eos_early_stop is not None:
-                        cmd += ["--eos_early_stop" if a.eos_early_stop else "--no-eos_early_stop"]
-                elif a.tasks:
-                    raise ValueError("all-tasks uses the original dataset manifest task list")
-                if stage == "smoke" or a.limit is not None:
-                    cmd += ["--limit", str(value(a, "limit", 1))]
-                if a.resume_from:
-                    cmd += ["--resume_from", str(a.resume_from)]
-                if a.gen_length is not None or a.temperature is not None:
-                    raise ValueError("LongBench uses original task lengths and temperature0; not short/speed generation overrides")
-                for key, v in a.overrides.items():
-                    if key not in {"ratio", "selection_layer", "query_dense_threshold",
-                                   "query_sparse", "prefix_sparse", "prefix_token_budget",
-                                   "prefix_selector", "prefix_dense_before_query_selection", "prefix_strict_budget", "focus_alpha", "losa_token_budget",
-                                   "losa_page_size", "losa_active_topk", "losa_gqa_mode",
-                                   "losa_backend", "moe_expert_patch", "dtype"}:
-                        raise ValueError("unsupported LongBench option: " + key)
-                    relevant = (
-                        key in {"moe_expert_patch", "dtype"}
-                        or a.method == "sparse" and key in {"ratio", "selection_layer", "query_dense_threshold",
-                            "query_sparse", "prefix_sparse", "prefix_token_budget", "prefix_dense_before_query_selection", "prefix_strict_budget", "prefix_selector"}
-                        or a.method == "focus" and key == "focus_alpha"
-                        or a.method == "losa" and key.startswith("losa_"))
-                    if not relevant:
-                        raise ValueError(f"{key} does not apply to {a.method}")
-                    if v.lower() in ("true", "false"):
-                        cmd += ["--" + ("" if v.lower() == "true" else "no-") + key]
-                    else:
-                        cmd += ["--" + key, v]
-                if a.profile == "strict-budget":
-                    if "prefix_token_budget" in a.overrides:
-                        raise ValueError("strict-budget profile fixes the 256/512/1024 matrix")
-                    for budget in (256, 512, 1024):
-                        target = out / f"budget{budget}"
-                        copy = list(cmd)
-                        copy[copy.index("--output_dir")+1] = str(target)
-                        copy += ["--query_sparse", "--prefix_sparse", "--prefix_strict_budget",
-                                 "--prefix_token_budget", str(budget)]
-                        if family == "sdar" and not a.remasking_strategy:
-                            copy += ["--remasking_strategy", "low_confidence_dynamic"]
-                        jobs.append(dict(kind="command", command=copy, env={}, output=str(target)))
+    for model in models:
+        family = family_of(model)
+        model_path = a.model_paths[model]
+        threshold = value(a, "threshold", .7 if family == "llada" else .95)
+        editing = value(a, "editing_threshold", .5)
+        out = a.output / model
+        if a.task == "speed":
+            d = DEFAULTS["speed"]
+            overrides = paper_sparse(family) if a.method == "sparse" else {}
+            overrides.update(a.overrides)
+            for length in value(a, "contexts", d["contexts"]):
+                if length not in (8192, 16384, 32768):
+                    raise ValueError("stored speed contexts are 8192/16384/32768")
+                config = dict(method=a.method, model=model, model_path=model_path,
+                              length=length, output=str(out / str(length)), stage="full",
+                              data_dir=str(a.data_dir or ROOT / "data/narrativeqa_speed80"),
+                              samples=value(a, "samples", 80),
+                              repeats=value(a, "repeats", 3),
+                              warmups=value(a, "warmups", 2), threshold=threshold,
+                              editing_threshold=editing,
+                              remasking_strategy=value(a, "remasking_strategy", "sequential"),
+                              overrides=overrides, gpu=a.gpu,
+                              steps=value(a, "steps", d[family + "_steps"]))
+                for k in ("gen_length", "block_length", "temperature", "seed", "eos_early_stop"):
+                    config[k] = value(a, k, d[k])
+                if config["samples"] > 80:
+                    raise ValueError("dataset has exactly 80 samples")
+                if config["eos_early_stop"]:
+                    raise ValueError("fixed-budget speed protocol requires EOS early-stop disabled")
+                jobs.append(dict(kind="speed", config=config))
+        elif a.task == "short":
+            d = DEFAULTS["short"]
+            tasks = a.tasks or d["tasks"]
+            for task in tasks:
+                if task not in d["sdar_task_gen_lengths"]:
+                    raise ValueError("unsupported short task: " + task)
+                gen = d["llada_gen_length"] if family == "llada" else d["sdar_task_gen_lengths"][task]
+                few = d["mmlu_fewshot"] if task == "mmlu" else 0
+                env = dict(MODEL_TYPE=family, METHOD=a.method, IMPLEMENTATION="optimized",
+                           EVAL_ENTRY="scripts.common.eval_entry",
+                           MODEL=model_path, PYTHON=a.python, BENCHMARK=task,
+                           OUTPUT_ROOT=str(out / task), THRESHOLD=str(threshold),
+                           EDITING_THRESHOLD=str(editing), GEN_LENGTH=str(value(a, "gen_length", gen)),
+                           NUM_FEWSHOT=str(value(a, "fewshot", few)),
+                           MAIN_PROCESS_PORT=str(value(a, "port", d["port"])),
+                           BLOCK_LENGTH=str(value(a, "block_length", 32)),
+                           STEPS=str(value(a, "steps", d[family + "_steps"])),
+                           TEMPERATURE=str(value(a, "temperature", 0.)))
+                if family == "sdar":
+                    env["REMASKING_STRATEGY"] = value(a, "remasking_strategy", d["sdar_remasking"])
+                # Optimized LoSA's GQA default is group_mean, not the old adapter's per-head default.
+                if a.method == "losa":
+                    env["PAPER_LOSA_GQA_MODE"] = "group_mean"
+                if a.seed is not None:
+                    env["EVAL_SEED"] = str(a.seed)
+                if a.max_context_tokens is not None:
+                    env["MAX_PROMPT_LEN"] = str(a.max_context_tokens)
+                if a.limit is not None:
+                    env["LIMIT"] = str(a.limit)
+                allowed = {"QUERY_SPARSE", "PREFIX_SPARSE", "PREFIX_TOKEN_BUDGET", "PREFIX_STRICT_BUDGET",
+                           "SPARSE_DLM_RATIO", "SPARSE_DLM_TOP_K", "SPARSE_DLM_SELECTION_INTERVAL",
+                           "QUERY_DENSE_THRESHOLD", "SPARSE_DLM_SELECTION_LAYER", "PREFIX_SELECTOR",
+                           "PREFIX_DENSE_BEFORE_QUERY_SELECTION", "PREFIX_RESCREEN_FULL_KV",
+                           "SPARSE_DLM_DEEP_ONLY_TRANSFER",
+                           "FOCUS_ALPHA", "PAPER_LOSA_PAGE_SIZE", "PAPER_LOSA_TOKEN_BUDGET",
+                           "PAPER_LOSA_ACTIVE_TOPK", "PAPER_LOSA_GQA_MODE", "PAPER_LOSA_BACKEND",
+                           "PAPER_LOSA_KV_STATS", "PAPER_LOSA_KV_STATS_CHUNK_SIZE",
+                           "PAPER_LOSA_KV_STATS_OUTPUT_DIR", "PAPER_LOSA_KV_STATS_INCLUDE_HEADS",
+                           "PAPER_LOSA_KV_STATS_COMPACT",
+                           "MOE_EXPERT_PATCH", "DTYPE", "ATTN_IMPLEMENTATION", "MAX_PROMPT_LEN"}
+                specific = {
+                    "dense": set(),
+                    "sparse": {k for k in allowed if k.startswith(("QUERY_", "PREFIX_", "SPARSE_"))},
+                    "focus": {"FOCUS_ALPHA"},
+                    "losa": {k for k in allowed if k.startswith("PAPER_LOSA_")},
+                }
+                allowed = specific[a.method] | {"MOE_EXPERT_PATCH", "DTYPE", "ATTN_IMPLEMENTATION"}
+                if set(a.overrides) - allowed:
+                    raise ValueError("unsupported short --set: " + str(set(a.overrides) - allowed))
+                if a.method == "sparse":
+                    env.update(paper_sparse_env(family))
+                env.update(a.overrides)
+                jobs.append(dict(kind="command", command=["bash", str(ROOT / "eval_instruct/eval.sh")],
+                                 env=env, output=str(out / task),
+                                 metadata=dict(model=model, method=a.method, task=task)))
+        else:
+            module = "scripts.common.longbench"
+            cmd = [a.python, "-B", "-m", module, "--model_path", model_path,
+                   "--data_dir", str(a.data_dir or os.environ.get("LONGBENCH_DATA", ROOT / "data/longbench")),
+                   "--output_dir", str(out), "--threshold", str(threshold),
+                   "--editing_threshold", str(editing),
+                   "--max_context_tokens", str(value(a, "max_context_tokens", 32768)),
+                   "--block_length", str(value(a, "block_length", 32)),
+                   "--steps", str(value(a, "steps", DEFAULTS["longbench"][family + "_steps"])),
+                   "--family", family, "--method", a.method,
+                   "--implementation", a.implementation, "--seed", str(value(a, "seed", 42))]
+            if family == "sdar":
+                cmd += ["--remasking_strategy", value(a, "remasking_strategy", "sequential")]
+            elif a.remasking_strategy:
+                cmd += ["--remasking_strategy", a.remasking_strategy]
+            if a.tasks:
+                cmd += ["--tasks", *a.tasks]
+            if a.eos_early_stop is not None:
+                cmd += ["--eos_early_stop" if a.eos_early_stop else "--no-eos_early_stop"]
+            if a.limit is not None:
+                cmd += ["--limit", str(a.limit)]
+            if a.resume_from:
+                cmd += ["--resume_from", str(a.resume_from)]
+            if a.gen_length is not None or a.temperature is not None:
+                raise ValueError("LongBench uses original task lengths and temperature0; not short/speed generation overrides")
+            if a.method == "sparse":
+                append_paper_sparse(cmd, family)
+            for key, v in a.overrides.items():
+                if key not in {"ratio", "selection_layer", "query_dense_threshold",
+                               "query_sparse", "prefix_sparse", "prefix_token_budget",
+                               "prefix_selector", "prefix_dense_before_query_selection", "prefix_strict_budget", "focus_alpha", "losa_token_budget",
+                               "selection_interval", "deep_only_transfer", "prefix_rescreen_full_kv",
+                               "losa_page_size", "losa_active_topk", "losa_gqa_mode",
+                               "losa_backend", "moe_expert_patch", "dtype"}:
+                    raise ValueError("unsupported LongBench option: " + key)
+                relevant = (
+                    key in {"moe_expert_patch", "dtype"}
+                    or a.method == "sparse" and key in {"ratio", "selection_layer", "query_dense_threshold",
+                        "query_sparse", "prefix_sparse", "prefix_token_budget", "prefix_dense_before_query_selection", "prefix_strict_budget", "prefix_selector",
+                        "prefix_rescreen_full_kv", "selection_interval", "deep_only_transfer"}
+                    or a.method == "focus" and key == "focus_alpha"
+                    or a.method == "losa" and key.startswith("losa_"))
+                if not relevant:
+                    raise ValueError(f"{key} does not apply to {a.method}")
+                if v.lower() in ("true", "false"):
+                    cmd += ["--" + ("" if v.lower() == "true" else "no-") + key]
                 else:
-                    jobs.append(dict(kind="command", command=cmd, env={}, output=str(out)))
+                    cmd += ["--" + key, v]
+            if a.profile == "strict-budget":
+                budget = a.overrides.get("prefix_token_budget")
+                budgets = (int(budget),) if budget is not None else (256, 512, 1024)
+                for item in budgets:
+                    target = out / f"budget{item}"
+                    copy = list(cmd)
+                    copy[copy.index("--output_dir")+1] = str(target)
+                    copy += ["--prefix_strict_budget", "--prefix_token_budget", str(item)]
+                    jobs.append(dict(kind="command", command=copy, env={}, output=str(target)))
+            else:
+                jobs.append(dict(kind="command", command=cmd, env={}, output=str(out)))
     return jobs
 
 
@@ -351,7 +391,7 @@ def run(a, jobs):
         (a.output / "REPORT.md").write_text(
             "# Unified run\n\nSee `plan.json` for resolved parameters and `summary.json` "
             "for results. Quality scores remain in the original evaluator outputs; "
-            "smoke scores are not formal quality measurements.\n")
+            "they are not replaced by this summary.\n")
         (a.output / "COMPLETE.json").write_text(json.dumps(dict(completed=True, jobs=len(jobs))))
     finally:
         (a.output / "execution.json").write_text(json.dumps(
@@ -365,13 +405,6 @@ def main():
     if a.dry_run:
         print(json.dumps(jobs, indent=2))
         return
-    if a.restore_holder and os.environ.get("UNIFIED_RESERVED") != "1":
-        argv = [x for x in sys.argv[1:] if x != "--restore-holder"]
-        env = {**os.environ, "UNIFIED_RESERVED": "1"}
-        code = subprocess.call(
-            ["bash", str(ROOT / "scripts/original/performance/run_reserved_gpu5.sh"),
-             a.python, "-B", "-m", "scripts.common.run", *argv], cwd=ROOT, env=env)
-        raise SystemExit(code)
     run(a, jobs)
 
 

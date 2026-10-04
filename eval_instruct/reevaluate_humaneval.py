@@ -180,15 +180,6 @@ def reevaluate(
     return summary
 
 
-def self_test() -> None:
-    prompt = 'def answer() -> int:\n    """Return the answer."""\n'
-    continuation = " return 42\n```\nExplanation"
-    assert build_prediction(prompt, continuation, "answer").endswith("return 42")
-
-    fenced = "```python\ndef answer() -> int:\n return 7\n```"
-    assert build_prediction(prompt, fenced, "answer").endswith("return 7")
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("samples", nargs="?", type=Path, help="lm-eval samples JSONL")
@@ -198,20 +189,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cache-dir", type=Path, default=Path("/tmp/llada_humaneval_reeval")
     )
-    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
-    if not args.self_test and args.samples is None:
-        parser.error("samples is required unless --self-test is used")
+    if args.samples is None:
+        parser.error("samples is required")
     return args
 
 
 def main() -> None:
     args = parse_args()
-    if args.self_test:
-        self_test()
-        print("self-test passed")
-        return
-
     output = args.output or args.samples.with_name(
         f"{args.samples.stem}_reeval_normalized.json"
     )

@@ -161,11 +161,6 @@ def setup_parser() -> argparse.ArgumentParser:
         help="Speed up evaluation by caching the building of dataset requests. `None` if not caching.",
     )
     parser.add_argument(
-        "--check_integrity",
-        action="store_true",
-        help="Whether to run the relevant part of the test suite for the tasks.",
-    )
-    parser.add_argument(
         "--write_out",
         "-w",
         action="store_true",
@@ -439,7 +434,6 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         device=args.device,
         use_cache=args.use_cache,
         limit=args.limit,
-        check_integrity=args.check_integrity,
         write_out=args.write_out,
         log_samples=args.log_samples,
         evaluation_tracker=evaluation_tracker,

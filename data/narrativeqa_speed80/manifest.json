@@ -1,6 +1,6 @@
 {
   "created_date": "2026-09-17",
-  "source_path": "/data0/gs/losa_accuracy_prep/data/longbench_all21_full/narrativeqa.jsonl",
+  "source_path": "LongBench/narrativeqa.jsonl",
   "source_sha256": "939c1bc9e06c0f64cd80a9ec312d8cfd4b791309a9c377b97f8c127c441509e5",
   "source_records": 200,
   "eligible_records": 85,
@@ -31,7 +31,7 @@
   "files": {
     "build_dataset.py": {
       "bytes": 5175,
-      "sha256": "068f901298a7856c3adf613f50d4873d52ef5295271c4470b1a3a5867f9da927"
+      "sha256": "0bd42ad2cb1fe6fcc707e233044efef5b880000a179a5de6fa691fab6e3d28c2"
     },
     "llada21/16384.jsonl": {
       "bytes": 11757222,

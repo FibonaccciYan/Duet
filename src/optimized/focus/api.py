@@ -10,6 +10,7 @@ import torch
 
 from src.reference.focus.api import resolve_model_family
 from src.reference.losa.generation import load_model_and_tokenizer, set_seed
+from src.model_paths import DEFAULT_MODEL_PATHS, resolve_model_path
 
 from .compat import install_runtime_compat
 from .backend import resolve_attention_backend
@@ -19,12 +20,6 @@ try:  # pragma: no cover - the packed MoE backend is optional on CPU-only hosts
     from src.reference.losa.moe_patch import patch_moe_experts
 except Exception:  # pragma: no cover
     patch_moe_experts = None
-
-
-DEFAULT_MODEL_PATHS = {
-    "llada": "/data0/ysy/models/LLaDA2.1-mini",
-    "sdar": "/data0/ysy/models/SDAR-8B-Chat-b32",
-}
 
 
 def _input_tensor(inputs: Any) -> torch.Tensor:
@@ -124,7 +119,7 @@ class FocusOptimizedRuntime:
 
     def load(self):
         install_runtime_compat()
-        model_path = self.model_path or DEFAULT_MODEL_PATHS[self.family]
+        model_path = resolve_model_path(self.model_path, self.family)
         dtype_name = self.dtype or ("bfloat16" if self.family == "llada" else "float16")
         self.model, self.tokenizer = load_model_and_tokenizer(
             self.family,

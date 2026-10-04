@@ -24,15 +24,6 @@ from src.reference.losa.generation import set_seed
 import src.reference.sparse.llada_patch as llada_patch
 
 
-ALL_TASKS = [
-    "2wikimqa", "dureader", "gov_report", "hotpotqa", "lcc", "lsht",
-    "multi_news", "multifieldqa_en", "multifieldqa_zh", "musique",
-    "narrativeqa", "passage_count", "passage_retrieval_en",
-    "passage_retrieval_zh", "qasper", "qmsum", "repobench-p", "samsum",
-    "trec", "triviaqa", "vcsum",
-]
-
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--model_path", required=True)

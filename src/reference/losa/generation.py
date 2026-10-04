@@ -1,8 +1,8 @@
 """Self-contained dense / paper-LoSA block diffusion generation.
 
-Model weights and their remote-code model classes are loaded from the supplied
-checkpoint path.  All generation and LoSA implementation code lives in this
-package.
+Model weights are loaded from an explicit checkpoint path or from the
+family-specific ``LLADA_MODEL_PATH`` / ``SDAR_MODEL_PATH`` environment
+variable.  All generation and LoSA implementation code lives in this package.
 """
 
 from __future__ import annotations
@@ -22,15 +22,10 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.cache_utils import DynamicCache
 
 from .attention_patch import install_paper_losa_attention
+from src.model_paths import DEFAULT_MODEL_PATHS, resolve_model_path
 
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODEL_PATHS = {
-    "llada": "/data0/ysy/models/LLaDA2.1-mini",
-    "sdar": "/data0/ysy/models/SDAR-8B-Chat-b32",
-}
-
 
 def set_seed(seed: int) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -53,6 +48,10 @@ def load_model_and_tokenizer(
     ``trust_remote_code=True`` behavior.  In ``auto`` mode supported checkpoints
     use :mod:`src.model`; unknown checkpoint types still fall back to remote
     code so the loader remains extensible.
+
+    When ``model_path`` is omitted, it is read from ``LLADA_MODEL_PATH`` or
+    ``SDAR_MODEL_PATH`` according to ``family``; empty or unset values raise
+    instead of falling back to a local machine path.
     """
     # Keep this in the shared loader so dense, LoSA, and FOCUS v2 get the same
     # runtime compatibility behavior.
@@ -63,7 +62,7 @@ def load_model_and_tokenizer(
     except ImportError:
         pass
 
-    model_path = model_path or DEFAULT_MODEL_PATHS[family]
+    model_path = resolve_model_path(model_path, family)
     dtype = dtype or ("bfloat16" if family == "llada" else "float16")
     source_mode = os.getenv("SPARSEDLM_MODEL_CODE", "auto").strip().lower()
     if source_mode not in {"auto", "bundled", "remote"}:

@@ -1,8 +1,9 @@
 """Self-owned routed-MoE expert inference patch for LLaDA2.x.
 
-This module is based on the read-only audit of ysy's MoE acceleration idea, but
-it does not import `/data0/ysy/sparse`.  It preserves LLaDA2.x routing
-semantics and replaces only the routed expert MLP execution backend.
+This module is based on the read-only audit of the reference MoE acceleration
+idea, but it does not import any private external implementation.  It
+preserves LLaDA2.x routing semantics and replaces only the routed expert MLP
+execution backend.
 """
 
 from __future__ import annotations

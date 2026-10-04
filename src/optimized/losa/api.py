@@ -6,6 +6,7 @@ from typing import Any
 import torch
 
 from src.reference.losa.generation import load_model_and_tokenizer
+from src.model_paths import DEFAULT_MODEL_PATHS, resolve_model_path
 
 from .attention_patch import install_losa_optimized_attention
 from .generation import block_diffusion_generate
@@ -14,12 +15,6 @@ try:  # pragma: no cover - optional matched MoE optimization
     from src.reference.losa.moe_patch import patch_moe_experts
 except Exception:  # pragma: no cover
     patch_moe_experts = None
-
-
-DEFAULT_MODEL_PATHS = {
-    "llada": "/data0/ysy/models/LLaDA2.1-mini",
-    "sdar": "/data0/ysy/models/SDAR-8B-Chat-b32",
-}
 
 
 @dataclass
@@ -47,7 +42,7 @@ class LoSAOptimizedRuntime:
     moe_patch_report: Any | None = field(init=False, default=None)
 
     def load(self):
-        model_path = self.model_path or DEFAULT_MODEL_PATHS[self.family]
+        model_path = resolve_model_path(self.model_path, self.family)
         dtype_name = self.dtype or (
             "bfloat16" if self.family == "llada" else "float16"
         )

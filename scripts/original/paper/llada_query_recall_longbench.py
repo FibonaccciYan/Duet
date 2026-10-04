@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.original.overlap.llada_layer_overlap import overlap_metrics, selector_mask
+from scripts.common.paper_support import overlap_metrics, selector_mask
 from scripts.original.paper.attention_mass.collect_attention_mass import tokenize, truncate_middle
 from src.dense.api import DenseRuntime
 from src.reference.losa.generation import set_seed

@@ -22,7 +22,6 @@ from lm_eval.evaluator_utils import (
     get_task_list,
     prepare_print_tasks,
     print_writeout,
-    run_task_tests,
 )
 from lm_eval.loggers import EvaluationTracker
 from lm_eval.loggers.utils import add_env_info, add_tokenizer_info, get_git_commit_hash
@@ -317,7 +316,7 @@ def simple_evaluate(
     task_dict = _adjust_config(task_dict)
 
     if check_integrity:
-        run_task_tests(task_list=tasks)
+        raise ValueError("The task integrity test suite is not included in this paper release.")
 
     if evaluation_tracker is not None:
         evaluation_tracker.general_config_tracker.log_experiment_args(

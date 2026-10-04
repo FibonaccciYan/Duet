@@ -1,8 +1,9 @@
 """Self-contained dense / LoSA-v2 block diffusion generation.
 
-Model weights and their remote-code model classes are loaded from the supplied
-checkpoint path.  All generation and LoSA implementation code lives in this
-package.
+Model weights and their remote-code model classes are loaded from an explicit
+checkpoint path or from the family-specific ``LLADA_MODEL_PATH`` /
+``SDAR_MODEL_PATH`` environment variable.  All generation and LoSA
+implementation code lives in this package.
 """
 
 from __future__ import annotations
@@ -21,12 +22,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.cache_utils import DynamicCache, DynamicLayer
 
 from .attention_patch import install_losa_optimized_attention as install_paper_losa_attention
-
-
-DEFAULT_MODEL_PATHS = {
-    "llada": "/data0/ysy/models/LLaDA2.1-mini",
-    "sdar": "/data0/ysy/models/SDAR-8B-Chat-b32",
-}
+from src.model_paths import DEFAULT_MODEL_PATHS, resolve_model_path
 
 
 def set_seed(seed: int) -> None:
@@ -44,6 +40,7 @@ def load_model_and_tokenizer(
     dtype: str | None = None,
     attn_implementation: str = "sdpa",
 ):
+    """Load a checkpoint without a machine-specific local-path fallback."""
     # Keep this in the shared loader so dense, LoSA, and FOCUS v2 get the same
     # checkpoint-remote-code compatibility behavior.
     try:
@@ -52,7 +49,7 @@ def load_model_and_tokenizer(
         install_runtime_compat()
     except ImportError:
         pass
-    model_path = model_path or DEFAULT_MODEL_PATHS[family]
+    model_path = resolve_model_path(model_path, family)
     dtype = dtype or ("bfloat16" if family == "llada" else "float16")
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     if family == "sdar" and getattr(config, "pad_token_id", None) is None:

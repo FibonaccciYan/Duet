@@ -4,13 +4,19 @@ import hashlib
 import json
 from pathlib import Path
 import statistics
-import subprocess
 import time
 
 import torch
-from scripts.original.performance import narrative80_llada_benchmark as base
-from scripts.original.performance import narrative80_losa_benchmark as losa
-from scripts.original.performance import narrative80_focus_benchmark as focus
+from src.reference.losa.generation import load_model_and_tokenizer
+from src.runtime import patch_method
+from src.optimized.losa.generation import block_diffusion_generate
+from scripts.common.timing.block import Clock as BlockClock
+from scripts.common.timing.block import clone_driver as clone_block_driver
+from scripts.common.timing.block import clone_sdar
+from scripts.common.timing.focus import Clock as FocusClock
+from scripts.common.timing.focus import clone_driver as clone_focus_driver
+from scripts.common.timing.losa import Clock as LosaClock
+from scripts.common.timing.losa import clone_losa
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,6 +32,8 @@ def atomic(path, data):
 
 
 def cast(value):
+    if not isinstance(value, str):
+        return value
     try:
         return json.loads(value)
     except json.JSONDecodeError:
@@ -52,7 +60,7 @@ def run(c):
         "dense": {"exact_rope", "moe_expert_patch"},
         "sparse": {"ratio", "top_k", "selection_interval", "selection_layer",
                    "query_sparse", "prefix_sparse", "prefix_token_budget", "prefix_dense_before_query_selection", "prefix_rescreen_full_kv", "prefix_strict_budget", "prefix_selector",
-                   "exact_rope", "moe_expert_patch", "query_dense_threshold"},
+                   "deep_only_transfer", "exact_rope", "moe_expert_patch", "query_dense_threshold"},
         "losa": {"losa_gqa_mode", "losa_token_budget", "losa_page_size", "losa_active_topk",
                  "losa_backend", "losa_fused_state", "shared_kv", "graph_replay",
                  "moe_expert_patch", "exact_rope"},
@@ -60,6 +68,8 @@ def run(c):
     }
     if set(overrides) - allowed[method]:
         raise ValueError("unsupported method overrides: " + str(set(overrides) - allowed[method]))
+    if method == "sparse" and overrides.get("prefix_strict_budget", True) is not True:
+        raise ValueError("paper speed evaluation requires prefix_strict_budget=true")
     options = {k: c[k] for k in ("gen_length", "block_length", "steps",
                                  "temperature", "threshold", "eos_early_stop")}
     if family == "llada":
@@ -67,14 +77,29 @@ def run(c):
     else:
         options.update(remasking_strategy=c["remasking_strategy"], mask_id=151669)
     if method in ("dense", "sparse"):
-        model, tok = base.load_model_and_tokenizer(family, model_path=c["model_path"])
+        model, tok = load_model_and_tokenizer(family, model_path=c["model_path"])
         patch = dict(moe_expert_patch=True)
         if method == "sparse":
-            patch.update(query_sparse=True, prefix_sparse=True, prefix_token_budget=256)
+            patch.update(
+                ratio=0.7 if family == "llada" else 0.5,
+                top_k=64,
+                selection_interval=1,
+                query_dense_threshold=0,
+                selection_layer=1 if family == "llada" else 5,
+                query_sparse=True,
+                prefix_sparse=True,
+                prefix_token_budget=256,
+                prefix_strict_budget=True,
+                prefix_selector="qk_tc",
+                prefix_dense_before_query_selection=True,
+                prefix_rescreen_full_kv=True,
+            )
+            if family == "sdar":
+                patch.update(refresh_step=-1, deep_only_transfer=True)
         patch.update(overrides)
-        base.patch_method(model, method + "_optimized", model_name=family, **patch)
-        Clock = base.Clock
-        clone = base.clone_sdar if family == "sdar" else base.clone_driver
+        patch_method(model, method + "_optimized", model_name=family, **patch)
+        Clock = BlockClock
+        clone = clone_sdar if family == "sdar" else clone_block_driver
         def call(clock, ids):
             return clone(model.generate, clock)(model, inputs=ids, **options)
         runtime_config = getattr(model.config, family + "_sparse_config")
@@ -88,9 +113,9 @@ def run(c):
         runtime_config = {k: getattr(rt, k) for k in allowed[method]}
         extra = {k: getattr(rt, k) for k in ("losa_gqa_mode", "losa_token_budget", "losa_page_size",
                                              "losa_active_topk", "losa_backend", "losa_fused_state")}
-        Clock = losa.Clock
+        Clock = LosaClock
         def call(clock, ids):
-            return losa.clone_losa(losa.block_diffusion_generate, clock)(
+            return clone_losa(block_diffusion_generate, clock)(
                 model, inputs=ids, family=family, use_losa=True, **extra, **options)
     else:
         from src.optimized.focus.api import FocusOptimizedRuntime
@@ -98,9 +123,9 @@ def run(c):
         rt = FocusOptimizedRuntime(family=family, model_path=c["model_path"], **overrides)
         model, tok = rt.load()
         runtime_config = {k: getattr(rt, k) for k in allowed[method]}
-        Clock = focus.Clock
+        Clock = FocusClock
         def call(clock, ids):
-            return focus.clone_driver(focus_optimized_generate, clock)(
+            return clone_focus_driver(focus_optimized_generate, clock)(
                 model, inputs=ids, family=family, alpha=rt.alpha,
                 attention_backend=rt.attention_backend, **options)
     prompt_length = min(c["length"], model.config.max_position_embeddings - c["gen_length"])

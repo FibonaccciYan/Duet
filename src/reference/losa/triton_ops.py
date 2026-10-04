@@ -1,6 +1,6 @@
 """Triton kernels for paper-faithful LoSA.
 
-The first kernel covers the semantic core that differs from the current n33
+The first kernel covers the semantic core that differs from the reference
 implementation: active query rows attend to the QUEST union pages, not to the
 full prefix.  It is a correctness-oriented kernel; performance tuning comes
 after it matches the PyTorch oracle.

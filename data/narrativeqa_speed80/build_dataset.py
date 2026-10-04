@@ -81,7 +81,7 @@ for family, tokenizer in toks.items():
 shutil.copyfile(__file__,root/"build_dataset.py") if Path(__file__).resolve() != (root/"build_dataset.py").resolve() else None
 files = {str(f.relative_to(root)):dict(bytes=f.stat().st_size,sha256=sha(f.read_bytes()))
          for f in sorted(root.rglob("*")) if f.is_file()}
-write(root / "manifest.json", dict(created_date="2026-09-17", source_path=str(a.source),
+write(root / "manifest.json", dict(created_date="2026-09-17", source_path=a.source.name,
       source_sha256=sha(source_bytes), source_records=len(rows), eligible_records=len(eligible),
       selected_records=80, seed=42, threshold_strictly_greater_than=32768,
       lengths=[8192,16384,32768], families=list(toks), tokenizers_version=tokenizers.__version__,
